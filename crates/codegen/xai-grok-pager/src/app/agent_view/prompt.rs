@@ -757,15 +757,18 @@ impl AgentView {
         }
 
         // This bare Esc is now owned by the policy: every path below consumes the
-        // event (mid-turn swallow / arm-clear / arm-rewind / idle swallow). Disarm
+        // event (mid-turn cancel / arm-clear / arm-rewind / idle swallow). Disarm
         // the Esc→d flight-recorder combo here, uniformly — the `0-esc-d` block
         // set `esc_pressed_at` on this same press, but since the policy is
         // handling the Esc, a following `d` is the user's text, not a dump.
         self.esc_pressed_at = None;
 
-        // Mid-turn running: swallow Esc (do not cancel or arm clear/rewind).
+        // Personal: mid-turn running — Esc cancels generation (same as Ctrl+C on
+        // an empty prompt). Overlays / dropdowns / selection still steal Esc first.
+        // Unlike Ctrl+C, a non-empty draft does not intercept: Esc always stops.
         if self.session.state.is_turn_running() {
-            return Some(InputOutcome::Changed);
+            self.cancel_trigger_hint = Some(crate::app::actions::CancelTrigger::Esc);
+            return Some(InputOutcome::Action(Action::CancelTurn));
         }
         // Stuck cancel: re-send CancelTurn (Ctrl+C escalates to Quit instead).
         if self.session.state.is_cancelling() {
@@ -778,7 +781,7 @@ impl AgentView {
         // keys — clearing a draft the reader has scrolled past would be a
         // surprising cross-pane side effect. REWIND requires an EMPTY prompt
         // (checked below), so there is no draft to clobber or silently stash and
-        // it may arm from EITHER pane. The mid-turn swallow / cancel-retry
+        // it may arm from EITHER pane. The mid-turn cancel / cancel-retry
         // (above) stays cross-pane; any other idle Esc swallows (below).
         let has_content = !self.prompt.text().is_empty() || !self.prompt.images.is_empty();
 

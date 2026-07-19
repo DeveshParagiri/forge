@@ -176,10 +176,15 @@ fn build_model_items(models: &ModelState) -> Vec<ArgItem> {
             display,
             match_text: info.name.clone(),
             insert_text,
-            description: info.description.clone().unwrap_or_default(),
+            // Personal: provider/auth state is supplied by shell model meta.
+            description: model_picker_description(info),
         });
     }
     items
+}
+
+fn model_picker_description(info: &acp::ModelInfo) -> String {
+    info.description.clone().unwrap_or_default()
 }
 
 /// One row per effort level for the `/model` chained effort phase.
@@ -293,6 +298,18 @@ mod tests {
         // Plain model has no trailing space -- Enter commits immediately.
         let plain = items.iter().find(|i| i.match_text == "Grok 4.5").unwrap();
         assert_eq!(plain.insert_text, "Grok 4.5");
+    }
+
+    #[test]
+    fn model_description_does_not_repeat_provider_or_auth_status() {
+        let id = acp::ModelId::new(Arc::from("codex-sol"));
+        let mut meta = serde_json::Map::new();
+        meta.insert("provider".into(), serde_json::json!("OpenAI Codex"));
+        meta.insert("authStatus".into(), serde_json::json!("login required"));
+        let info = acp::ModelInfo::new(id, "Sol".to_string())
+            .description(Some("Flagship".to_string()))
+            .meta(Some(meta));
+        assert_eq!(model_picker_description(&info), "Flagship");
     }
 
     #[test]

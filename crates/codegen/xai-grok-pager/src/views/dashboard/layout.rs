@@ -113,7 +113,14 @@ pub fn peek_max_box_rows(h: u16) -> u16 {
 
 /// Chrome rows (header/gaps/footer/margins) — not list, not peek.
 pub fn chrome_overhead(area: Rect) -> u16 {
-    dashboard_fixed_overhead(area).0
+    chrome_overhead_with_shortcuts(area, true)
+}
+
+/// Chrome rows for the active shortcuts-bar policy. Claude's package default
+/// hides the bar, so its footer row and the gap above it must not consume
+/// dashboard space either.
+pub(crate) fn chrome_overhead_with_shortcuts(area: Rect, show_shortcuts: bool) -> u16 {
+    dashboard_fixed_overhead(area, show_shortcuts).0
 }
 
 /// List-first peek allocation.
@@ -232,16 +239,38 @@ pub fn compute_layout(area: Rect, peek_visible: bool) -> DashboardLayout {
     compute_layout_with_dispatch(area, peek_visible, 1)
 }
 
-fn dashboard_chrome_heights(area: Rect) -> (u16, u16, u16, u16, u16, u16, u16, bool) {
+/// Compute dashboard geometry using the same resolved shortcuts-bar setting as
+/// the agent view. The public wrapper keeps the historical visible-footer
+/// behavior for standalone layout callers and tests.
+pub(crate) fn compute_layout_with_shortcuts(
+    area: Rect,
+    peek_visible: bool,
+    show_shortcuts: bool,
+) -> DashboardLayout {
+    compute_layout_with_dispatch_inner(area, peek_visible, 1, None, show_shortcuts)
+}
+
+fn dashboard_chrome_heights(
+    area: Rect,
+    show_shortcuts: bool,
+) -> (u16, u16, u16, u16, u16, u16, u16, bool) {
     // Match welcome/agent top margin; drop on short terminals.
     let top_margin_h: u16 = if area.height > 6 { 1 } else { 0 };
     let header_h: u16 = if area.height > 4 { 1 } else { 0 };
     // Header↔list gap; collapses with dispatch/shortcuts gaps on short terms.
     let header_gap_h: u16 = if area.height > 10 { 1 } else { 0 };
-    let footer_h: u16 = if area.height >= 2 { 1 } else { 0 };
+    let footer_h: u16 = if show_shortcuts && area.height >= 2 {
+        1
+    } else {
+        0
+    };
     // Match agent prompt/shortcuts gaps; drop on short terminals.
     let dispatch_gap_h: u16 = if area.height > 10 { 1 } else { 0 };
-    let shortcuts_gap_h: u16 = if area.height > 10 { 1 } else { 0 };
+    let shortcuts_gap_h: u16 = if show_shortcuts && area.height > 10 {
+        1
+    } else {
+        0
+    };
     // Match agent bottom_vpad; drop when height <= 16.
     let bottom_margin_h: u16 = if area.height > 16 { 1 } else { 0 };
     let short_terminal = area.height <= 8;
@@ -257,7 +286,7 @@ fn dashboard_chrome_heights(area: Rect) -> (u16, u16, u16, u16, u16, u16, u16, b
     )
 }
 
-fn dashboard_fixed_overhead(area: Rect) -> (u16, bool) {
+fn dashboard_fixed_overhead(area: Rect, show_shortcuts: bool) -> (u16, bool) {
     let (
         top_margin_h,
         header_h,
@@ -267,7 +296,7 @@ fn dashboard_fixed_overhead(area: Rect) -> (u16, bool) {
         shortcuts_gap_h,
         bottom_margin_h,
         short_terminal,
-    ) = dashboard_chrome_heights(area);
+    ) = dashboard_chrome_heights(area, show_shortcuts);
     let fixed_overhead = top_margin_h
         + header_h
         + header_gap_h
@@ -281,10 +310,14 @@ fn dashboard_fixed_overhead(area: Rect) -> (u16, bool) {
 /// Max inner content rows available for a peek under list-first allocation
 /// (list floor + peek max fraction). 0 when a peek cannot open.
 pub fn max_peek_content_rows(area: Rect) -> u16 {
+    max_peek_content_rows_with_shortcuts(area, true)
+}
+
+pub(crate) fn max_peek_content_rows_with_shortcuts(area: Rect, show_shortcuts: bool) -> u16 {
     if area.height <= 8 {
         return 0;
     }
-    let fixed = chrome_overhead(area);
+    let fixed = chrome_overhead_with_shortcuts(area, show_shortcuts);
     let probe = allocate_peek(
         area.height,
         fixed,
@@ -298,7 +331,15 @@ pub fn max_peek_content_rows(area: Rect) -> u16 {
 /// Like [`compute_layout`] but with a fixed whole peek-box height
 /// (from [`allocate_peek`]). List band receives the rest after chrome.
 pub fn compute_layout_with_peek_box(area: Rect, peek_box_h: u16) -> DashboardLayout {
-    compute_layout_with_dispatch_inner(area, true, 0, Some(peek_box_h.max(3)))
+    compute_layout_with_dispatch_inner(area, true, 0, Some(peek_box_h.max(3)), true)
+}
+
+pub(crate) fn compute_layout_with_peek_box_and_shortcuts(
+    area: Rect,
+    peek_box_h: u16,
+    show_shortcuts: bool,
+) -> DashboardLayout {
+    compute_layout_with_dispatch_inner(area, true, 0, Some(peek_box_h.max(3)), show_shortcuts)
 }
 
 /// Like [`compute_layout`] but lets the caller request a taller
@@ -315,7 +356,16 @@ pub fn compute_layout_with_dispatch(
     peek_visible: bool,
     dispatch_text_rows: u16,
 ) -> DashboardLayout {
-    compute_layout_with_dispatch_inner(area, peek_visible, dispatch_text_rows, None)
+    compute_layout_with_dispatch_inner(area, peek_visible, dispatch_text_rows, None, true)
+}
+
+pub(crate) fn compute_layout_with_dispatch_and_shortcuts(
+    area: Rect,
+    peek_visible: bool,
+    dispatch_text_rows: u16,
+    show_shortcuts: bool,
+) -> DashboardLayout {
+    compute_layout_with_dispatch_inner(area, peek_visible, dispatch_text_rows, None, show_shortcuts)
 }
 
 fn compute_layout_with_dispatch_inner(
@@ -323,6 +373,7 @@ fn compute_layout_with_dispatch_inner(
     peek_visible: bool,
     dispatch_text_rows: u16,
     forced_peek_box_h: Option<u16>,
+    show_shortcuts: bool,
 ) -> DashboardLayout {
     // When `area.height == 0`, every subrect collapses
     // to zero. A footer_h = 1 default would produce a non-zero
@@ -354,8 +405,8 @@ fn compute_layout_with_dispatch_inner(
         shortcuts_gap_h,
         bottom_margin_h,
         short_terminal,
-    ) = dashboard_chrome_heights(area);
-    let (fixed_overhead, _) = dashboard_fixed_overhead(area);
+    ) = dashboard_chrome_heights(area, show_shortcuts);
+    let (fixed_overhead, _) = dashboard_fixed_overhead(area, show_shortcuts);
 
     // Peek: list-first allocation (see `allocate_peek`). No peek → normal
     // dispatch chrome. `forced_peek_box_h` skips re-allocation when the
@@ -568,6 +619,20 @@ mod tests {
         // 3 rows are absorbed by the gaps (header_gap +
         // dispatch_gap + shortcuts_gap).
         assert_eq!(total + 3, area.height);
+    }
+
+    #[test]
+    fn hidden_shortcuts_bar_reclaims_footer_and_gap() {
+        let area = Rect::new(0, 0, 80, 30);
+        let shown = compute_layout_with_shortcuts(area, false, true);
+        let hidden = compute_layout_with_shortcuts(area, false, false);
+
+        assert_eq!(shown.footer.height, 1);
+        assert_eq!(hidden.footer.height, 0);
+        assert_eq!(hidden.list.height, shown.list.height + 2);
+        assert_eq!(hidden.dispatch.y, shown.dispatch.y + 2);
+        assert_eq!(hidden.bottom_margin, shown.bottom_margin);
+        assert_eq!(hidden.footer.y, hidden.dispatch.y + hidden.dispatch.height);
     }
 
     /// Multiline dispatch: the box grows by exactly one row per extra

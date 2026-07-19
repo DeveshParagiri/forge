@@ -40,11 +40,13 @@ use super::notes::{
 use super::permissions::{
     dispatch_permission_cancel, dispatch_permission_followup, dispatch_permission_select,
 };
+// Personal: multi-provider /login
 use super::prompt::{
     dispatch_accept_word_select_tip, dispatch_clear_prompt, dispatch_open_history_search,
     dispatch_send_bash_command, dispatch_send_prompt, dispatch_send_prompt_inner,
     dispatch_show_plan_nudge, dispatch_show_undo_tip, dispatch_show_word_select_tip,
 };
+use super::provider_login;
 use super::queue;
 use super::queue::dispatch_drain_queue;
 use super::rewind::{
@@ -1054,6 +1056,14 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
             vec![]
         }
         Action::Login => dispatch_login(app),
+        // Personal: multi-provider picker + handlers (see provider_login.rs).
+        Action::ChooseProviderLogin => provider_login::dispatch_choose_provider_login(app),
+        Action::ProviderLoginSelected { provider_id } => {
+            provider_login::dispatch_provider_login_selected(app, provider_id)
+        }
+        Action::OpenRouterKeySubmitted { api_key } => {
+            provider_login::dispatch_openrouter_key_submitted(app, api_key)
+        }
         Action::CancelLogin => dispatch_cancel_login(app),
         Action::SubmitAuthCode(code) => dispatch_submit_auth_code(app, code),
         Action::CopyAuthUrl => {

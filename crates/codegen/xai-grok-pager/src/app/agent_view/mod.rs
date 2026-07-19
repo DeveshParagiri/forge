@@ -26,7 +26,7 @@
 //!       on an empty prompt) re-enters this level and runs CancelTurn.
 //!   → 3. Esc policy (try_handle_esc_policy) on Prompt or Scrollback only,
 //!       after overlays/dropdowns/selection returned Changed / stole Esc:
-//!       turn running → Changed (swallow; Esc does not cancel)
+//!       turn running → CancelTurn (Personal: Esc stops like Ctrl+C)
 //!       turn cancelling → CancelTurn (retry lost ack; Ctrl+C escalates to Quit)
 //!       idle + non-empty prompt, prompt pane only → ArmPending ClearPrompt (2× within 800ms, hint)
 //!       idle + empty + messages, either pane (Normal composer mode, no
@@ -1582,6 +1582,20 @@ fn translate_local_submit(
     if skipped {
         return InputOutcome::Changed;
     }
+    // Personal: OpenRouter key can be submitted from freeform alone.
+    if matches!(kind, LocalQuestionKind::OpenRouterApiKey) {
+        let freeform = qv
+            .per_question_freeform
+            .first()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_default();
+        return if freeform.is_empty() {
+            InputOutcome::Changed
+        } else {
+            InputOutcome::Action(Action::OpenRouterKeySubmitted { api_key: freeform })
+        };
+    }
     let Some(QuestionSelection::Single(Some(idx))) = qv.selections.first() else {
         return InputOutcome::Changed;
     };
@@ -1646,6 +1660,17 @@ fn translate_local_submit(
                 effort,
             })
         }
+        // Personal: Pi-style provider picker.
+        LocalQuestionKind::ProviderLogin => {
+            let provider_id = qv
+                .questions
+                .first()
+                .and_then(|q| q.options.get(*idx))
+                .and_then(|o| o.id.clone())
+                .unwrap_or_default();
+            InputOutcome::Action(Action::ProviderLoginSelected { provider_id })
+        }
+        LocalQuestionKind::OpenRouterApiKey => unreachable!("handled above"),
         LocalQuestionKind::ProjectSelect { .. } => unreachable!(),
     }
 }

@@ -11,6 +11,27 @@ impl SessionActor {
         auto_compact_threshold_percent: u8,
     ) -> Result<acp::ModelId, acp::Error> {
         let model_id = acp::ModelId::new(sampling_config.model.clone());
+        // Personal: Pi-style provider switch semantics. Opaque reasoning is
+        // valid only for the provider/account that minted it, while ordinary
+        // user, assistant, and tool context remains portable.
+        let previous_sampling_config = self.chat_state_handle.get_sampling_config().await;
+        if let Some(previous_sampling_config) = previous_sampling_config {
+            let mut conversation = self.chat_state_handle.get_conversation().await;
+            let stripped = crate::agent::provider_history::strip_for_provider_switch(
+                &previous_sampling_config.base_url,
+                &sampling_config.base_url,
+                &mut conversation,
+            );
+            if stripped > 0 {
+                self.chat_state_handle.replace_conversation(conversation);
+                tracing::info!(
+                    session_id = %self.session_info.id.0,
+                    new_model = %sampling_config.model,
+                    stripped_reasoning_items = stripped,
+                    "provider switch removed non-portable reasoning while preserving transcript context"
+                );
+            }
+        }
         let new_context_window = self.compaction.context_window_override.unwrap_or_else(|| {
             std::num::NonZeroU64::new(sampling_config.context_window).unwrap_or_else(|| {
                 std::num::NonZeroU64::new(DEFAULT_CONTEXT_WINDOW)

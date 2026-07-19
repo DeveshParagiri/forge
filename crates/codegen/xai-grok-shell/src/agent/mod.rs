@@ -11,6 +11,10 @@ pub(crate) mod handlers;
 pub mod init;
 pub mod models;
 pub mod mvp_agent;
+/// Personal: multi-provider auth (Codex / OpenRouter). Safe to drop on upstream rebase.
+pub mod provider_auth;
+/// Personal: remove provider-bound reasoning when switching provider families.
+pub mod provider_history;
 pub(crate) mod proxy;
 pub mod relay;
 pub(crate) mod restore_code;

@@ -283,6 +283,11 @@ impl SessionActor {
             creds.alpha_test_key.as_deref(),
             &cfg.base_url,
         );
+        // Personal: third-party bases (Codex / OpenRouter / OpenAI platform)
+        // must never use the Grok session bearer_resolver — that overwrites
+        // the BYOK Authorization header and produces 400/401 against
+        // chatgpt.com/backend-api/codex.
+        let third_party = crate::agent::provider_auth::is_third_party_model_base(&cfg.base_url);
         let compaction_at_tokens = self.compaction_at_tokens.get();
         let compactions_remaining = self.compactions_remaining.get();
         if compactions_remaining.is_some() || compaction_at_tokens.is_some() {
@@ -307,8 +312,27 @@ impl SessionActor {
                 extra_headers.insert("x-compaction-at".to_string(), value.to_string());
             }
         }
+        // Personal: re-resolve BYOK for third-party each turn (Codex token
+        // refresh lives in ~/.codex/auth.json; chat-state may still hold a
+        // session key from the previous model).
+        let mut api_key = creds.api_key;
+        if third_party {
+            if let Some(fresh) =
+                crate::agent::config::try_resolve_model_credentials(cfg.model.as_str(), None)
+                    .and_then(|r| r.api_key)
+            {
+                api_key = Some(fresh);
+            }
+        }
+        let use_bearer_resolver = use_bearer_resolver && !third_party;
+        // Codex rejects xAI-only `stream_tool_calls`.
+        let stream_tool_calls = if third_party {
+            false
+        } else {
+            cfg.stream_tool_calls.unwrap_or(false)
+        };
         SamplingConfig {
-            api_key: creds.api_key,
+            api_key,
             base_url: cfg.base_url,
             model: cfg.model,
             max_completion_tokens: cfg.max_completion_tokens,
@@ -322,18 +346,21 @@ impl SessionActor {
             reasoning_effort: cfg.reasoning_effort,
             force_http1: false,
             max_retries: Some(self.max_retries),
-            stream_tool_calls: cfg.stream_tool_calls.unwrap_or(false),
+            stream_tool_calls,
             idle_timeout_secs: None,
             client_identifier: self.client_identifier.clone(),
             deployment_id: crate::managed_config::resolve_deployment_id(
                 crate::managed_config::resolve_deployment_key().as_deref(),
             ),
-            user_id: self
-                .auth_manager
-                .as_ref()
-                .and_then(|am| am.current_or_expired())
-                .filter(|a| a.is_xai_auth())
-                .map(|a| a.user_id),
+            user_id: if third_party {
+                None
+            } else {
+                self.auth_manager
+                    .as_ref()
+                    .and_then(|am| am.current_or_expired())
+                    .filter(|a| a.is_xai_auth())
+                    .map(|a| a.user_id)
+            },
             origin_client: self.origin_client.clone(),
             attribution_callback: self.attribution_callback.clone(),
             bearer_resolver: if use_bearer_resolver {
@@ -345,10 +372,26 @@ impl SessionActor {
             } else {
                 None
             },
-            supports_backend_search: self.supports_backend_search.get(),
-            compactions_remaining: self.compactions_remaining.get(),
-            compaction_at_tokens: self.compaction_at_tokens.get(),
-            doom_loop_recovery: self.doom_loop_recovery,
+            supports_backend_search: if third_party {
+                false
+            } else {
+                self.supports_backend_search.get()
+            },
+            compactions_remaining: if third_party {
+                None
+            } else {
+                self.compactions_remaining.get()
+            },
+            compaction_at_tokens: if third_party {
+                None
+            } else {
+                self.compaction_at_tokens.get()
+            },
+            doom_loop_recovery: if third_party {
+                None
+            } else {
+                self.doom_loop_recovery
+            },
             header_injector: Some(std::sync::Arc::new(TraceContextInjector)),
         }
     }

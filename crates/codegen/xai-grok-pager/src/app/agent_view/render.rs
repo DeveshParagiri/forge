@@ -31,6 +31,22 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 use std::collections::HashSet;
 use std::time::Instant;
+
+/// Return the full overlay canvas, stopping above the shortcuts bar when it
+/// exists. Hidden-shortcuts themes use an empty `Rect`, so deriving the bottom
+/// edge from `shortcuts.y` alone would collapse every modal to zero height.
+fn overlay_area_above_shortcuts(area: Rect, shortcuts: Rect, bottom_inset: u16) -> Rect {
+    let bottom = if shortcuts.height > 0 {
+        shortcuts.y
+    } else {
+        area.bottom()
+    };
+    Rect {
+        height: bottom.saturating_sub(area.y).saturating_sub(bottom_inset),
+        ..area
+    }
+}
+
 impl AgentView {
     pub(crate) fn update_scrollback_selection_state(
         &mut self,
@@ -2391,65 +2407,83 @@ impl AgentView {
                     },
                     Style::default().bg(row_bg),
                 );
+                // Personal: render provider key entry as one plain input field.
+                let direct_input = self
+                    .question_view
+                    .as_ref()
+                    .is_some_and(|qv| qv.is_direct_input());
                 let prefix_w = self
                     .question_view
                     .as_ref()
                     .and_then(|qv| qv.questions.get(qv.active_tab))
                     .map(crate::views::question_view::option_prefix_w)
                     .unwrap_or(6) as u16;
-                let num_style = Style::default().fg(theme.accent_user).bg(row_bg);
-                let marker_style = Style::default()
-                    .fg(theme.text_primary)
-                    .bg(row_bg)
-                    .add_modifier(ratatui::style::Modifier::BOLD);
                 let prompt_ind = Style::default().fg(theme.accent_user).bg(row_bg);
-                buf.set_span_safe(content_x, row_y, &Span::styled("z ", num_style), 2);
-                let is_multi = self
-                    .question_view
-                    .as_ref()
-                    .and_then(|qv| qv.questions.get(qv.active_tab))
-                    .and_then(|q| q.multi_select)
-                    .unwrap_or(false);
-                let freeform_sel = self
-                    .question_view
-                    .as_ref()
-                    .and_then(|qv| {
-                        qv.per_question_freeform_selected
-                            .get(qv.active_tab)
-                            .copied()
-                    })
-                    .unwrap_or(false);
-                let (marker_text, actual_marker_style) = if is_multi {
-                    if freeform_sel {
-                        ("[x] ".to_string(), marker_style)
+                let (text_x, text_w, leading_w) = if direct_input {
+                    buf.set_span_safe(
+                        content_x,
+                        row_y,
+                        &Span::styled(crate::glyphs::prompt_arrow(), prompt_ind),
+                        2,
+                    );
+                    (content_x + 2, content_w.saturating_sub(2), 2)
+                } else {
+                    let num_style = Style::default().fg(theme.accent_user).bg(row_bg);
+                    let marker_style = Style::default()
+                        .fg(theme.text_primary)
+                        .bg(row_bg)
+                        .add_modifier(ratatui::style::Modifier::BOLD);
+                    buf.set_span_safe(content_x, row_y, &Span::styled("z ", num_style), 2);
+                    let is_multi = self
+                        .question_view
+                        .as_ref()
+                        .and_then(|qv| qv.questions.get(qv.active_tab))
+                        .and_then(|q| q.multi_select)
+                        .unwrap_or(false);
+                    let freeform_sel = self
+                        .question_view
+                        .as_ref()
+                        .and_then(|qv| {
+                            qv.per_question_freeform_selected
+                                .get(qv.active_tab)
+                                .copied()
+                        })
+                        .unwrap_or(false);
+                    let (marker_text, actual_marker_style) = if is_multi {
+                        if freeform_sel {
+                            ("[x] ".to_string(), marker_style)
+                        } else {
+                            (
+                                "[ ] ".to_string(),
+                                Style::default().fg(theme.gray).bg(row_bg),
+                            )
+                        }
+                    } else if freeform_sel {
+                        (format!("({}) ", crate::glyphs::filled_dot()), marker_style)
                     } else {
                         (
-                            "[ ] ".to_string(),
+                            "(\u{25cb}) ".to_string(),
                             Style::default().fg(theme.gray).bg(row_bg),
                         )
-                    }
-                } else if freeform_sel {
-                    (format!("({}) ", crate::glyphs::filled_dot()), marker_style)
-                } else {
+                    };
+                    buf.set_span_safe(
+                        content_x + 2,
+                        row_y,
+                        &Span::styled(marker_text, actual_marker_style),
+                        4,
+                    );
+                    buf.set_span_safe(
+                        content_x + prefix_w,
+                        row_y,
+                        &Span::styled(crate::glyphs::prompt_arrow(), prompt_ind),
+                        2,
+                    );
                     (
-                        "(\u{25cb}) ".to_string(),
-                        Style::default().fg(theme.gray).bg(row_bg),
+                        content_x + prefix_w + 2,
+                        content_w.saturating_sub(prefix_w + 2),
+                        prefix_w + 2,
                     )
                 };
-                buf.set_span_safe(
-                    content_x + 2,
-                    row_y,
-                    &Span::styled(marker_text, actual_marker_style),
-                    4,
-                );
-                buf.set_span_safe(
-                    content_x + prefix_w,
-                    row_y,
-                    &Span::styled(crate::glyphs::prompt_arrow(), prompt_ind),
-                    2,
-                );
-                let text_x = content_x + prefix_w + 2;
-                let text_w = content_w.saturating_sub(prefix_w + 2);
                 let text_style = PromptStyle {
                     show_prefix: false,
                     ..question_input_style.clone()
@@ -2481,7 +2515,7 @@ impl AgentView {
                             Rect {
                                 x: content_x,
                                 y,
-                                width: prefix_w + 2,
+                                width: leading_w,
                                 height: 1,
                             },
                             Style::default().bg(row_bg),
@@ -2550,25 +2584,42 @@ impl AgentView {
                         .bg(footer_bg)
                         .add_modifier(Modifier::BOLD);
                     let mut left_spans: Vec<Span<'_>> = Vec::new();
-                    if qv.questions.len() > 1 {
+                    let provider_picker = matches!(
+                        qv.local_kind,
+                        Some(crate::views::question_view::LocalQuestionKind::ProviderLogin)
+                    );
+                    if qv.is_direct_input() {
+                        left_spans.push(Span::styled("Esc", hint_key));
+                        left_spans.push(Span::styled(" cancel", hint_style));
+                    } else if qv.questions.len() > 1 {
                         let counter = format!("[{}/{}] ", qv.active_tab + 1, qv.questions.len());
                         left_spans.push(Span::styled(counter, hint_style));
-                    }
-                    left_spans.push(Span::styled("\u{2191}/\u{2193}", hint_key));
-                    left_spans.push(Span::styled(" navigate", hint_style));
-                    if qv.questions.len() > 1 {
                         left_spans.push(Span::styled(" \u{b7} ", hint_style));
-                        left_spans.push(Span::styled("\u{2190}/\u{2192}", hint_key));
-                        left_spans.push(Span::styled(" question", hint_style));
                     }
-                    left_spans.push(Span::styled(" \u{b7} ", hint_style));
-                    left_spans.push(Span::styled("y", hint_key));
-                    left_spans.push(Span::styled(" copy", hint_style));
+                    if !qv.is_direct_input() {
+                        left_spans.push(Span::styled("\u{2191}/\u{2193}", hint_key));
+                        left_spans.push(Span::styled(" navigate", hint_style));
+                        if qv.questions.len() > 1 {
+                            left_spans.push(Span::styled(" \u{b7} ", hint_style));
+                            left_spans.push(Span::styled("\u{2190}/\u{2192}", hint_key));
+                            left_spans.push(Span::styled(" question", hint_style));
+                        }
+                        left_spans.push(Span::styled(" \u{b7} ", hint_style));
+                        if provider_picker {
+                            left_spans.push(Span::styled("Esc", hint_key));
+                            left_spans.push(Span::styled(" cancel", hint_style));
+                        } else {
+                            left_spans.push(Span::styled("y", hint_key));
+                            left_spans.push(Span::styled(" copy", hint_style));
+                        }
+                    }
                     let left_line = Line::from(left_spans);
                     let avail_w = footer_w.saturating_sub(3);
                     buf.set_line_safe(content_x, footer_y, &left_line, avail_w);
                     let is_last = qv.active_tab >= qv.questions.len().saturating_sub(1);
-                    let enter_label = if qv.is_on_freeform_row() {
+                    let enter_label = if qv.is_direct_input() {
+                        "submit"
+                    } else if qv.is_on_freeform_row() {
                         "edit"
                     } else if is_last {
                         "submit"
@@ -3372,12 +3423,7 @@ impl AgentView {
             use crate::terminal::image::{GraphicsProtocol, detect_graphics_protocol};
             use crate::views::file_search::line_viewer::dim_area;
             use crate::views::shortcuts_bar::HintItem;
-            let overlay_area = Rect {
-                x: area.x,
-                y: area.y,
-                width: area.width,
-                height: layout.shortcuts.y.saturating_sub(area.y),
-            };
+            let overlay_area = overlay_area_above_shortcuts(area, layout.shortcuts, 0);
             let popup_width = ((overlay_area.width as u32 * 90) / 100)
                 .max(28)
                 .min(overlay_area.width as u32) as u16;
@@ -3535,12 +3581,7 @@ impl AgentView {
         if let Some(ref viewer) = self.video_viewer {
             use crate::terminal::image::{GraphicsProtocol, detect_graphics_protocol};
             use crate::views::shortcuts_bar::HintItem;
-            let overlay_area = Rect {
-                x: area.x,
-                y: area.y,
-                width: area.width,
-                height: layout.shortcuts.y.saturating_sub(area.y),
-            };
+            let overlay_area = overlay_area_above_shortcuts(area, layout.shortcuts, 0);
             let mut video_escape_emitted = false;
             if let Some(popup_rect) = crate::render::video_overlay::render_video_overlay(
                 buf,
@@ -3578,12 +3619,7 @@ impl AgentView {
         if let Some(gboom) = self.gboom.as_mut() {
             use crate::terminal::image::{GraphicsProtocol, detect_graphics_protocol};
             use crate::views::shortcuts_bar::HintItem;
-            let overlay_area = Rect {
-                x: area.x,
-                y: area.y,
-                width: area.width,
-                height: layout.shortcuts.y.saturating_sub(area.y),
-            };
+            let overlay_area = overlay_area_above_shortcuts(area, layout.shortcuts, 0);
             let mut gboom_escape_emitted = false;
             let hud = gboom.hud();
             if let Some(popup_rect) = crate::render::gboom_overlay::render_gboom_overlay(
@@ -3637,12 +3673,7 @@ impl AgentView {
         if let Some(ref mut viewer) = self.block_viewer {
             use ratatui::style::Modifier;
             use ratatui::widgets::{Block as RBlock, BorderType, Borders, Clear, Widget};
-            let overlay_area = Rect {
-                x: area.x,
-                y: area.y,
-                width: area.width,
-                height: layout.shortcuts.y.saturating_sub(area.y),
-            };
+            let overlay_area = overlay_area_above_shortcuts(area, layout.shortcuts, 0);
             let entry = if viewer.kind == crate::views::block_viewer::ViewerKind::PlainText {
                 Some(crate::scrollback::entry::ScrollbackEntry::new(
                     crate::scrollback::block::RenderBlock::system(String::new()),
@@ -3798,12 +3829,7 @@ impl AgentView {
             return (prompt_cursor_pos, prompt_post_flush);
         }
         if let Some(ref mut modal_state) = self.agents_modal {
-            let overlay_area = Rect {
-                x: area.x,
-                y: area.y,
-                width: area.width,
-                height: layout.shortcuts.y.saturating_sub(area.y).saturating_sub(1),
-            };
+            let overlay_area = overlay_area_above_shortcuts(area, layout.shortcuts, 1);
             let compact = self.scrollback.appearance().prompt.compact;
             let theme = Theme::current();
             crate::views::agents_modal::render_agents_modal(
@@ -3835,12 +3861,7 @@ impl AgentView {
             let overlay_area = if is_fullscreen {
                 area
             } else {
-                Rect {
-                    x: area.x,
-                    y: area.y,
-                    width: area.width,
-                    height: layout.shortcuts.y.saturating_sub(area.y).saturating_sub(1),
-                }
+                overlay_area_above_shortcuts(area, layout.shortcuts, 1)
             };
             let compact = self.scrollback.appearance().prompt.compact;
             let tick = self.scrollback.animation_tick();
@@ -4213,6 +4234,26 @@ impl AgentView {
         (cursor, prompt_post_flush)
     }
 }
+#[cfg(test)]
+mod hidden_shortcuts_overlay_tests {
+    use super::*;
+
+    #[test]
+    fn hidden_shortcuts_use_the_screen_bottom_instead_of_zero() {
+        let area = Rect::new(3, 5, 80, 30);
+        let overlay = overlay_area_above_shortcuts(area, Rect::default(), 1);
+        assert_eq!(overlay, Rect::new(3, 5, 80, 29));
+    }
+
+    #[test]
+    fn visible_shortcuts_still_bound_the_overlay() {
+        let area = Rect::new(3, 5, 80, 30);
+        let shortcuts = Rect::new(3, 32, 80, 1);
+        let overlay = overlay_area_above_shortcuts(area, shortcuts, 1);
+        assert_eq!(overlay, Rect::new(3, 5, 80, 26));
+    }
+}
+
 #[cfg(test)]
 mod selection_state_tests {
     use super::super::test_fixtures::make_agent;

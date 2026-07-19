@@ -68,11 +68,8 @@ impl ThemeKind {
         // Two possible results — pick the right const slice based on
         // the detected color level. No heap allocation needed.
         const ALL: &[ThemeKind] = ThemeKind::ALL;
-        const NO_TRUECOLOR: &[ThemeKind] = &[
-            ThemeKind::GrokNight,
-            ThemeKind::GrokDay,
-            ThemeKind::Claude,
-        ];
+        const NO_TRUECOLOR: &[ThemeKind] =
+            &[ThemeKind::GrokNight, ThemeKind::GrokDay, ThemeKind::Claude];
 
         if color_support::detect().has_truecolor() {
             ALL
@@ -717,6 +714,18 @@ mod tests {
         assert!(!ThemeKind::RosePineMoon.is_auto());
         assert!(!ThemeKind::OscuraMidnight.is_auto());
         assert!(!ThemeKind::Claude.is_auto());
+    }
+
+    #[test]
+    fn claude_package_hides_shortcuts_bar_by_default() {
+        assert_eq!(
+            ThemeKind::Claude.package_show_shortcuts_bar_default(),
+            Some(false),
+        );
+        assert_eq!(
+            ThemeKind::GrokNight.package_show_shortcuts_bar_default(),
+            None,
+        );
     }
 
     #[test]

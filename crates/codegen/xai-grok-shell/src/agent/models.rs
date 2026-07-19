@@ -1864,6 +1864,55 @@ pub fn resolve_model_catalog(
         }
     }
 
+    // Personal: provider-scoped include/exclude rules refine the upstream
+    // global allowlist. Exclude wins, and absent `[catalog.<provider>]`
+    // sections leave that provider untouched.
+    for (provider, rule) in cfg.catalog.configured() {
+        // A configured OpenRouter catalog is useful only with a key. Keep the
+        // entries in the internal catalog for routing/history, but do not show
+        // them in `/model` until auth exists. Other providers keep their
+        // existing login-on-selection behavior.
+        let auth_ready = provider != crate::agent::provider_auth::ProviderId::Openrouter
+            || crate::agent::provider_auth::status_for(provider).is_ready();
+        let (include, exclude) = match (
+            ModelGlobSet::compile(Some(&rule.include)),
+            ModelGlobSet::compile(Some(&rule.exclude)),
+        ) {
+            (Ok(include), Ok(exclude)) => (include, exclude),
+            (include, exclude) => {
+                tracing::error!(
+                    provider = provider.as_str(),
+                    include_error = ?include.err(),
+                    exclude_error = ?exclude.err(),
+                    "invalid provider catalog filter; hiding provider models"
+                );
+                for entry in catalog.values_mut() {
+                    if crate::agent::provider_auth::provider_id_for_base(&entry.info.base_url)
+                        == Some(provider)
+                    {
+                        entry.info.user_selectable = false;
+                    }
+                }
+                continue;
+            }
+        };
+        for (key, entry) in catalog.iter_mut() {
+            if crate::agent::provider_auth::provider_id_for_base(&entry.info.base_url)
+                != Some(provider)
+            {
+                continue;
+            }
+            let included = include
+                .as_ref()
+                .map(|set| set.matches(key, &entry.model))
+                .unwrap_or(true);
+            let excluded = exclude
+                .as_ref()
+                .is_some_and(|set| set.matches(key, &entry.model));
+            entry.info.user_selectable &= included && !excluded && auth_ready;
+        }
+    }
+
     if let Ok(Some(hidden)) = ModelGlobSet::compile(cfg.models.hidden_models.as_ref()) {
         for (key, entry) in catalog.iter_mut() {
             if hidden.matches(key, &entry.model) {
@@ -2081,6 +2130,36 @@ mod tests {
             "picked non-selectable {}",
             entry.model
         );
+    }
+
+    #[test]
+    fn provider_catalog_include_then_exclude_filters_only_that_provider() {
+        let cfg = config_from_toml(
+            r#"
+            [catalog.openai_codex]
+            include = ["gpt-*"]
+            exclude = ["*-terra"]
+
+            [model.gpt-sol]
+            model = "gpt-5.6-sol"
+            base_url = "https://chatgpt.com/backend-api/codex"
+            context_window = 200000
+
+            [model.gpt-terra]
+            model = "gpt-5.6-terra"
+            base_url = "https://chatgpt.com/backend-api/codex"
+            context_window = 200000
+
+            [model.openrouter-auto]
+            model = "openrouter/auto"
+            base_url = "https://openrouter.ai/api/v1"
+            context_window = 200000
+            "#,
+        );
+        let catalog = resolve_model_catalog(&cfg, None);
+        assert!(catalog["gpt-sol"].info.user_selectable);
+        assert!(!catalog["gpt-terra"].info.user_selectable);
+        assert!(catalog["openrouter-auto"].info.user_selectable);
     }
 
     #[test]

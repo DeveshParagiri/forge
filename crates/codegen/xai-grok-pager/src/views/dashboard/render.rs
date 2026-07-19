@@ -7,7 +7,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
 
-use super::layout::{MIN_DASHBOARD_WIDTH, compute_layout};
+use super::layout::MIN_DASHBOARD_WIDTH;
 use super::row::{DashboardRow, RowBadge, build_rows_with_roster};
 use super::state::{
     DashboardRowId, DashboardState, Filter, Focusable, Grouping, LocationPickerState, RenameDraft,
@@ -198,8 +198,9 @@ pub fn render_dashboard(
     // docs/internal/33-dashboard-peek-responsive-layout.md). Provisional
     // layout gives dispatch width for reply wrapping before we decide
     // whether peek fits.
-    let mut layout = compute_layout(area, false);
-    let fixed = super::layout::chrome_overhead(area);
+    let show_shortcuts = crate::appearance::cache::load_show_shortcuts_bar();
+    let mut layout = super::layout::compute_layout_with_shortcuts(area, false, show_shortcuts);
+    let fixed = super::layout::chrome_overhead_with_shortcuts(area, show_shortcuts);
     let reply_text_w = layout.dispatch.width.saturating_sub(6);
 
     match state.selected.clone() {
@@ -219,7 +220,8 @@ pub fn render_dashboard(
                         reply_text_w,
                         super::peek::MAX_REPLY_ROWS,
                     );
-                    let max_content = super::layout::max_peek_content_rows(area);
+                    let max_content =
+                        super::layout::max_peek_content_rows_with_shortcuts(area, show_shortcuts);
                     // Middle content width ≈ dispatch box minus borders + insets.
                     let middle_w = layout.dispatch.width.saturating_sub(4);
                     let (body_measured, pin_user) =
@@ -258,7 +260,11 @@ pub fn render_dashboard(
                         p.auto = badge.auto;
                         p.plan_mode = badge.plan;
                     }
-                    layout = super::layout::compute_layout_with_peek_box(area, alloc.peek_box_h);
+                    layout = super::layout::compute_layout_with_peek_box_and_shortcuts(
+                        area,
+                        alloc.peek_box_h,
+                        show_shortcuts,
+                    );
                 } else {
                     state.set_peek_reply_target_cwd(None);
                     state.set_peek(None);
@@ -280,7 +286,12 @@ pub fn render_dashboard(
     if state.peek.is_none() && area.height > 8 && !state.dispatch.text().is_empty() {
         let rows = dispatch_text_rows(state, layout.dispatch.width, area.height);
         if rows > 1 {
-            layout = super::layout::compute_layout_with_dispatch(area, false, rows);
+            layout = super::layout::compute_layout_with_dispatch_and_shortcuts(
+                area,
+                false,
+                rows,
+                show_shortcuts,
+            );
         }
     }
 
@@ -7159,6 +7170,61 @@ mod tests {
         assert!(
             saw_bg_base,
             "render_dashboard must paint at least one cell with theme.bg_base",
+        );
+    }
+
+    #[test]
+    fn render_dashboard_respects_shared_shortcuts_bar_setting() {
+        let area = Rect::new(0, 0, 100, 24);
+        let registry = crate::actions::ActionRegistry::defaults();
+
+        crate::appearance::cache::set_show_shortcuts_bar(false);
+        let mut hidden_buf = Buffer::empty(area);
+        let mut hidden_agents: IndexMap<AgentId, AgentView> = IndexMap::new();
+        let mut hidden_state = DashboardState::new();
+        let _ = render_dashboard(
+            &mut hidden_buf,
+            area,
+            &mut hidden_state,
+            &mut hidden_agents,
+            &registry,
+            None,
+            &[],
+            false,
+            None,
+        );
+        let hidden_dispatch = hidden_state.dispatch_rect.expect("dispatch rect");
+        let hidden_text = buf_to_text(&hidden_buf);
+        assert!(
+            !hidden_text.contains("shortcuts"),
+            "hidden shortcuts setting must suppress the dashboard footer: {hidden_text:?}",
+        );
+
+        crate::appearance::cache::set_show_shortcuts_bar(true);
+        let mut shown_buf = Buffer::empty(area);
+        let mut shown_agents: IndexMap<AgentId, AgentView> = IndexMap::new();
+        let mut shown_state = DashboardState::new();
+        let _ = render_dashboard(
+            &mut shown_buf,
+            area,
+            &mut shown_state,
+            &mut shown_agents,
+            &registry,
+            None,
+            &[],
+            false,
+            None,
+        );
+        let shown_dispatch = shown_state.dispatch_rect.expect("dispatch rect");
+        let shown_text = buf_to_text(&shown_buf);
+        assert!(
+            shown_text.contains("shortcuts"),
+            "visible shortcuts setting must retain the dashboard footer: {shown_text:?}",
+        );
+        assert_eq!(
+            hidden_dispatch.y,
+            shown_dispatch.y + 2,
+            "hiding the footer must reclaim both its row and the gap above it",
         );
     }
 

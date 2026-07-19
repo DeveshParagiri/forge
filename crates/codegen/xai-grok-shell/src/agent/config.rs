@@ -1284,6 +1284,9 @@ pub struct Config {
     /// Models reference them with `provider = "codex"` etc.
     #[serde(skip)]
     pub providers: IndexMap<String, ProviderConfig>,
+    /// Personal provider-scoped include/exclude rules under `[catalog.*]`.
+    #[serde(default)]
+    pub catalog: crate::agent::provider_auth::ProviderCatalogConfig,
     /// Warnings from `[model.*]` parsing; surfaced by `grok inspect`.
     #[serde(skip)]
     pub model_override_warnings: Vec<super::config_model_override_parse::ModelOverrideWarning>,
@@ -1713,6 +1716,7 @@ impl Default for Config {
             auto_mode: AutoModeConfig::default(),
             config_models: IndexMap::new(),
             providers: IndexMap::new(),
+            catalog: crate::agent::provider_auth::ProviderCatalogConfig::default(),
             model_override_warnings: Vec::new(),
             grok_com_config: GrokComConfig::default(),
             shortcuts: None,
@@ -1811,6 +1815,17 @@ impl Config {
                     "{field} has an invalid pattern: {}. Patterns use * and ? wildcards.",
                     bad.join(", ")
                 ));
+            }
+        }
+        for (provider, rule) in self.catalog.configured() {
+            for (field, list) in [("include", &rule.include), ("exclude", &rule.exclude)] {
+                if let Err(bad) = crate::agent::models::ModelGlobSet::compile(Some(list)) {
+                    return Err(format!(
+                        "catalog.{}.{field} has an invalid pattern: {}. Patterns use * and ? wildcards.",
+                        provider.catalog_key(),
+                        bad.join(", ")
+                    ));
+                }
             }
         }
         Ok(())
@@ -3612,7 +3627,9 @@ pub struct ProviderConfig {
     pub api_backend: Option<ApiBackend>,
     pub api_key: Option<String>,
     pub env_key: Option<EnvKeys>,
-    /// `"codex"` → ChatGPT OAuth from `~/.codex/auth.json` (and CODEX_ACCESS_TOKEN).
+    /// Personal auth pack id:
+    /// - `"codex"` → ChatGPT OAuth from `~/.codex/auth.json` (+ CODEX_ACCESS_TOKEN)
+    /// - `"openrouter"` → `OPENROUTER_API_KEY` / `~/.grok/provider_keys.json`
     pub auth: Option<String>,
     #[serde(default)]
     pub extra_headers: IndexMap<String, String>,
@@ -3648,21 +3665,28 @@ impl ProviderConfig {
                 entry.env_key = Some(ek.clone());
             }
         }
-        // auth = "codex" → ChatGPT OAuth file + Responses defaults
-        if self
-            .auth
-            .as_deref()
-            .is_some_and(|a| a.eq_ignore_ascii_case("codex"))
-        {
-            if entry.env_key.is_none() {
-                entry.env_key = Some(EnvKeys::single("CODEX_ACCESS_TOKEN"));
-            }
-            if !model_set_base_url && self.base_url.is_none() {
-                entry.info.base_url =
-                    "https://chatgpt.com/backend-api/codex".to_string();
-            }
-            if !model_set_backend && self.api_backend.is_none() {
-                entry.info.api_backend = ApiBackend::Responses;
+        // Personal: auth packs for third-party providers.
+        if let Some(auth) = self.auth.as_deref() {
+            if auth.eq_ignore_ascii_case("codex") {
+                if entry.env_key.is_none() {
+                    entry.env_key = Some(EnvKeys::single("CODEX_ACCESS_TOKEN"));
+                }
+                if !model_set_base_url && self.base_url.is_none() {
+                    entry.info.base_url = "https://chatgpt.com/backend-api/codex".to_string();
+                }
+                if !model_set_backend && self.api_backend.is_none() {
+                    entry.info.api_backend = ApiBackend::Responses;
+                }
+            } else if auth.eq_ignore_ascii_case("openrouter") {
+                if entry.env_key.is_none() {
+                    entry.env_key = Some(EnvKeys::single("OPENROUTER_API_KEY"));
+                }
+                if !model_set_base_url && self.base_url.is_none() {
+                    entry.info.base_url = "https://openrouter.ai/api/v1".to_string();
+                }
+                if !model_set_backend && self.api_backend.is_none() {
+                    entry.info.api_backend = ApiBackend::ChatCompletions;
+                }
             }
         }
         for (k, v) in &self.extra_headers {
@@ -4434,10 +4458,8 @@ pub struct ResolvedCredentials {
 /// set, non-empty env_key value. Single source of truth for has_own_credentials,
 /// resolve_credentials, and the JWT-reload path.
 ///
-/// Personal: when `env_key` includes `CODEX_ACCESS_TOKEN` (or
-/// `OPENAI_CODEX_TOKEN`) and the env var is unset, fall back to
-/// `~/.codex/auth.json` ChatGPT OAuth access token so `/model` OpenAI entries
-/// work with an existing Codex login.
+/// Personal: when `env_key` includes Codex / OpenRouter tokens and the env
+/// var is unset, fall back to on-disk credential packs (see `provider_auth`).
 pub(crate) fn first_own_credential(
     api_key: Option<&str>,
     env_key: Option<&EnvKeys>,
@@ -4447,50 +4469,25 @@ pub(crate) fn first_own_credential(
         .map(str::to_owned)
         .or_else(|| env_key.and_then(EnvKeys::resolve_value))
         .or_else(|| {
-            if env_key.is_some_and(env_keys_request_codex_token) {
-                read_codex_access_token()
+            let names = env_key.map(|k| k.names()).unwrap_or_default();
+            let name_refs: Vec<&str> = names.iter().copied().collect();
+            if crate::agent::provider_auth::env_requests_codex_token(&name_refs) {
+                crate::agent::provider_auth::read_codex_access_token()
+            } else if crate::agent::provider_auth::env_requests_openrouter_token(&name_refs) {
+                crate::agent::provider_auth::read_openrouter_api_key()
             } else {
                 None
             }
         })
 }
 
-fn env_keys_request_codex_token(keys: &EnvKeys) -> bool {
-    keys.names().iter().any(|k| {
-        k.eq_ignore_ascii_case("CODEX_ACCESS_TOKEN")
-            || k.eq_ignore_ascii_case("OPENAI_CODEX_TOKEN")
-    })
-}
-
-/// Read `tokens.access_token` from `~/.codex/auth.json` (ChatGPT OAuth login).
-fn read_codex_access_token() -> Option<String> {
-    let path = dirs::home_dir()?.join(".codex/auth.json");
-    let raw = std::fs::read_to_string(path).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    v.get("tokens")
-        .and_then(|t| t.get("access_token"))
-        .and_then(|t| t.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-}
-
-/// Read `tokens.account_id` from `~/.codex/auth.json`.
-fn read_codex_account_id() -> Option<String> {
-    let path = dirs::home_dir()?.join(".codex/auth.json");
-    let raw = std::fs::read_to_string(path).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    v.get("tokens")
-        .and_then(|t| t.get("account_id"))
-        .and_then(|t| t.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-}
 /// Resolve credentials for a model.
 /// Priority: model api_key/env_key > session token > XAI_API_KEY.
 ///
 /// When `env_key` lists multiple names, the first set non-empty value is used.
+///
+/// Personal: never attach Grok session OIDC to third-party bases (Codex /
+/// OpenRouter / OpenAI platform). That was the source of Codex 400s.
 pub fn resolve_credentials(model: &ModelEntry, session_key: Option<&str>) -> ResolvedCredentials {
     let info = model.info();
     let (api_key, base_url, auth_type) = if let Some(key) = model.own_credential() {
@@ -4499,13 +4496,17 @@ pub fn resolve_credentials(model: &ModelEntry, session_key: Option<&str>) -> Res
             info.base_url.clone(),
             xai_chat_state::AuthType::ApiKey,
         )
-    } else if let Some(key) = session_key {
+    } else if let Some(key) = session_key
+        .filter(|_| !crate::agent::provider_auth::is_third_party_model_base(&info.base_url))
+    {
         (
             Some(key.to_owned()),
             info.base_url.clone(),
             xai_chat_state::AuthType::SessionToken,
         )
-    } else if let Ok(key) = crate::agent::auth_method::read_xai_api_key_env() {
+    } else if !crate::agent::provider_auth::is_third_party_model_base(&info.base_url)
+        && let Ok(key) = crate::agent::auth_method::read_xai_api_key_env()
+    {
         let url = model
             .api_base_url
             .clone()
@@ -4885,14 +4886,26 @@ pub fn inject_url_derived_headers(
     }
     // Personal: Codex / ChatGPT OAuth backend needs ChatGPT-Account-ID.
     if base_url.contains("chatgpt.com") || base_url.contains("backend-api/codex") {
-        if let Some(account_id) = read_codex_account_id() {
+        if let Some(account_id) = crate::agent::provider_auth::read_codex_account_id() {
             headers
-                .entry("ChatGPT-Account-ID".to_string())
+                .entry("ChatGPT-Account-Id".to_string())
                 .or_insert(account_id);
         }
         headers
             .entry("OpenAI-Beta".to_string())
             .or_insert_with(|| "responses=experimental".to_string());
+        headers
+            .entry("originator".to_string())
+            .or_insert_with(|| "codex_cli_rs".to_string());
+    }
+    // Personal: OpenRouter recommends optional attribution headers.
+    if base_url.contains("openrouter.ai") {
+        headers
+            .entry("HTTP-Referer".to_string())
+            .or_insert_with(|| "https://github.com/xai-org/grok-build".to_string());
+        headers
+            .entry("X-Title".to_string())
+            .or_insert_with(|| "Grok Build (personal)".to_string());
     }
     let _ = (alpha_test_key, base_url);
 }
@@ -5019,6 +5032,13 @@ pub fn to_acp_model_info(
         .map(|(key, model)| {
             let info = model.info();
             let model_id = acp::ModelId::new(Arc::from(key.clone()));
+            // Personal: keep provider identity visible without verbose suffixes.
+            let configured_name = info.name.clone().unwrap_or_else(|| info.model.clone());
+            let display_name = crate::agent::provider_auth::provider_id_for_base(&info.base_url)
+                .map(|provider| {
+                    crate::agent::provider_auth::display_model_name(provider, &configured_name)
+                })
+                .unwrap_or(configured_name);
             let total_context_tokens = info.context_window.get();
             let meta = {
                 let mut map = serde_json::Map::new();
@@ -5030,6 +5050,26 @@ pub fn to_acp_model_info(
                     "agentType".to_string(),
                     serde_json::Value::String(info.agent_type.clone()),
                 );
+                // Personal: provider/auth metadata powers the existing `/model`
+                // picker without introducing a parallel catalog UI.
+                if let Some(provider) =
+                    crate::agent::provider_auth::provider_id_for_base(&info.base_url)
+                {
+                    map.insert(
+                        "provider".to_string(),
+                        serde_json::Value::String(provider.display_name().to_string()),
+                    );
+                    map.insert(
+                        "providerId".to_string(),
+                        serde_json::Value::String(provider.as_str().to_string()),
+                    );
+                    map.insert(
+                        "authStatus".to_string(),
+                        serde_json::Value::String(
+                            crate::agent::provider_auth::picker_auth_status(provider).to_string(),
+                        ),
+                    );
+                }
                 if info.supports_reasoning_effort {
                     map.insert(
                         "supportsReasoningEffort".to_string(),
@@ -5052,12 +5092,9 @@ pub fn to_acp_model_info(
             };
             (
                 model_id.clone(),
-                acp::ModelInfo::new(
-                    model_id,
-                    info.name.clone().unwrap_or_else(|| info.model.clone()),
-                )
-                .description(info.description.clone())
-                .meta(meta),
+                acp::ModelInfo::new(model_id, display_name)
+                    .description(info.description.clone())
+                    .meta(meta),
             )
         })
         .collect()
@@ -6807,6 +6844,41 @@ reasoning_effort = "low"
         let meta = acp_model.meta.as_ref().expect("meta should be present");
         assert_eq!(meta["agentType"], "codex");
         assert_eq!(meta["totalContextTokens"], 256_000);
+    }
+    #[test]
+    fn acp_model_meta_includes_personal_provider_and_auth_status() {
+        let mut models = IndexMap::new();
+        let entry = test_model_entry(
+            "codex-model",
+            "https://chatgpt.com/backend-api/codex",
+            None,
+            None,
+            None,
+        );
+        models.insert("codex-model".to_string(), entry);
+        let acp_models = to_acp_model_info(&models);
+        let meta = acp_models.values().next().unwrap().meta.as_ref().unwrap();
+        assert_eq!(meta["provider"], "OpenAI Codex");
+        assert_eq!(meta["providerId"], "openai-codex");
+        assert!(matches!(
+            meta["authStatus"].as_str(),
+            Some("ready" | "login required")
+        ));
+    }
+    #[test]
+    fn acp_model_name_uses_compact_provider_prefix_without_codex_suffix() {
+        let mut models = IndexMap::new();
+        let mut entry = test_model_entry(
+            "gpt-5.6-sol",
+            "https://chatgpt.com/backend-api/codex",
+            None,
+            None,
+            None,
+        );
+        entry.info.name = Some("GPT-5.6 Sol (Codex)".to_string());
+        models.insert("gpt-5.6-sol".to_string(), entry);
+        let model = to_acp_model_info(&models).into_values().next().unwrap();
+        assert_eq!(model.name, "OpenAI · GPT-5.6 Sol");
     }
     #[test]
     fn acp_model_meta_always_includes_agent_type() {
@@ -11494,5 +11566,46 @@ default = "grok-4.5"
         let r = resolve_mcp_recursive_config_watch(None, None, None, None, Some(false));
         assert!(!r.value);
         assert_eq!(r.source, ConfigSource::Remote);
+    }
+}
+#[cfg(test)]
+mod personal_codex_live_tests {
+    use super::*;
+    #[test]
+    fn live_codex_model_is_byok_when_token_present() {
+        if crate::agent::provider_auth::read_codex_access_token().is_none() {
+            eprintln!("skip: no codex token");
+            return;
+        }
+        // Force-load effective config from user's real home.
+        let facts = resolve_model_auth_facts("gpt-5.6-sol");
+        eprintln!("byok={:?} scheme={:?}", facts.byok, facts.auth_scheme);
+        let creds =
+            try_resolve_model_credentials("gpt-5.6-sol", Some("fake-session-should-not-use"));
+        eprintln!(
+            "creds={:?}",
+            creds.as_ref().map(|c| (
+                c.base_url.clone(),
+                c.auth_type,
+                c.api_key
+                    .as_ref()
+                    .map(|k| k.chars().take(8).collect::<String>())
+            ))
+        );
+        assert_eq!(
+            facts.byok,
+            crate::agent::auth_method::ModelByok::Byok,
+            "expected Byok for gpt-5.6-sol"
+        );
+        let c = creds.expect("credentials");
+        assert!(
+            c.base_url.contains("chatgpt.com"),
+            "base_url={}",
+            c.base_url
+        );
+        assert_eq!(c.auth_type, xai_chat_state::AuthType::ApiKey);
+        assert!(c.api_key.is_some());
+        // Must not be the fake session
+        assert_ne!(c.api_key.as_deref(), Some("fake-session-should-not-use"));
     }
 }

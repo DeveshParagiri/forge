@@ -7,16 +7,17 @@
     <img alt="SpaceXAI logo" src="https://media.x.ai/v1/website/spacexai-symbol-black-transparent-6435cf42.png" width="96">
   </picture>
   <br>
-  Grok Build (<code>grok</code>)
+  Exaforge (<code>grok</code>)
 </h1>
 
-**Grok Build** is SpaceXAI's terminal-based AI coding agent. It runs as a
-full-screen TUI that understands your codebase, edits files, executes shell
-commands, searches the web, and manages long-running tasks — interactively,
-headlessly for scripting/CI, or embedded in editors via the Agent Client
-Protocol (ACP).
+**Exaforge** is Dev Paragiri's personal extension of SpaceXAI's open-source
+Grok Build terminal coding agent. It preserves the upstream Rust CLI, TUI, and
+ACP runtime while adding multi-provider model support, a Claude-inspired UI,
+provider-safe session switching, and a small rebase-friendly personalization
+layer.
 
-[Installing the released binary](#installing-the-released-binary) ·
+[Fork features](#fork-features) ·
+[Installing the fork](#installing-the-fork) ·
 [Building from source](#building-from-source) ·
 [Documentation](#documentation) ·
 [Repository layout](#repository-layout) ·
@@ -26,10 +27,11 @@ Protocol (ACP).
 
 ![Grok Build TUI](https://media.x.ai/v1/website/universe-tui-screenshot-6f7a0837.png)
 
-**Learn more about Grok Build at [x.ai/cli](https://x.ai/cli)**
+**Upstream project: [xai-org/grok-build](https://github.com/xai-org/grok-build)**
 
-This repository contains the Rust source for the `grok` CLI/TUI and its agent
-runtime. It is synced periodically from the SpaceXAI monorepo.
+This is an independent personal fork, not an official SpaceXAI distribution.
+The `dev` branch carries the extension layer and is intended to stay easy to
+rebase onto upstream `main`.
 
 A small `SOURCE_REV` file at the root records the full monorepo commit SHA
 for the version of the code present in this tree.
@@ -38,7 +40,37 @@ for the version of the code present in this tree.
 
 ---
 
-## Installing the released binary
+## Fork features
+
+| Area | Added behavior |
+|------|----------------|
+| Providers | Interactive `/login` flow for SpaceXAI, ChatGPT Codex OAuth, and OpenRouter API keys |
+| Model catalog | Provider-aware models with configurable include/exclude patterns and authentication state in `/model` |
+| Provider switching | Mid-session model changes remove provider-bound reasoning data before crossing provider families |
+| Codex compatibility | ChatGPT Codex request shaping, OAuth/account headers, streaming-text recovery, and provider-specific retries |
+| Interface | Claude-inspired theme, reasoning-effort cycling, optional shortcut footer, and corrected footer-free dashboard/modal geometry |
+| Branding | Rebase-friendly Exaforge welcome screen with the build version, no promotional announcement, and no startup changelog block |
+| Local install | One canonical extended binary at `~/.grok/bin/grok`; compatibility commands are symlinks, never duplicate builds |
+
+The larger architecture and rebase notes live in [`PERSONAL.md`](PERSONAL.md).
+
+## Installing the fork
+
+Build and install the `dev` branch with the included updater:
+
+```sh
+git clone --branch dev https://github.com/DeveshParagiri/grok-build.git ~/.local/share/grok/source
+install -m 755 ~/.local/share/grok/source/scripts/grok-update-from-source ~/bin/grok-update-from-source
+~/bin/grok-update-from-source
+grok --version
+```
+
+The updater fetches `upstream/main`, rebases `dev`, builds the release binary,
+installs it atomically at `~/.grok/bin/grok`, and refreshes compatibility
+symlinks. Existing `~/.grok` authentication, configuration, and sessions are
+preserved.
+
+## Installing the upstream release
 
 Prebuilt binaries are published for macOS, Linux, and Windows:
 

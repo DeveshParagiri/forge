@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# Fetch upstream grok-build, rebase the dev extensions, rebuild, and install.
+set -euo pipefail
+
+REPO="${GROK_SRC:-$HOME/.local/share/grok/source}"
+REMOTE="${GROK_UPSTREAM_REMOTE:-upstream}"
+BRANCH="${GROK_DEV_BRANCH:-${GROK_PERSONAL_BRANCH:-dev}}"
+INSTALL_BIN="${GROK_INSTALL_BIN:-$HOME/.grok/bin/grok}"
+BACKUP_DIR="${GROK_STOCK_BACKUP_DIR:-$HOME/.grok/stock-backup}"
+COMPAT_LINKS=(
+  "$HOME/.local/bin/grok"
+  "$HOME/.local/share/grok/versions/current"
+  "$HOME/.grok/local/grok"
+  "$HOME/bin/grok"
+)
+
+if [[ ! -d "$REPO/.git" ]]; then
+  echo "BLOCKED: grok-build repo not found at $REPO"
+  exit 1
+fi
+
+cd "$REPO"
+
+if ! git remote get-url "$REMOTE" >/dev/null 2>&1; then
+  if [[ "$REMOTE" == "upstream" ]]; then
+    git remote add upstream https://github.com/xai-org/grok-build.git
+  else
+    echo "BLOCKED: remote '$REMOTE' is not configured in $REPO"
+    exit 1
+  fi
+fi
+
+if ! git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
+  echo "BLOCKED: branch '$BRANCH' missing in $REPO"
+  exit 1
+fi
+
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "BLOCKED: working tree dirty in $REPO — commit or stash first"
+  git status -sb
+  exit 1
+fi
+
+echo "==> fetching $REMOTE"
+git fetch "$REMOTE" --tags
+
+echo "==> checking out $BRANCH"
+git checkout "$BRANCH"
+
+echo "==> rebasing onto $REMOTE/main"
+if ! git rebase "$REMOTE/main"; then
+  echo ""
+  echo "BLOCKED: rebase conflicts. Fix in $REPO, then:"
+  echo "  git add -A && git rebase --continue"
+  echo "  $0"
+  exit 1
+fi
+
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "BLOCKED: cargo not found"
+  exit 1
+fi
+
+if ! command -v dotslash >/dev/null 2>&1 && ! command -v protoc >/dev/null 2>&1; then
+  echo "BLOCKED: need dotslash or protoc on PATH"
+  exit 1
+fi
+
+echo "==> cargo build -p xai-grok-pager-bin --release"
+cargo build -p xai-grok-pager-bin --release
+
+BUILT="$REPO/target/release/xai-grok-pager"
+if [[ ! -x "$BUILT" ]]; then
+  echo "BLOCKED: build artifact missing: $BUILT"
+  exit 1
+fi
+
+mkdir -p "$(dirname "$INSTALL_BIN")" "$BACKUP_DIR"
+
+if [[ -L "$INSTALL_BIN" ]]; then
+  target="$(readlink "$INSTALL_BIN" || true)"
+  if [[ "$target" == *downloads* ]] && [[ ! -e "$BACKUP_DIR/grok-stock" ]]; then
+    echo "==> backing up stock binary → $BACKUP_DIR/grok-stock"
+    cp -p "$INSTALL_BIN" "$BACKUP_DIR/grok-stock" 2>/dev/null || true
+  fi
+elif [[ -x "$INSTALL_BIN" && ! -e "$BACKUP_DIR/grok-stock" ]]; then
+  cp -p "$INSTALL_BIN" "$BACKUP_DIR/grok-stock" 2>/dev/null || true
+fi
+
+echo "==> installing $BUILT → $INSTALL_BIN"
+INSTALL_TMP="${INSTALL_BIN}.new.$$"
+trap 'rm -f "$INSTALL_TMP"' EXIT
+install -m 755 "$BUILT" "$INSTALL_TMP"
+mv -f "$INSTALL_TMP" "$INSTALL_BIN"
+trap - EXIT
+
+for link_path in "${COMPAT_LINKS[@]}"; do
+  mkdir -p "$(dirname "$link_path")"
+  ln -sfn "$INSTALL_BIN" "$link_path"
+done
+
+echo ""
+echo "Installed: $($INSTALL_BIN --version 2>/dev/null || echo unknown)"
+echo "  canonical binary: $INSTALL_BIN"
+for link_path in "${COMPAT_LINKS[@]}"; do
+  echo "  compatibility link: $link_path -> $(readlink "$link_path" 2>/dev/null || echo '?')"
+done
+echo ""
+echo "Auth/config/sessions remain under ~/.grok/."

@@ -25,6 +25,8 @@ mod modes;
 mod notes;
 mod permissions;
 mod prompt;
+/// Personal: Pi-style multi-provider `/login` (Codex / OpenRouter).
+mod provider_login;
 mod queue;
 mod rewind;
 mod router;

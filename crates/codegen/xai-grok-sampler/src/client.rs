@@ -73,6 +73,226 @@ impl GrokRequestHeaders<'_> {
     }
 }
 
+/// Personal: reshape a Responses API JSON body for ChatGPT Codex
+/// (`chatgpt.com/backend-api/codex/responses`), matching Pi's
+/// `openai-codex-responses` contract.
+///
+/// Codex rejects (400) parameters that api.openai.com / api.x.ai accept:
+/// `temperature`, `top_p`, `max_output_tokens`, `truncation`, `background`,
+/// `metadata`, `stream_tool_calls`, and **system messages in `input`**
+/// (use `instructions` instead). Also requires `store: false` and `stream: true`.
+fn sanitize_body_for_codex_backend(mut body: serde_json::Value) -> serde_json::Value {
+    use serde_json::{Map, Value, json};
+
+    // Lift system / developer text out of input → instructions (Pi style).
+    let mut instruction_parts: Vec<String> = Vec::new();
+    if let Some(existing) = body.get("instructions").and_then(|v| v.as_str()) {
+        if !existing.trim().is_empty() {
+            instruction_parts.push(existing.to_string());
+        }
+    }
+
+    let mut filtered_input: Vec<Value> = Vec::new();
+    if let Some(items) = body.get("input").and_then(|v| v.as_array()) {
+        for item in items {
+            let role = item.get("role").and_then(|r| r.as_str()).unwrap_or("");
+            // EasyMessage form: { type?, role, content }
+            // Item form: { type: "message", role, content }
+            let is_systemish =
+                role.eq_ignore_ascii_case("system") || role.eq_ignore_ascii_case("developer");
+            if is_systemish {
+                if let Some(text) = extract_input_item_text(item) {
+                    if !text.trim().is_empty() {
+                        instruction_parts.push(text);
+                    }
+                }
+                continue;
+            }
+            // Drop empty items
+            filtered_input.push(item.clone());
+        }
+    }
+
+    // Whitelist of Codex-accepted top-level keys (Pi buildRequestBody + tools).
+    // Anything else → 400 Unsupported parameter.
+    const ALLOW: &[&str] = &[
+        "model",
+        "input",
+        "instructions",
+        "tools",
+        "tool_choice",
+        "parallel_tool_calls",
+        "reasoning",
+        "include",
+        "text",
+        "prompt_cache_key",
+        "service_tier",
+        "store",
+        "stream",
+    ];
+
+    let mut out = Map::new();
+    if let Some(obj) = body.as_object_mut() {
+        for key in ALLOW {
+            if let Some(v) = obj.remove(*key) {
+                if !v.is_null() {
+                    out.insert((*key).to_string(), v);
+                }
+            }
+        }
+    }
+
+    out.insert("store".into(), json!(false));
+    out.insert("stream".into(), json!(true));
+    out.insert("input".into(), Value::Array(filtered_input));
+
+    if !instruction_parts.is_empty() {
+        out.insert(
+            "instructions".into(),
+            Value::String(instruction_parts.join("\n\n")),
+        );
+    } else if !out.contains_key("instructions") {
+        // Pi always sends instructions; Codex is fine with a default.
+        out.insert(
+            "instructions".into(),
+            Value::String("You are a helpful assistant.".into()),
+        );
+    }
+
+    // Reasoning: keep effort; prefer summary "auto" (Pi) for visible streams.
+    if let Some(Value::Object(reasoning)) = out.get_mut("reasoning") {
+        if reasoning.get("effort").map(|e| e.is_null()).unwrap_or(true) {
+            reasoning.remove("effort");
+        }
+        // Drop null-only reasoning
+        if reasoning.is_empty() {
+            out.remove("reasoning");
+        } else if !reasoning.contains_key("summary") {
+            if let Some(Value::Object(reasoning)) = out.get_mut("reasoning") {
+                reasoning.insert("summary".into(), json!("auto"));
+            }
+        }
+    }
+
+    // include: only encrypted reasoning is useful for multi-turn store:false
+    if let Some(Value::Array(inc)) = out.get_mut("include") {
+        inc.retain(|v| {
+            v.as_str()
+                .is_some_and(|s| s == "reasoning.encrypted_content")
+        });
+        let empty = out
+            .get("include")
+            .and_then(|v| v.as_array())
+            .is_some_and(|a| a.is_empty());
+        if empty {
+            out.insert("include".into(), json!(["reasoning.encrypted_content"]));
+        }
+    } else {
+        out.insert("include".into(), json!(["reasoning.encrypted_content"]));
+    }
+
+    // parallel_tool_calls default when tools present
+    if out.contains_key("tools") && !out.contains_key("parallel_tool_calls") {
+        out.insert("parallel_tool_calls".into(), json!(true));
+    }
+    if out.contains_key("tools") && !out.contains_key("tool_choice") {
+        out.insert("tool_choice".into(), json!("auto"));
+    }
+
+    // Keep only function tools (Codex rejects hosted/xAI tool types).
+    if let Some(Value::Array(tools)) = out.get_mut("tools") {
+        tools.retain(|tool| {
+            tool.get("type")
+                .and_then(|t| t.as_str())
+                .is_some_and(|t| t == "function")
+                || tool.get("name").is_some() // EasyFunction form
+        });
+        for tool in tools.iter_mut() {
+            if let Value::Object(t) = tool {
+                t.retain(|_, v| !v.is_null());
+                // Ensure type is present for bare function shapes
+                if !t.contains_key("type") && t.contains_key("name") {
+                    t.insert("type".into(), json!("function"));
+                }
+            }
+        }
+        if tools.is_empty() {
+            out.remove("tools");
+            out.remove("tool_choice");
+            out.remove("parallel_tool_calls");
+        }
+    }
+
+    Value::Object(out)
+}
+
+#[cfg(test)]
+mod codex_sanitize_tests {
+    use super::sanitize_body_for_codex_backend;
+    use serde_json::json;
+
+    #[test]
+    fn lifts_system_and_strips_forbidden_params() {
+        let body = json!({
+            "model": "gpt-5.6-sol",
+            "temperature": 1.0,
+            "top_p": 0.98,
+            "max_output_tokens": 4096,
+            "truncation": "disabled",
+            "background": false,
+            "metadata": {"x": "y"},
+            "stream_tool_calls": true,
+            "store": true,
+            "stream": false,
+            "input": [
+                {"role": "system", "content": [{"type": "input_text", "text": "You are Grok"}]},
+                {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+            ],
+            "tools": [{"type": "function", "name": "bash", "parameters": {"type": "object"}}],
+            "reasoning": {"effort": "medium", "summary": "concise"},
+        });
+        let out = sanitize_body_for_codex_backend(body);
+        assert_eq!(out["store"], json!(false));
+        assert_eq!(out["stream"], json!(true));
+        assert!(out.get("temperature").is_none());
+        assert!(out.get("top_p").is_none());
+        assert!(out.get("max_output_tokens").is_none());
+        assert!(out.get("stream_tool_calls").is_none());
+        assert!(out.get("metadata").is_none());
+        assert!(
+            out["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("You are Grok")
+        );
+        let input = out["input"].as_array().unwrap();
+        assert_eq!(input.len(), 1);
+        assert_eq!(input[0]["role"], "user");
+        assert!(out.get("tools").is_some());
+    }
+}
+
+fn extract_input_item_text(item: &serde_json::Value) -> Option<String> {
+    // content may be string or array of {type, text}
+    match item.get("content") {
+        Some(serde_json::Value::String(s)) => Some(s.clone()),
+        Some(serde_json::Value::Array(parts)) => {
+            let mut texts = Vec::new();
+            for p in parts {
+                if let Some(t) = p.get("text").and_then(|t| t.as_str()) {
+                    texts.push(t.to_string());
+                }
+            }
+            if texts.is_empty() {
+                None
+            } else {
+                Some(texts.join("\n"))
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Parse the `Retry-After` response header as delta-seconds.
 /// Our inference backends only emit integer seconds (never HTTP-date),
 /// so we only handle that form. HTTP-dates silently return `None` and
@@ -96,12 +316,22 @@ impl GrokRequestHeaders<'_> {
 /// `ResponseUsage` unchanged so billing telemetry stays correct. When
 /// the API doesn't emit `context_details` (older deployments) `total_tokens`
 /// passes through unchanged.
-fn deserialize_response_event(data: &str) -> Result<rs::ResponseStreamEvent> {
+///
+/// Returns `Ok(None)` for a syntactically valid, additive `response.*` event
+/// whose type is newer than async-openai's event enum, or for a recognized
+/// transport-liveness event. Responses streams are explicitly extensible, and
+/// metadata/keepalive events must not invalidate text that the user has already
+/// seen. Malformed payloads for known event types remain errors.
+fn deserialize_response_event(data: &str) -> Result<Option<rs::ResponseStreamEvent>> {
     let mut event = match serde_json::from_str::<rs::ResponseStreamEvent>(data) {
         Ok(event) => event,
         Err(first_err) => {
             // Try sanitizing: parse as Value, strip unknown tools, retry.
             if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(data) {
+                let event_type = value
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned);
                 // Strip tools that async_openai's rs::Tool can't deserialize
                 // (e.g., xAI-specific "x_search"). Instead of maintaining a
                 // hardcoded allowlist, try deserializing each tool entry —
@@ -114,7 +344,20 @@ fn deserialize_response_event(data: &str) -> Result<rs::ResponseStreamEvent> {
                 }
                 if let Ok(mut event) = serde_json::from_value::<rs::ResponseStreamEvent>(value) {
                     apply_terminal_event_overrides(&mut event, data);
-                    return Ok(event);
+                    return Ok(Some(event));
+                }
+                let first_error = first_err.to_string();
+                if event_type.as_deref().is_some_and(|kind| {
+                    let is_additive_or_liveness = kind.starts_with("response.")
+                        || matches!(kind, "keepalive" | "heartbeat" | "ping");
+                    is_additive_or_liveness
+                        && first_error.starts_with(&format!("unknown variant `{kind}`"))
+                }) {
+                    tracing::debug!(
+                        event_type = event_type.as_deref().unwrap_or_default(),
+                        "Ignoring additive Responses API event not modeled by async-openai"
+                    );
+                    return Ok(None);
                 }
             }
             tracing::error!(
@@ -126,7 +369,7 @@ fn deserialize_response_event(data: &str) -> Result<rs::ResponseStreamEvent> {
         }
     };
     apply_terminal_event_overrides(&mut event, data);
-    Ok(event)
+    Ok(Some(event))
 }
 
 /// On terminal Responses API events (`response.completed` /
@@ -1186,12 +1429,16 @@ impl SamplingClient {
             SamplingError::Serialization(e)
         })?;
         // Inject xAI-specific fields not in async-openai's CreateResponse type.
-        if self.defaults.stream_tool_calls {
+        // Personal: Codex (chatgpt.com/backend-api/codex) is a different contract
+        // than api.openai.com / api.x.ai — match Pi's openai-codex-responses body.
+        let is_codex_backend =
+            self.base_url.contains("chatgpt.com") || self.base_url.contains("backend-api/codex");
+        if self.defaults.stream_tool_calls && !is_codex_backend {
             request_body["stream_tool_calls"] = serde_json::json!(true);
         }
         // Inject xAI-specific tools (e.g., x_search) that can't be expressed
         // via async_openai's rs::Tool enum.
-        if !extra_raw_tools.is_empty() {
+        if !extra_raw_tools.is_empty() && !is_codex_backend {
             if let Some(tools) = request_body.get_mut("tools").and_then(|v| v.as_array_mut()) {
                 tools.extend(extra_raw_tools);
             } else {
@@ -1199,15 +1446,43 @@ impl SamplingClient {
             }
         }
         xai_grok_sampling_types::patch_reasoning_text_types(&mut request_body);
+        if is_codex_backend {
+            request_body = sanitize_body_for_codex_backend(request_body);
+            tracing::info!(
+                target: crate::sampling_log::TARGET,
+                event = "codex_request_sanitized",
+                model = %model_id,
+                body_keys = ?request_body
+                    .as_object()
+                    .map(|o| o.keys().cloned().collect::<Vec<_>>()),
+                input_len = request_body
+                    .get("input")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0),
+                has_tools = request_body.get("tools").is_some(),
+                "Personal: reshaped Responses body for ChatGPT Codex backend (Pi-compatible)"
+            );
+        }
         // Fresh per attempt so signals never leak across retries; `None`
         // (check disabled) sends no header and does no peek work per event.
-        let doom_loop = self
-            .defaults
-            .doom_loop_recovery
-            .map(crate::doom_loop::DoomLoopSignalCollector::new);
-        let mut http_request = grok_headers
-            .apply(self.post(self.endpoint("responses")))
-            .header(ACCEPT, HeaderValue::from_static("text/event-stream"));
+        let doom_loop = if is_codex_backend {
+            None
+        } else {
+            self.defaults
+                .doom_loop_recovery
+                .map(crate::doom_loop::DoomLoopSignalCollector::new)
+        };
+        // Personal: do not attach x-grok-* headers to Codex — not required and
+        // keeps the request closer to Pi/Codex CLI.
+        let mut http_request = if is_codex_backend {
+            self.post(self.endpoint("responses"))
+                .header(ACCEPT, HeaderValue::from_static("text/event-stream"))
+        } else {
+            grok_headers
+                .apply(self.post(self.endpoint("responses")))
+                .header(ACCEPT, HeaderValue::from_static("text/event-stream"))
+        };
         if doom_loop.is_some() {
             // Presence opts in; the server ignores the value.
             http_request = http_request.header(DOOM_LOOP_CHECK_HEADER, "true");
@@ -1258,8 +1533,21 @@ impl SamplingClient {
                 error_message = %message,
                 body_preview = %Self::body_preview(bytes.as_ref()),
                 model_id = %model_id,
+                base_url = %self.base_url,
                 "responses API error"
             );
+            // Surface Codex detail strings in the user-facing message so TUI
+            // shows "Unsupported parameter: …" instead of a bare HTTP 400.
+            let message = if is_codex_backend {
+                let detail = String::from_utf8_lossy(bytes.as_ref());
+                if detail.contains("detail") || detail.contains("Unsupported") {
+                    format!("{message} — {detail}")
+                } else {
+                    message
+                }
+            } else {
+                message
+            };
             return Err(SamplingError::Api {
                 status,
                 message,
@@ -1328,7 +1616,11 @@ impl SamplingClient {
                         } else if let Some(stream_error) = try_parse_stream_error(data) {
                             Some(Some(Err(stream_error)))
                         } else {
-                            Some(Some(deserialize_response_event(data)))
+                            match deserialize_response_event(data) {
+                                Ok(Some(event)) => Some(Some(Ok(event))),
+                                Ok(None) => Some(None),
+                                Err(err) => Some(Some(Err(err))),
+                            }
                         }
                     }
                     Err(e) => {
@@ -2479,7 +2771,9 @@ mod tests {
                 }
             }
         }"#;
-        let event = deserialize_response_event(sse).expect("parse");
+        let event = deserialize_response_event(sse)
+            .expect("parse")
+            .expect("known event");
         let rs::ResponseStreamEvent::ResponseCompleted(e) = event else {
             panic!("expected ResponseCompleted");
         };
@@ -2517,7 +2811,9 @@ mod tests {
             )
         };
 
-        let event = deserialize_response_event(&make(78)).expect("parse");
+        let event = deserialize_response_event(&make(78))
+            .expect("parse")
+            .expect("known event");
         let rs::ResponseStreamEvent::ResponseCompleted(e) = event else {
             panic!("expected ResponseCompleted");
         };
@@ -2531,7 +2827,9 @@ mod tests {
         );
 
         // The REST mapper backfills 0 for unbilled requests: no stash.
-        let event = deserialize_response_event(&make(0)).expect("parse");
+        let event = deserialize_response_event(&make(0))
+            .expect("parse")
+            .expect("known event");
         let rs::ResponseStreamEvent::ResponseCompleted(e) = event else {
             panic!("expected ResponseCompleted");
         };
@@ -2561,7 +2859,9 @@ mod tests {
                 }
             }
         }"#;
-        let event = deserialize_response_event(sse).expect("parse");
+        let event = deserialize_response_event(sse)
+            .expect("parse")
+            .expect("known event");
         let rs::ResponseStreamEvent::ResponseCompleted(e) = event else {
             panic!("expected ResponseCompleted");
         };
@@ -2598,7 +2898,9 @@ mod tests {
                 }
             }
         }"#;
-        let event = deserialize_response_event(sse).expect("parse");
+        let event = deserialize_response_event(sse)
+            .expect("parse")
+            .expect("known event");
         let rs::ResponseStreamEvent::ResponseCompleted(e) = event else {
             panic!("expected ResponseCompleted");
         };
@@ -2619,10 +2921,46 @@ mod tests {
             "delta": "hello",
             "logprobs": []
         }"#;
-        let event = deserialize_response_event(sse).expect("non-terminal event parses");
+        let event = deserialize_response_event(sse)
+            .expect("non-terminal event parses")
+            .expect("known event");
         assert!(matches!(
             event,
             rs::ResponseStreamEvent::ResponseOutputTextDelta(_)
         ));
+    }
+
+    #[test]
+    fn deserialize_response_event_ignores_additive_codex_metadata_event() {
+        let sse = r#"{
+            "type": "response.metadata",
+            "sequence_number": 7,
+            "metadata": {
+                "service_tier": "priority",
+                "trace_id": "trace_123"
+            }
+        }"#;
+
+        let event = deserialize_response_event(sse).expect("valid additive event");
+        assert!(event.is_none());
+    }
+
+    #[test]
+    fn deserialize_response_event_ignores_codex_keepalive_event() {
+        let sse = r#"{"type":"keepalive","sequence_number":2}"#;
+
+        let event = deserialize_response_event(sse).expect("valid liveness event");
+        assert!(event.is_none());
+    }
+
+    #[test]
+    fn deserialize_response_event_does_not_hide_malformed_known_event() {
+        let sse = r#"{
+            "type": "response.output_text.delta",
+            "sequence_number": 8
+        }"#;
+
+        let err = deserialize_response_event(sse).expect_err("known malformed event must fail");
+        assert!(matches!(err, SamplingError::Serialization(_)));
     }
 }

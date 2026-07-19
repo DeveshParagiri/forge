@@ -21,6 +21,7 @@ use crate::views::prompt_widget::{PromptFlag, PromptInfo, PromptWidget};
 mod hero_box;
 pub(crate) mod logo;
 mod menu;
+mod personal;
 mod prompt;
 mod top_bar;
 
@@ -378,11 +379,11 @@ impl WelcomeLayout {
 
 /// Controls what the version badge renders.
 pub(super) enum VersionBadgeMode<'a> {
-    /// Full badge: team | tier | api_key | **Grok Build** VERSION+channel **Beta** (right-aligned).
+    /// Full badge: team | tier | api_key | **Exaforge** VERSION+channel (right-aligned).
     Full { subscription_tier: Option<&'a str> },
-    /// Hero footer: team | api_key | Grok Build Beta [channel] (right-aligned, gray).
+    /// Hero footer: team | api_key | channel label (right-aligned, gray).
     HeroFooter,
-    /// Hero inline: **Grok Build Beta**  VERSION (left-aligned).
+    /// Hero inline: **Exaforge** VERSION (left-aligned).
     HeroInline,
 }
 
@@ -438,7 +439,7 @@ pub(super) fn render_version_badge(
     match &mode {
         VersionBadgeMode::Full { .. } => {
             spans.push(Span::styled(
-                "Grok Build  ",
+                format!("{}  ", personal::PRODUCT_NAME),
                 Style::default()
                     .fg(theme.text_primary)
                     .add_modifier(Modifier::BOLD),
@@ -446,12 +447,6 @@ pub(super) fn render_version_badge(
             spans.push(Span::styled(
                 format!("{}{}", xai_grok_version::VERSION, channel),
                 Style::default().fg(theme.gray),
-            ));
-            spans.push(Span::styled(
-                " Beta",
-                Style::default()
-                    .fg(theme.text_primary)
-                    .add_modifier(Modifier::BOLD),
             ));
         }
         VersionBadgeMode::HeroFooter => {
@@ -467,7 +462,7 @@ pub(super) fn render_version_badge(
         }
         VersionBadgeMode::HeroInline => {
             spans.push(Span::styled(
-                "Grok Build Beta  ",
+                format!("{}  ", personal::PRODUCT_NAME),
                 Style::default()
                     .fg(theme.text_primary)
                     .add_modifier(Modifier::BOLD),
@@ -764,7 +759,7 @@ pub fn render_welcome(
                 content_area,
                 buf,
                 Some((
-                    "Grok Build is not yet available for this account.",
+                    "Exaforge is not yet available for this account.",
                     theme.gray_bright,
                 )),
                 &menu,
@@ -951,7 +946,7 @@ fn render_welcome_trust(
         // Two lines so the warning never clips at narrow / compact widths
         // (a single ~78-char line would truncate "...posing security risks").
         Line::from(Span::styled(
-            "Grok Build may run or modify contents in this directory,",
+            "Exaforge may run or modify contents in this directory,",
             Style::default().fg(theme.gray),
         ))
         .alignment(Alignment::Center),
@@ -1682,6 +1677,9 @@ fn render_welcome_done(
     // the logo/centering space for its list. Plain compact mode keeps the
     // normal welcome layout.
     let welcome_compact = show_picker;
+    let announcement = personal::announcement(p.announcement);
+    let changelog_bullets = personal::changelog_bullets(p.changelog_bullets);
+    let upgrade_cta = announcement.and(p.upgrade_cta);
 
     let cta = p
         .gate
@@ -1718,8 +1716,8 @@ fn render_welcome_done(
     } else {
         0
     };
-    let changelog_height = if p.has_access && !show_picker && !p.changelog_bullets.is_empty() {
-        2 + p.changelog_bullets.len() as u16
+    let changelog_height = if p.has_access && !show_picker && !changelog_bullets.is_empty() {
+        2 + changelog_bullets.len() as u16
     } else {
         0
     };
@@ -1789,9 +1787,9 @@ fn render_welcome_done(
         changelog_height,
         compact: welcome_compact,
         prompt_compact: p.compact,
-        announcement: p.announcement,
+        announcement,
         expanded: p.welcome_announcement_expanded,
-        has_upgrade_cta: p.upgrade_cta.is_some(),
+        has_upgrade_cta: upgrade_cta.is_some(),
     });
 
     // Render startup warning in the error area (same slot as auth errors).
@@ -1842,11 +1840,11 @@ fn render_welcome_done(
             menu_items,
             p.selected,
             p.mouse_pos,
-            p.announcement,
+            announcement,
             p.welcome_announcement_expanded,
-            p.changelog_bullets,
+            changelog_bullets,
             p.changelog_has_full_notes,
-            p.upgrade_cta,
+            upgrade_cta,
         );
         changelog_cta_rect = rects.changelog_cta_rect;
         announcement_truncated = rects.announcement_truncated;
@@ -1878,7 +1876,7 @@ fn render_welcome_done(
     // Inset to match the input bar so it lines up with the menu above.
     if layout.changelog.height > 0 {
         let info_area = inset_horizontal(layout.changelog, prompt::prompt_inset(p.compact));
-        if let Some(ann) = p.announcement {
+        if let Some(ann) = announcement {
             let (block, truncated, cta_rect) = render_announcement_section(
                 info_area,
                 buf,
@@ -1888,7 +1886,7 @@ fn render_welcome_done(
                 content_area.height,
                 p.welcome_announcement_expanded,
                 p.mouse_pos,
-                p.upgrade_cta,
+                upgrade_cta,
             );
             announcement_rect = block;
             announcement_truncated = truncated;
@@ -1898,7 +1896,7 @@ fn render_welcome_done(
                 info_area,
                 buf,
                 theme,
-                p.changelog_bullets,
+                changelog_bullets,
                 MENU_MIN_WIDTH,
                 content_area.height,
                 p.changelog_has_full_notes,
@@ -3799,6 +3797,41 @@ mod tests {
         assert!(
             fallback_rect.is_some(),
             "command arm must expose a show-full-URL hit-rect"
+        );
+    }
+
+    #[test]
+    fn personal_welcome_uses_exaforge_and_suppresses_remote_announcement() {
+        let auth = AuthState::Done;
+        let trust = TrustState::Done;
+        let announcement = xai_grok_announcements::RemoteAnnouncement {
+            title: Some("Grok 4.5 is here!".into()),
+            message: Some("Grok 4.5 is now available.".into()),
+            ..Default::default()
+        };
+        let mut params = render_params(&auth, &trust, None);
+        params.announcement = Some(&announcement);
+
+        let text = render_done_text(&params);
+        assert!(
+            text.contains("Exaforge"),
+            "missing personal brand: {text:?}"
+        );
+        assert!(
+            text.contains(xai_grok_version::VERSION),
+            "missing build version: {text:?}",
+        );
+        assert!(
+            !text.contains("Grok Build"),
+            "upstream brand leaked: {text:?}"
+        );
+        assert!(
+            !text.contains("Grok 4.5 is here!"),
+            "announcement leaked: {text:?}"
+        );
+        assert!(
+            !text.contains("Grok 4.5 is now available."),
+            "announcement message leaked: {text:?}",
         );
     }
 

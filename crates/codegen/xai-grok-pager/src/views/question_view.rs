@@ -127,6 +127,11 @@ pub enum LocalQuestionKind {
         model_id: agent_client_protocol::ModelId,
         effort: Option<xai_grok_shell::sampling::types::ReasoningEffort>,
     },
+    /// Personal: Pi-style `/login` provider picker.
+    /// Option `id`s are `spacexai` | `openai-codex` | `openrouter`.
+    ProviderLogin,
+    /// Personal: freeform capture for OpenRouter API key after provider pick.
+    OpenRouterApiKey,
 }
 
 // ── State ──────────────────────────────────────────────────────────────
@@ -287,6 +292,12 @@ impl QuestionViewState {
     pub fn with_no_freeform(mut self) -> Self {
         self.no_freeform = true;
         self
+    }
+
+    /// Personal: whether this local question is a dedicated text field rather than an
+    /// option list with an optional "Other" row.
+    pub fn is_direct_input(&self) -> bool {
+        matches!(self.local_kind, Some(LocalQuestionKind::OpenRouterApiKey))
     }
 
     /// Number of items for a given question: options + 1 free-form row

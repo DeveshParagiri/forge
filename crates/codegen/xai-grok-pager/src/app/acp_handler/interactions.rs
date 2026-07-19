@@ -84,6 +84,9 @@ pub(crate) fn handle_ask_user_question(
                 LocalQuestionKind::FreeUsageUpsell { .. } => "SuperGrok upsell",
                 LocalQuestionKind::AgentTypeMismatch { .. } => "model switch",
                 LocalQuestionKind::ProjectSelect { .. } => "project select",
+                // Personal
+                LocalQuestionKind::ProviderLogin => "/login providers",
+                LocalQuestionKind::OpenRouterApiKey => "/login openrouter",
             };
             agent.scrollback.push_block(RenderBlock::system(format!(
                 "{cmd} cancelled by model question"
