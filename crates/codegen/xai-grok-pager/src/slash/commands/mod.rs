@@ -92,8 +92,8 @@ pub fn builtin_commands() -> Vec<Arc<dyn SlashCommand>> {
         Arc::new(screen_mode_switch::ScreenModeSwitchCommand::fullscreen()),
         Arc::new(model::ModelCommand),
         Arc::new(effort::EffortCommand),
-        // Exaforge: additive capability-gated fast-mode command.
-        Arc::new(crate::exaforge::fast_mode::FastCommand),
+        // Forge: additive capability-gated fast-mode command.
+        Arc::new(crate::forge::fast_mode::FastCommand),
         Arc::new(always_approve::AlwaysApproveCommand),
         Arc::new(auto::AutoCommand),
         Arc::new(multiline::MultilineCommand),

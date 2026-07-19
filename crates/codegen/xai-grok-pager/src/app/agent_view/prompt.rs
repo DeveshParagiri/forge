@@ -763,7 +763,7 @@ impl AgentView {
         // handling the Esc, a following `d` is the user's text, not a dump.
         self.esc_pressed_at = None;
 
-        // Exaforge: mid-turn running — Esc cancels generation (same as Ctrl+C on
+        // Forge: mid-turn running — Esc cancels generation (same as Ctrl+C on
         // an empty prompt). Overlays / dropdowns / selection still steal Esc first.
         // Unlike Ctrl+C, a non-empty draft does not intercept: Esc always stops.
         // Ordering-sensitive: kept inline in try_handle_esc_policy.

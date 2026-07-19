@@ -828,7 +828,7 @@ pub(crate) async fn spawn_session_actor(
         terminal_backend: terminal_backend.clone(),
         fs_backend: fs_backend.clone(),
         tools_notification_handle: tools_notification_handle.clone(),
-        exaforge_subagent_ui: Some(crate::exaforge::subagent_ui::ExternalSubagentUi::new(
+        forge_subagent_ui: Some(crate::forge::subagent_ui::ExternalSubagentUi::new(
             session_info.id.0.to_string(),
             tool_context.cwd.as_path().to_path_buf(),
             gateway.clone(),

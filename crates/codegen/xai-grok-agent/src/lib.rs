@@ -11,8 +11,8 @@ pub mod compaction;
 pub mod config;
 pub mod discovery;
 pub mod error;
-// Exaforge: additive external harness entries for subagent discovery.
-pub(crate) mod exaforge;
+// Forge: additive external harness entries for subagent discovery.
+pub(crate) mod forge;
 pub mod plugins;
 pub mod prompt;
 pub mod repo;

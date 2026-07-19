@@ -83,8 +83,8 @@ pub(crate) struct AgentRebuildSpec {
     pub terminal_backend: Arc<dyn TerminalBackend>,
     pub fs_backend: Arc<dyn AsyncFileSystem>,
     pub tools_notification_handle: ToolNotificationHandle,
-    /// Exaforge-owned bridge for external CLI subagent lifecycle events.
-    pub exaforge_subagent_ui: Option<crate::exaforge::subagent_ui::ExternalSubagentUi>,
+    /// Forge-owned bridge for external CLI subagent lifecycle events.
+    pub forge_subagent_ui: Option<crate::forge::subagent_ui::ExternalSubagentUi>,
     pub bridge_state_path: PathBuf,
     pub session_env: Arc<HashMap<String, String>>,
     pub models_manager: crate::agent::models::ModelsManager,
@@ -181,7 +181,7 @@ impl AgentRebuildSpec {
             terminal_backend,
             fs_backend,
             tools_notification_handle,
-            exaforge_subagent_ui,
+            forge_subagent_ui,
             bridge_state_path,
             session_env,
             models_manager,
@@ -328,12 +328,12 @@ impl AgentRebuildSpec {
             let native_backend: Arc<
                 dyn xai_grok_tools::implementations::grok_build::task::backend::SubagentBackend,
             > = Arc::new(ChannelBackend::new(event_tx.clone()));
-            // Exaforge: preserve native coordinator behavior while routing the
+            // Forge: preserve native coordinator behavior while routing the
             // explicit claude-code/codex-cli types to headless CLI adapters.
             let backend = SubagentBackendResource(Arc::new(
-                crate::exaforge::external_subagents::CompositeSubagentBackend::new(
+                crate::forge::external_subagents::CompositeSubagentBackend::new(
                     native_backend,
-                    exaforge_subagent_ui.clone(),
+                    forge_subagent_ui.clone(),
                 ),
             ));
             agent.tool_bridge().update_resource(backend).await;
@@ -394,7 +394,7 @@ pub(crate) fn test_rebuild_spec_default() -> Arc<AgentRebuildSpec> {
         ),
         fs_backend: Arc::new(xai_grok_tools::computer::local::LocalFs),
         tools_notification_handle: ToolNotificationHandle::noop(),
-        exaforge_subagent_ui: None,
+        forge_subagent_ui: None,
         bridge_state_path: std::env::temp_dir().join("test_tool_state.json"),
         session_env: Arc::new(HashMap::new()),
         models_manager: crate::agent::models::ModelsManager::default(),

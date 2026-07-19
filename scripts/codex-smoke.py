@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Personal: smoke-test ChatGPT Codex OAuth token against the Codex backend.
+"""Forge: smoke-test ChatGPT Codex OAuth token against the Codex backend.
 
 Uses ~/.codex/auth.json only (never prints secrets). Exit 0 on success.
 

@@ -293,9 +293,9 @@ impl PromptContext {
                 tool_bridge.render_prompt(body, &placeholders).await?
             }
         };
-        // Exaforge: append fork orchestration policy after upstream prompt rendering.
+        // Forge: append fork orchestration policy after upstream prompt rendering.
         let mut prompt = prompt;
-        crate::exaforge::prompt_extension::append(&mut prompt, self.audience, tool_bridge).await;
+        crate::forge::prompt_extension::append(&mut prompt, self.audience, tool_bridge).await;
         Some(prompt)
     }
 }

@@ -126,9 +126,9 @@ fn deserialize_response_event(data: &str) -> Result<Option<rs::ResponseStreamEve
                     apply_terminal_event_overrides(&mut event, data);
                     return Ok(Some(event));
                 }
-                // Exaforge: preserve additive/liveness compatibility while
+                // Forge: preserve additive/liveness compatibility while
                 // retaining this decoder's Option-based skip integration.
-                if crate::exaforge::responses_event_compat::ignorable_unknown_event(
+                if crate::forge::responses_event_compat::ignorable_unknown_event(
                     event_type.as_deref(),
                     &first_err,
                 ) {
@@ -1210,9 +1210,9 @@ impl SamplingClient {
             SamplingError::Serialization(e)
         })?;
         // Inject xAI-specific fields not in async-openai's CreateResponse type.
-        // Exaforge: select the Responses backend policy at the request boundary.
+        // Forge: select the Responses backend policy at the request boundary.
         let responses_backend =
-            crate::exaforge::codex_responses::ResponsesBackend::detect(&self.base_url);
+            crate::forge::codex_responses::ResponsesBackend::detect(&self.base_url);
         if self.defaults.stream_tool_calls && responses_backend.accepts_xai_extensions() {
             request_body["stream_tool_calls"] = serde_json::json!(true);
         }
@@ -1242,7 +1242,7 @@ impl SamplingClient {
                     .map(|a| a.len())
                     .unwrap_or(0),
                 has_tools = request_body.get("tools").is_some(),
-                "Personal: reshaped Responses body for ChatGPT Codex backend (Pi-compatible)"
+                "Forge: reshaped Responses body for ChatGPT Codex backend (Pi-compatible)"
             );
         }
         // Fresh per attempt so signals never leak across retries; `None`
@@ -1254,7 +1254,7 @@ impl SamplingClient {
         } else {
             None
         };
-        // Exaforge: backend policy keeps Codex requests free of x-grok-* headers.
+        // Forge: backend policy keeps Codex requests free of x-grok-* headers.
         let mut http_request = if !responses_backend.uses_grok_headers() {
             self.post(self.endpoint("responses"))
                 .header(ACCEPT, HeaderValue::from_static("text/event-stream"))
@@ -1316,7 +1316,7 @@ impl SamplingClient {
                 base_url = %self.base_url,
                 "responses API error"
             );
-            // Exaforge: let the backend policy surface Codex detail strings.
+            // Forge: let the backend policy surface Codex detail strings.
             let message = responses_backend.augment_error_message(message, bytes.as_ref());
             return Err(SamplingError::Api {
                 status,

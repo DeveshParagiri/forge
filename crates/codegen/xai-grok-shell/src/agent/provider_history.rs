@@ -1,3 +1,3 @@
-//! Compatibility exports for the Exaforge history transform.
+//! Compatibility exports for the Forge history transform.
 
-pub use crate::agent::exaforge::history::*;
+pub use crate::agent::forge::history::*;

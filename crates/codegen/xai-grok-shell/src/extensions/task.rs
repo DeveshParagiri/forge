@@ -394,7 +394,7 @@ pub async fn handle_subagent(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtRes
             tracing::info!(subagent_id = %req.subagent_id, "Cancelling subagent via ext method");
             let native = agent.cancel_subagent(&req.subagent_id);
             let outcome = SubagentCancelOutcomeDto::from(
-                crate::exaforge::external_subagents::resolve_cancel(&req.subagent_id, native),
+                crate::forge::external_subagents::resolve_cancel(&req.subagent_id, native),
             );
             respond(Ok::<_, String>(CancelSubagentResponse {
                 subagent_id: req.subagent_id,

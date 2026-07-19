@@ -15,7 +15,7 @@ use xai_grok_sampling_types::{
 };
 
 use crate::events::{SamplingChannel, SamplingErrorInfo, SamplingEvent};
-use crate::exaforge::responses_terminal_recovery::ResponsesTerminalRecovery;
+use crate::forge::responses_terminal_recovery::ResponsesTerminalRecovery;
 use crate::metrics::InferenceLatencyStats;
 use crate::types::RequestId;
 
@@ -121,7 +121,7 @@ pub fn stream_responses<'a>(
         let mut chunk_index: u64 = 0;
         let mut message_chunk_count: u64 = 0;
         let mut first_token_emitted = false;
-        // Exaforge: construct backend-agnostic terminal recovery state.
+        // Forge: construct backend-agnostic terminal recovery state.
         let mut terminal_recovery = ResponsesTerminalRecovery::default();
         let mut reasoning_acc = String::new();
         let mut last_content_chunk_at = Instant::now();
@@ -197,7 +197,7 @@ pub fn stream_responses<'a>(
                         chunk_timestamps.push(Instant::now());
                         chunk_index += 1;
                         message_chunk_count += 1;
-                        // Exaforge: observe visible text for terminal recovery.
+                        // Forge: observe visible text for terminal recovery.
                         terminal_recovery.observe_text_delta(&delta);
                         yield SamplingEvent::ChannelToken {
                             request_id: request_id.clone(),
@@ -254,7 +254,7 @@ pub fn stream_responses<'a>(
                         let tool_index = next_tool_index;
                         next_tool_index += 1;
                         output_to_tool_index.insert(added_event.output_index, tool_index);
-                        // Exaforge: observe streamed calls for terminal recovery.
+                        // Forge: observe streamed calls for terminal recovery.
                         terminal_recovery
                             .observe_function_call_added(added_event.output_index, &fc);
 
@@ -276,7 +276,7 @@ pub fn stream_responses<'a>(
                         && let Some(&tool_index) =
                             output_to_tool_index.get(&args_event.output_index)
                     {
-                        // Exaforge: observe argument deltas for terminal recovery.
+                        // Forge: observe argument deltas for terminal recovery.
                         terminal_recovery.observe_function_call_arguments_delta(
                             args_event.output_index,
                             &delta,
@@ -292,7 +292,7 @@ pub fn stream_responses<'a>(
                 }
 
                 ResponseStreamEvent::ResponseFunctionCallArgumentsDone(args_event) => {
-                    // Exaforge: observe final arguments for terminal recovery.
+                    // Forge: observe final arguments for terminal recovery.
                     terminal_recovery.observe_function_call_arguments_done(
                         args_event.output_index,
                         args_event.name,
@@ -371,7 +371,7 @@ pub fn stream_responses<'a>(
                 ResponseStreamEvent::ResponseOutputItemDone(done_event) => {
                     match &done_event.item {
                         rs::OutputItem::FunctionCall(fc) => {
-                            // Exaforge: observe completed calls for terminal recovery.
+                            // Forge: observe completed calls for terminal recovery.
                             terminal_recovery
                                 .observe_function_call_done(done_event.output_index, fc);
                         }
@@ -490,7 +490,7 @@ pub fn stream_responses<'a>(
         // Splice policy lives in `inject_streaming_reasoning_fallback`.
         let mut items = xai_grok_sampling_types::response_to_conversation_items(response);
         xai_grok_sampling_types::inject_streaming_reasoning_fallback(&mut items, reasoning_acc);
-        // Exaforge: apply backend-agnostic streamed terminal recovery.
+        // Forge: apply backend-agnostic streamed terminal recovery.
         terminal_recovery.apply(&mut items);
 
         let has_tool_calls = items.iter().any(|i| match i {

@@ -278,8 +278,8 @@ impl SessionActor {
         let use_bearer_resolver = gate.active();
         self.log_auth_gate_unknown("reconstruct_full_config", gate, &cfg.base_url);
         let auth_scheme = model_facts.auth_scheme;
-        // Exaforge: feature state is interpreted by its additive policy module.
-        let fast_mode = crate::agent::exaforge::fast_mode::apply_to_sampler_config(&cfg);
+        // Forge: feature state is interpreted by its additive policy module.
+        let fast_mode = crate::agent::forge::fast_mode::apply_to_sampler_config(&cfg);
         let mut extra_headers = cfg.extra_headers;
         crate::agent::config::inject_url_derived_headers(
             &mut extra_headers,
@@ -316,8 +316,8 @@ impl SessionActor {
             .and_then(|am| am.current_or_expired())
             .filter(|auth| auth.is_xai_auth())
             .map(|auth| auth.user_id);
-        // Exaforge: apply the provider request profile at the sampler boundary.
-        let provider_profile = crate::agent::exaforge::profile::turn_profile(
+        // Forge: apply the provider request profile at the sampler boundary.
+        let provider_profile = crate::agent::forge::profile::turn_profile(
             &cfg.base_url,
             &cfg.model,
             creds.api_key,

@@ -138,9 +138,9 @@ pub fn set_show_timeline(enabled: bool) {
 
 // -- Shortcuts bar -------------------------------------------------------------
 
-// Exaforge: preserve the appearance-cache API while shortcut state and package
+// Forge: preserve the appearance-cache API while shortcut state and package
 // default resolution live in the dedicated extension module.
-pub use crate::exaforge::shortcuts::{load_show_shortcuts_bar, set_show_shortcuts_bar};
+pub use crate::forge::shortcuts::{load_show_shortcuts_bar, set_show_shortcuts_bar};
 
 // -- Page-flip on send ---------------------------------------------------------
 
@@ -580,8 +580,8 @@ pub fn prime(ui: &UiConfig) {
     set(ui.compact_mode);
     set_timestamps(ui.show_timestamps.unwrap_or(TIMESTAMPS_DEFAULT));
     set_show_timeline(ui.show_timeline_enabled());
-    // Exaforge: keep package-aware shortcut priming behind its policy module.
-    crate::exaforge::shortcuts::prime(ui);
+    // Forge: keep package-aware shortcut priming behind its policy module.
+    crate::forge::shortcuts::prime(ui);
     set_page_flip_on_send(ui.page_flip_on_send_enabled());
     set_simple_mode(ui.simple_mode.unwrap_or(SIMPLE_MODE_DEFAULT));
     set_keep_text_selection(text_selection_from_ui(ui));
@@ -694,9 +694,9 @@ mod tests {
         assert_eq!(COMPACT_DEFAULT, ui.compact_mode);
         assert_eq!(TIMESTAMPS_DEFAULT, ui.show_timestamps.unwrap_or(true));
         assert_eq!(TIMELINE_DEFAULT, ui.show_timeline_enabled());
-        // Exaforge: shortcut cache default is owned beside its package policy.
+        // Forge: shortcut cache default is owned beside its package policy.
         assert_eq!(
-            crate::exaforge::shortcuts::shortcuts_bar_default(),
+            crate::forge::shortcuts::shortcuts_bar_default(),
             ui.show_shortcuts_bar_enabled()
         );
         assert_eq!(PAGE_FLIP_ON_SEND_DEFAULT, ui.page_flip_on_send_enabled());

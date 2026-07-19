@@ -3936,9 +3936,9 @@ impl AppView {
                         } else {
                             self.tip.as_deref()
                         };
-                        // Exaforge: same compact footer label as in-session prompt
+                        // Forge: same compact footer label as in-session prompt
                         // (model only; provider stays in /model pickers).
-                        let model_name_base = crate::exaforge::model_label::primary_model_label(
+                        let model_name_base = crate::forge::model_label::primary_model_label(
                             self.models.current_model_name().unwrap_or_default(),
                             self.models.fast_mode,
                         );

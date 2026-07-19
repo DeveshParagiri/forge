@@ -1864,8 +1864,8 @@ pub fn resolve_model_catalog(
         }
     }
 
-    // Exaforge: refine the stock allowlist with provider catalog policy.
-    crate::agent::exaforge::catalog::apply_policy(&cfg.catalog, &mut catalog);
+    // Forge: refine the stock allowlist with provider catalog policy.
+    crate::agent::forge::catalog::apply_policy(&cfg.catalog, &mut catalog);
 
     if let Ok(Some(hidden)) = ModelGlobSet::compile(cfg.models.hidden_models.as_ref()) {
         for (key, entry) in catalog.iter_mut() {

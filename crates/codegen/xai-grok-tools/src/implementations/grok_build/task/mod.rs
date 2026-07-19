@@ -305,7 +305,7 @@ impl xai_tool_runtime::Tool for TaskTool {
             runtime_overrides: SubagentRuntimeOverrides {
                 model,
                 model_override_provenance: ModelOverrideProvenance::Tool,
-                // Exaforge: expose the coordinator's existing per-task effort override.
+                // Forge: expose the coordinator's existing per-task effort override.
                 reasoning_effort: input
                     .reasoning_effort
                     .map(|effort| effort.as_str().to_owned()),

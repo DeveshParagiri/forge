@@ -1067,7 +1067,7 @@ pub(in crate::app::dispatch) fn handle_switch_model_complete(
                 agent.session.models.set_current(model_id.clone(), effort);
                 if let Some(enabled) = fast_mode {
                     let _ =
-                        crate::exaforge::fast_mode::set_enabled(&mut agent.session.models, enabled);
+                        crate::forge::fast_mode::set_enabled(&mut agent.session.models, enabled);
                 }
                 let resolved_effort = agent.session.models.reasoning_effort;
                 let same_model = prev_model.as_ref() == Some(&model_id);
@@ -1077,10 +1077,9 @@ pub(in crate::app::dispatch) fn handle_switch_model_complete(
                         "Fast mode {}",
                         if enabled { "enabled" } else { "disabled" }
                     )));
-                // Exaforge: effort-only lifecycle suppression (no scrollback spam).
-                } else if crate::exaforge::effort::should_log_model_switch_line(
-                    same_model, unchanged,
-                ) {
+                // Forge: effort-only lifecycle suppression (no scrollback spam).
+                } else if crate::forge::effort::should_log_model_switch_line(same_model, unchanged)
+                {
                     let msg = if let Some(eff) = resolved_effort {
                         format!("Switched to {display_name} ({eff} effort)")
                     } else {

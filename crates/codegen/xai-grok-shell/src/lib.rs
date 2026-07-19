@@ -22,8 +22,8 @@ pub mod config;
 pub use xai_grok_shell_base::cpu_profile;
 pub use xai_grok_shell_base::env;
 pub mod extensions;
-// Exaforge: external headless subagent adapters live behind the stock task tool.
-pub(crate) mod exaforge;
+// Forge: external headless subagent adapters live behind the stock task tool.
+pub(crate) mod forge;
 pub use xai_grok_workspace::foreign_sessions;
 pub mod heap_profile;
 pub use xai_grok_http as http;

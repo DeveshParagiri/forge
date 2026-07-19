@@ -32,8 +32,8 @@ use ratatui::widgets::Widget;
 use std::collections::HashSet;
 use std::time::Instant;
 
-// Exaforge: overlay geometry for hidden-shortcuts themes.
-use crate::exaforge::layout::overlay_area_above_shortcuts;
+// Forge: overlay geometry for hidden-shortcuts themes.
+use crate::forge::layout::overlay_area_above_shortcuts;
 
 impl AgentView {
     pub(crate) fn update_scrollback_selection_state(
@@ -738,9 +738,9 @@ impl AgentView {
         let appearance = self.scrollback.appearance().clone();
         let layout_cfg = &appearance.scrollback.layout;
         let scrollbar_cfg = &appearance.scrollback.scrollbar;
-        // Exaforge: keep provider-qualified names in pickers, but omit the
+        // Forge: keep provider-qualified names in pickers, but omit the
         // provider from the compact prompt footer.
-        let model_id = crate::exaforge::model_label::primary_model_label(
+        let model_id = crate::forge::model_label::primary_model_label(
             self.session
                 .models
                 .current_model_name()
@@ -1687,7 +1687,6 @@ impl AgentView {
             }
         }
         if self.block_viewer.is_none() && !search_active {
-            use crate::appearance::FollowIndicator;
             let gap_y = layout.scrollback.y + layout.scrollback.height;
             let gap_x = layout.scrollback.x;
             let gap_w = layout.scrollback.width;
@@ -1713,7 +1712,7 @@ impl AgentView {
                 }
             }
             let show_indicator = appearance.scrollback.scroll.follow_indicator
-                != FollowIndicator::None
+                != crate::appearance::FollowIndicator::None
                 && !self.scrollback.is_follow_mode()
                 && self.scrollback.has_content_below()
                 && content_line_y.is_none();
@@ -2208,7 +2207,7 @@ impl AgentView {
         // follow the user after switching to another provider's model.
         let active_provider = self.session.models.current_provider_id();
         let warning = self.credit_balance.as_ref().and_then(|bal| {
-            crate::views::credit_bar::usage_warning_for_provider(
+            crate::forge::provider_usage::warning(
                 active_provider,
                 bal,
                 self.auto_topup.as_ref(),
@@ -2403,7 +2402,7 @@ impl AgentView {
                     },
                     Style::default().bg(row_bg),
                 );
-                // Exaforge: render provider key entry as one plain input field.
+                // Forge: render provider key entry as one plain input field.
                 let direct_input = self
                     .question_view
                     .as_ref()
@@ -2416,7 +2415,7 @@ impl AgentView {
                     .unwrap_or(6) as u16;
                 let prompt_ind = Style::default().fg(theme.accent_user).bg(row_bg);
                 let (text_x, text_w, leading_w) = if direct_input {
-                    let prefix = crate::exaforge::provider_login::direct_input_prefix();
+                    let prefix = crate::forge::provider_login::direct_input_prefix();
                     buf.set_span_safe(
                         content_x,
                         row_y,
@@ -2585,8 +2584,8 @@ impl AgentView {
                         .bg(footer_bg)
                         .add_modifier(Modifier::BOLD);
                     let mut left_spans: Vec<Span<'_>> = Vec::new();
-                    // Exaforge: provider question footer policy.
-                    use crate::exaforge::provider_login::{FooterLeftPolicy, footer_left_policy};
+                    // Forge: provider question footer policy.
+                    use crate::forge::provider_login::{FooterLeftPolicy, footer_left_policy};
                     let footer_policy = footer_left_policy(qv.local_kind.as_ref());
                     match footer_policy {
                         FooterLeftPolicy::DirectInput => {
@@ -2621,7 +2620,7 @@ impl AgentView {
                     let avail_w = footer_w.saturating_sub(3);
                     buf.set_line_safe(content_x, footer_y, &left_line, avail_w);
                     let is_last = qv.active_tab >= qv.questions.len().saturating_sub(1);
-                    let enter_label = crate::exaforge::provider_login::enter_label(
+                    let enter_label = crate::forge::provider_login::enter_label(
                         matches!(footer_policy, FooterLeftPolicy::DirectInput),
                         qv.is_on_freeform_row(),
                         is_last,

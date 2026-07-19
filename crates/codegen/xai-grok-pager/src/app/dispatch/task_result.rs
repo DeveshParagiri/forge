@@ -254,7 +254,7 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
         TaskResult::ProviderUsageFetched { agent_id, snapshot } => {
             if let Some(agent) = app.agents.get_mut(&agent_id) {
                 agent.scrollback.push_block(RenderBlock::system(
-                    crate::views::provider_usage::format_provider_usage(&snapshot),
+                    crate::forge::provider_usage::format(&snapshot),
                 ));
             }
             vec![]

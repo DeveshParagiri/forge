@@ -119,7 +119,7 @@ Must work **without** full context loss:
 
 | Area | Status | Notes |
 |------|--------|--------|
-| Exaforge theme, Shift+Tab = effort | Done | Personal commits |
+| Forge theme, Shift+Tab = effort | Done | Personal commits |
 | `[provider.codex]` + Sol/Terra/Luna in `~/.grok/config.toml` | Done | `auth = "codex"` |
 | `[provider.openrouter]` + a few models | Done | Needs include/exclude + fresher list |
 | Read `~/.codex/auth.json` for token + account id | Done | `provider_auth.rs` |
@@ -234,7 +234,7 @@ Depth is for prioritization; not all are required for Dev’s MVP.
 | `/fork` `/clone` | New session file | Has fork worktree | P2 |
 | Extensions / packages | TS packages | Plugins/skills | P2 |
 | Compaction | Manual + auto | Yes (stock) | — |
-| Themes | Hot-reload | Themes (personal Exaforge theme) | — |
+| Themes | Hot-reload | Themes (personal Forge theme) | — |
 | Transport SSE/WS for Codex | auto WS+SSE | SSE only | P2 (WS optional) |
 
 ---

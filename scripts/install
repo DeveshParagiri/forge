@@ -1,8 +1,8 @@
 #!/bin/sh
-# Bootstrap Exaforge from the default branch, then build and install it.
+# Bootstrap Forge from the default branch, then build and install it.
 set -eu
 
-REPO_URL="${GROK_REPO_URL:-https://github.com/DeveshParagiri/grok-build.git}"
+REPO_URL="${GROK_REPO_URL:-https://github.com/DeveshParagiri/forge.git}"
 BRANCH="${GROK_BRANCH:-${GROK_DEV_BRANCH:-main}}"
 DEFAULT_SOURCE_DIR="$HOME/.local/share/grok/source"
 UPDATER="${GROK_UPDATER:-$HOME/bin/grok-update-from-source}"
@@ -42,7 +42,7 @@ if [ -e "$SOURCE_DIR" ] && [ ! -d "$SOURCE_DIR/.git" ]; then
 fi
 
 if [ ! -d "$SOURCE_DIR/.git" ]; then
-  echo "==> cloning Exaforge ($BRANCH) into $SOURCE_DIR"
+  echo "==> cloning Forge ($BRANCH) into $SOURCE_DIR"
   mkdir -p "$(dirname "$SOURCE_DIR")"
   git clone --branch "$BRANCH" --single-branch "$REPO_URL" "$SOURCE_DIR"
 else

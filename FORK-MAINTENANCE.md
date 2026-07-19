@@ -1,7 +1,7 @@
-# Exaforge fork maintenance notes
+# Forge fork maintenance notes
 
 This repository tracks [xai-org/grok-build](https://github.com/xai-org/grok-build).
-The published, installable Exaforge branch is `main`; upstream is tracked through
+The published, installable Forge branch is `main`; upstream is tracked through
 the `upstream/main` remote-tracking branch.
 
 ## Installed layout
@@ -21,27 +21,27 @@ canonical executable.
 
 ## Branches and remotes
 
-- `main`: published Exaforge source and the repository default branch.
+- `main`: published Forge source and the repository default branch.
 - `refactor/*`: temporary local worktrees only.
 - `upstream/main`: upstream source from `https://github.com/xai-org/grok-build.git`.
-- `origin`: Exaforge fork.
+- `origin`: Forge fork.
 
-Do not force-push published Exaforge history. Rebase `main` onto `upstream/main`
+Do not force-push published Forge history. Rebase `main` onto `upstream/main`
 only when intentionally updating the fork; the end-user updater never rebases.
 
 ## Extension architecture
 
 Bulk fork logic belongs in additive, crate-local modules:
 
-| Crate | Exaforge modules | Responsibility |
+| Crate | Forge modules | Responsibility |
 |------|-------------------|----------------|
-| `xai-grok-sampler` | `src/exaforge/` | Codex Responses request policy, unknown-event compatibility, streamed terminal recovery |
-| `xai-grok-shell` | `src/agent/exaforge/` | Provider identity, configuration, credentials, status, catalog policy, profiles, and portable history |
-| `xai-grok-pager` | `src/exaforge/` | Provider login, effort controls, layout, welcome branding, and focused UI tests |
-| `xai-grok-pager-render` | `src/exaforge/` | Claude palette/package policy and shortcut-footer state |
+| `xai-grok-sampler` | `src/forge/` | Codex Responses request policy, unknown-event compatibility, streamed terminal recovery |
+| `xai-grok-shell` | `src/agent/forge/` | Provider identity, configuration, credentials, status, catalog policy, profiles, and portable history |
+| `xai-grok-pager` | `src/forge/` | Provider login, effort controls, layout, welcome branding, and focused UI tests |
+| `xai-grok-pager-render` | `src/forge/` | Claude palette/package policy and shortcut-footer state |
 
-Use `// Exaforge:` or `/// Exaforge:` for residual hooks in upstream-owned
-files. Prefer a small call into an Exaforge module over inline fork logic.
+Use `// Forge:` or `/// Forge:` for residual hooks in upstream-owned
+files. Prefer a small call into an Forge module over inline fork logic.
 
 Some coupling should remain inline because ordering or exhaustive matching is
 part of the behavior:
@@ -57,7 +57,7 @@ part of the behavior:
 
 - `xai-grok-sampler/src/client.rs`: select and apply Responses backend policy.
 - `xai-grok-sampler/src/stream/responses.rs`: observe and apply terminal recovery.
-- `xai-grok-sampler/tests/exaforge_codex_responses.rs`: cross-module Codex integration coverage.
+- `xai-grok-sampler/tests/forge_codex_responses.rs`: cross-module Codex integration coverage.
 
 ### Shell
 
@@ -67,7 +67,7 @@ part of the behavior:
 - `session/acp_session_impl/sampler_turn.rs`: apply the provider request profile.
 
 Legacy `agent/provider_auth.rs` and `agent/provider_history.rs` remain thin
-compatibility facades; implementation belongs in `agent/exaforge/`.
+compatibility facades; implementation belongs in `agent/forge/`.
 
 ### Pager
 
@@ -76,15 +76,15 @@ compatibility facades; implementation belongs in `agent/exaforge/`.
 - `app/agent_view/prompt.rs`: ordering-sensitive `Esc` cancellation.
 - `views/welcome/` and dashboard files: small branding/layout hooks.
 
-Provider login implementation: `src/exaforge/provider_login/`.
+Provider login implementation: `src/forge/provider_login/`.
 
 ### Pager render
 
 - `appearance/cache.rs`: public shortcut-state facade and priming hook.
-- `theme/mod.rs`: stable Exaforge registration and policy delegation.
+- `theme/mod.rs`: stable Forge registration and policy delegation.
 - `theme/cache.rs` and `syntax.rs`: cache/syntax exhaustive-match hooks.
 
-Exaforge palette implementation: `src/exaforge/exaforge_theme.rs`.
+Forge palette implementation: `src/forge/forge_theme.rs`.
 
 ## Preserved behavior
 
@@ -99,10 +99,19 @@ Exaforge palette implementation: `src/exaforge/exaforge_theme.rs`.
 - Unknown additive Responses events and liveness events are tolerated.
 - Streamed text/function calls are recovered when terminal Responses output is
   incomplete.
-- Exaforge theme Shift+Tab cycles reasoning effort; other themes retain stock
+- Forge theme Shift+Tab cycles reasoning effort; other themes retain stock
   permission-mode cycling.
 - Running-turn `Esc` cancels generation like `Ctrl+C` after overlays and
   selections receive their normal priority.
+
+## Rename compatibility
+
+The legacy `theme = "exaforge"` value remains an accepted read alias so
+existing installations upgrade without configuration breakage. The runtime
+variant, settings catalogs, display surfaces, canonical output, and new writes
+all use `Forge` or `forge`. Theme cache discriminant `6` is unchanged for
+persisted cache compatibility. No other former fork-name identifiers were
+persisted or serialized.
 
 ## Focused verification
 
@@ -111,10 +120,10 @@ Use crate-specific checks instead of full-workspace test runs:
 ```bash
 cargo fmt --all -- --check
 git diff --check
-cargo test -p xai-grok-sampler --lib exaforge::
-cargo test -p xai-grok-sampler --test exaforge_codex_responses
-cargo test -p xai-grok-shell --lib agent::exaforge
-cargo test -p xai-grok-pager --lib exaforge
+cargo test -p xai-grok-sampler --lib forge::
+cargo test -p xai-grok-sampler --test forge_codex_responses
+cargo test -p xai-grok-shell --lib agent::forge
+cargo test -p xai-grok-pager --lib forge
 cargo test -p xai-grok-pager-render
 ```
 
@@ -132,8 +141,8 @@ git rebase upstream/main
 
 When resolving conflicts:
 
-1. Preserve additive `exaforge/` modules.
-2. Reapply or adapt the small `// Exaforge:` hooks to the new upstream flow.
+1. Preserve additive `forge/` modules.
+2. Reapply or adapt the small `// Forge:` hooks to the new upstream flow.
 3. Re-check ordering-sensitive behavior rather than moving it mechanically.
 4. Run the focused checks above.
 5. Build and install:

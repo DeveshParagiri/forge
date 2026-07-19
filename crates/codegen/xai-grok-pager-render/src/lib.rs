@@ -1,6 +1,6 @@
 pub mod appearance;
 pub mod clipboard;
-mod exaforge;
+mod forge;
 pub mod gboom;
 pub mod glyphs;
 pub mod host;

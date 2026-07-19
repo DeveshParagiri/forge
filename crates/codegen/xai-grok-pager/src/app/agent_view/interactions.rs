@@ -227,7 +227,7 @@ impl AgentView {
     ///   edits freeform, h/l/[/] cycle questions, 1-9/a-f jump+toggle,
     ///   n next, s skip, Shift-X kill (only explicit way to dismiss).
     /// - **InputMode**: all keys go to the prompt widget; Esc exits input mode.
-    // Exaforge tests exercise provider-login Esc/Enter via this path.
+    // Forge tests exercise provider-login Esc/Enter via this path.
     pub(crate) fn handle_question_key(&mut self, key: &KeyEvent) -> InputOutcome {
         use crate::views::question_view::{QuestionFocus, QuestionSelection};
         let Some(ref mut qv) = self.question_view else {
@@ -236,8 +236,8 @@ impl AgentView {
         match qv.focus {
             QuestionFocus::InputMode => {
                 if key.code == KeyCode::Esc {
-                    // Exaforge: direct provider-key input cancels on Esc.
-                    if crate::exaforge::provider_login::esc_cancels_direct_input(
+                    // Forge: direct provider-key input cancels on Esc.
+                    if crate::forge::provider_login::esc_cancels_direct_input(
                         qv.local_kind.as_ref(),
                     ) {
                         return self.submit_question_answers(true);
@@ -516,13 +516,13 @@ impl AgentView {
                         }
                     }
                     KeyCode::Esc => {
-                        // ProjectSelect + Exaforge provider dialogs cancel in one press.
+                        // ProjectSelect + Forge provider dialogs cancel in one press.
                         if matches!(
                             qv.local_kind,
                             Some(
                                 crate::views::question_view::LocalQuestionKind::ProjectSelect { .. }
                             )
-                        ) || crate::exaforge::provider_login::esc_cancels_provider_dialog(
+                        ) || crate::forge::provider_login::esc_cancels_provider_dialog(
                             qv.local_kind.as_ref(),
                         ) {
                             return self.submit_question_answers(true);

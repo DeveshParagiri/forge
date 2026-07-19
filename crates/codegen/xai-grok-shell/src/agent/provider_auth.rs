@@ -1,6 +1,6 @@
-//! Compatibility exports for the Exaforge provider integration.
+//! Compatibility exports for the Forge provider integration.
 //!
-//! New shell code should use [`crate::agent::exaforge`]. This module remains
+//! New shell code should use [`crate::agent::forge`]. This module remains
 //! public because the pager crate consumes the provider login API.
 
-pub use crate::agent::exaforge::*;
+pub use crate::agent::forge::*;

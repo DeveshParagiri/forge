@@ -1300,8 +1300,8 @@ pub(crate) fn build_task_description(
         .collect();
     let mut description = xai_tool_types::build_task_description(&descriptors, &TASK_TOOL_NAMING);
     description.push_str(&task_model_guidance(model_slugs));
-    // Exaforge: describe the additive per-task reasoning override.
-    crate::exaforge::task_guidance::append(&mut description);
+    // Forge: describe the additive per-task reasoning override.
+    crate::forge::task_guidance::append(&mut description);
     description
 }
 /// Resolve the shell name for the system prompt.

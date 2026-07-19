@@ -1,12 +1,12 @@
-# Exaforge (`grok`)
+# Forge (`grok`)
 
-Exaforge extends the open-source
+Forge extends the open-source
 [Grok Build](https://github.com/xai-org/grok-build) terminal coding agent with
 multi-provider models, provider-safe session switching, and a streamlined
 interface.
 
 This is an independent fork, not an official SpaceXAI distribution. Its
-`main` branch contains the installable Exaforge source and tracks upstream
+`main` branch contains the installable Forge source and tracks upstream
 `main`.
 
 ## Features
@@ -16,14 +16,18 @@ This is an independent fork, not an official SpaceXAI distribution. Its
 | Authentication | Interactive `/login` setup for SpaceXAI, ChatGPT Codex, and OpenRouter |
 | Models | Provider-aware catalog with configurable include/exclude patterns |
 | Sessions | Safe model switching across provider families |
-| Interface | Exaforge theme, reasoning-effort controls, optional shortcut footer, and `Esc` cancellation |
-| Branding | Exaforge welcome screen and build version |
+| Interface | Forge theme, reasoning-effort controls, optional shortcut footer, and `Esc` cancellation |
+| Branding | Forge welcome screen and build version |
 
 ## Architecture
 
-Fork-specific behavior is isolated in per-crate `exaforge/` modules, with
+Fork-specific behavior is isolated in per-crate `forge/` modules, with
 small integration hooks in upstream code. See
 [`FORK-MAINTENANCE.md`](FORK-MAINTENANCE.md) for implementation and rebase notes.
+
+Existing configurations that set `theme = "exaforge"` remain supported as a
+legacy read alias. Forge canonicalizes that value to `forge`, and settings UI
+selections and subsequent writes use `theme = "forge"`.
 
 ## Install
 
@@ -33,13 +37,13 @@ on `PATH`.
 Install directly from GitHub:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/DeveshParagiri/grok-build/main/scripts/install | sh
+curl -fsSL https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install | sh
 ```
 
 Or clone first and run the same installer from the checkout:
 
 ```sh
-git clone https://github.com/DeveshParagiri/grok-build.git
+git clone https://github.com/DeveshParagiri/forge.git
 cd grok-build
 ./scripts/install
 ```
@@ -69,7 +73,7 @@ upstream remains an explicit maintainer operation.
 ## Build manually
 
 ```sh
-git clone https://github.com/DeveshParagiri/grok-build.git
+git clone https://github.com/DeveshParagiri/forge.git
 cd grok-build
 cargo build -p xai-grok-pager-bin --release
 mkdir -p ~/.grok/bin

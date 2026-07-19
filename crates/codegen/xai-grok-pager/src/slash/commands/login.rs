@@ -1,6 +1,6 @@
 //! `/login` -- configure provider authentication (Pi-style multi-provider).
 //!
-//! Exaforge: opens a provider picker (SpaceXAI / OpenAI Codex / OpenRouter).
+//! Forge: opens a provider picker (SpaceXAI / OpenAI Codex / OpenRouter).
 //! Welcome-screen "Log in" still uses [`Action::Login`] (SpaceXAI only) so
 //! upstream cold-start auth is unchanged.
 
@@ -25,7 +25,7 @@ impl SlashCommand for LoginCommand {
     fn run(&self, _ctx: &mut CommandExecCtx, args: &str) -> CommandResult {
         let arg = args.trim();
         if arg.is_empty() {
-            // Exaforge: Pi-style picker.
+            // Forge: Pi-style picker.
             return CommandResult::Action(Action::ChooseProviderLogin);
         }
         // Direct provider shortcuts keep scripts happy without the picker.

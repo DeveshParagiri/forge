@@ -19,7 +19,7 @@ use xai_grok_tools::types::compat::{
     COMPAT_CELLS, CompatConfig, CompatConfigToml, CompatRemoteKey, CompatSurface, CompatVendor,
 };
 
-pub use crate::agent::exaforge::ProviderConfig;
+pub use crate::agent::forge::ProviderConfig;
 
 /// The mode in which the agent is running.
 /// Determines behavior like relay sync enablement.
@@ -1283,13 +1283,13 @@ pub struct Config {
     /// `[model.*]` overrides from config.toml. Resolve via `resolve_model_list()`.
     #[serde(skip)]
     pub config_models: IndexMap<String, ConfigModelOverride>,
-    /// `[provider.*]` shared auth/endpoint packs (personal harness extension).
+    /// `[provider.*]` shared auth/endpoint packs (Forge extension).
     /// Models reference them with `provider = "codex"` etc.
     #[serde(skip)]
     pub providers: IndexMap<String, ProviderConfig>,
-    /// Exaforge: provider-scoped include/exclude rules under `[catalog.*]`.
+    /// Forge: provider-scoped include/exclude rules under `[catalog.*]`.
     #[serde(default)]
-    pub catalog: crate::agent::exaforge::ProviderCatalogConfig,
+    pub catalog: crate::agent::forge::ProviderCatalogConfig,
     /// Warnings from `[model.*]` parsing; surfaced by `grok inspect`.
     #[serde(skip)]
     pub model_override_warnings: Vec<super::config_model_override_parse::ModelOverrideWarning>,
@@ -1719,7 +1719,7 @@ impl Default for Config {
             auto_mode: AutoModeConfig::default(),
             config_models: IndexMap::new(),
             providers: IndexMap::new(),
-            catalog: crate::agent::exaforge::ProviderCatalogConfig::default(),
+            catalog: crate::agent::forge::ProviderCatalogConfig::default(),
             model_override_warnings: Vec::new(),
             grok_com_config: GrokComConfig::default(),
             shortcuts: None,
@@ -1820,8 +1820,8 @@ impl Config {
                 ));
             }
         }
-        // Exaforge: validate provider-scoped catalog rules at the stock config seam.
-        crate::agent::exaforge::catalog::validate_filters(&self.catalog)
+        // Forge: validate provider-scoped catalog rules at the stock config seam.
+        crate::agent::forge::catalog::validate_filters(&self.catalog)
     }
     /// Build an `AuthManager` with the configured proxy URL applied.
     pub fn create_auth_manager(&self) -> AuthManager {
@@ -1863,8 +1863,8 @@ impl Config {
             warnings: model_override_warnings,
         } = super::config_model_override_parse::parse_model_overrides(raw_config);
         super::config_model_override_parse::log_model_override_warnings(&model_override_warnings);
-        // Exaforge: parse provider packs separately from stock config deserialization.
-        let providers = crate::agent::exaforge::provider_config::parse(raw_config);
+        // Forge: parse provider packs separately from stock config deserialization.
+        let providers = crate::agent::forge::provider_config::parse(raw_config);
         let mut base = toml::Value::try_from(Self::default()).map_err(|e| e.to_string())?;
         if let toml::Value::Table(ref mut t) = base {
             t.remove("model");
@@ -3212,8 +3212,8 @@ pub fn resolve_model_list(
             }
         }
         let mut entry = model_override.apply(key, base, &cfg.endpoints);
-        // Exaforge: apply the optional provider pack after model-local overrides.
-        crate::agent::exaforge::catalog::apply_provider_override(
+        // Forge: apply the optional provider pack after model-local overrides.
+        crate::agent::forge::catalog::apply_provider_override(
             &cfg.providers,
             model_override,
             key,
@@ -4337,20 +4337,20 @@ pub struct ResolvedCredentials {
     pub auth_scheme: AuthScheme,
 }
 /// First usable BYOK credential: a non-empty API key, then an environment
-/// value, then an Exaforge provider credential file fallback.
+/// value, then an Forge provider credential file fallback.
 pub(crate) fn first_own_credential(
     api_key: Option<&str>,
     env_key: Option<&EnvKeys>,
 ) -> Option<String> {
-    // Exaforge: provider credential fallback at the stock model credential hook.
-    crate::agent::exaforge::credentials::resolve_own(api_key, env_key)
+    // Forge: provider credential fallback at the stock model credential hook.
+    crate::agent::forge::credentials::resolve_own(api_key, env_key)
 }
 
 /// Resolve credentials for a model.
 /// Priority: model api_key/env_key > session token > XAI_API_KEY.
 pub fn resolve_credentials(model: &ModelEntry, session_key: Option<&str>) -> ResolvedCredentials {
-    // Exaforge: preserve broad third-party session-token exclusion at this hook.
-    crate::agent::exaforge::credentials::resolve(model, session_key)
+    // Forge: preserve broad third-party session-token exclusion at this hook.
+    crate::agent::forge::credentials::resolve(model, session_key)
 }
 /// `disable_api_key_auth` at the credential seam: swap a first-party xAI API
 /// key for the IdP session (absent => request fails => forces login). BYOK
@@ -4699,8 +4699,8 @@ pub fn inject_url_derived_headers(
             .entry(crate::http::CLIENT_MODE_HEADER.to_string())
             .or_insert_with(|| crate::http::process_client_mode().to_string());
     }
-    // Exaforge: provider request headers at the stock URL-derived profile hook.
-    crate::agent::exaforge::profile::apply_headers(headers, base_url);
+    // Forge: provider request headers at the stock URL-derived profile hook.
+    crate::agent::forge::profile::apply_headers(headers, base_url);
     let _ = (alpha_test_key, base_url);
 }
 pub fn resolve_model_to_sampling_config(
@@ -4827,12 +4827,10 @@ pub fn to_acp_model_info(
         .map(|(key, model)| {
             let info = model.info();
             let model_id = acp::ModelId::new(Arc::from(key.clone()));
-            // Exaforge: keep provider identity visible without verbose suffixes.
+            // Forge: keep provider identity visible without verbose suffixes.
             let configured_name = info.name.clone().unwrap_or_else(|| info.model.clone());
-            let display_name = crate::agent::exaforge::provider_id_for_base(&info.base_url)
-                .map(|provider| {
-                    crate::agent::exaforge::display_model_name(provider, &configured_name)
-                })
+            let display_name = crate::agent::forge::provider_id_for_base(&info.base_url)
+                .map(|provider| crate::agent::forge::display_model_name(provider, &configured_name))
                 .unwrap_or(configured_name);
             let total_context_tokens = info.context_window.get();
             let meta = {
@@ -4845,9 +4843,8 @@ pub fn to_acp_model_info(
                     "agentType".to_string(),
                     serde_json::Value::String(info.agent_type.clone()),
                 );
-                // Exaforge: provider/auth metadata powers the existing picker.
-                if let Some(provider) = crate::agent::exaforge::provider_id_for_base(&info.base_url)
-                {
+                // Forge: provider/auth metadata powers the existing picker.
+                if let Some(provider) = crate::agent::forge::provider_id_for_base(&info.base_url) {
                     map.insert(
                         "provider".to_string(),
                         serde_json::Value::String(provider.display_name().to_string()),
@@ -4859,12 +4856,12 @@ pub fn to_acp_model_info(
                     map.insert(
                         "authStatus".to_string(),
                         serde_json::Value::String(
-                            crate::agent::exaforge::picker_auth_status(provider).to_string(),
+                            crate::agent::forge::picker_auth_status(provider).to_string(),
                         ),
                     );
                 }
-                // Exaforge: advertise optional feature capabilities through a narrow hook.
-                crate::agent::exaforge::fast_mode::advertise(info, &mut map);
+                // Forge: advertise optional feature capabilities through a narrow hook.
+                crate::agent::forge::fast_mode::advertise(info, &mut map);
                 if info.supports_reasoning_effort {
                     map.insert(
                         "supportsReasoningEffort".to_string(),
@@ -11389,7 +11386,7 @@ mod personal_codex_live_tests {
     use super::*;
     #[test]
     fn live_codex_model_is_byok_when_token_present() {
-        if crate::agent::exaforge::read_codex_access_token().is_none() {
+        if crate::agent::forge::read_codex_access_token().is_none() {
             eprintln!("skip: no codex token");
             return;
         }

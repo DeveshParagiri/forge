@@ -378,11 +378,11 @@ impl WelcomeLayout {
 
 /// Controls what the version badge renders.
 pub(super) enum VersionBadgeMode<'a> {
-    /// Full badge: team | tier | api_key | **Exaforge** VERSION+channel (right-aligned).
+    /// Full badge: team | tier | api_key | **Forge** VERSION+channel (right-aligned).
     Full { subscription_tier: Option<&'a str> },
     /// Hero footer: team | api_key | channel label (right-aligned, gray).
     HeroFooter,
-    /// Hero inline: **Exaforge** VERSION (left-aligned).
+    /// Hero inline: **Forge** VERSION (left-aligned).
     HeroInline,
 }
 
@@ -438,8 +438,8 @@ pub(super) fn render_version_badge(
     match &mode {
         VersionBadgeMode::Full { .. } => {
             spans.push(Span::styled(
-                // Exaforge: product brand.
-                format!("{}  ", crate::exaforge::welcome::PRODUCT_NAME),
+                // Forge: product brand.
+                format!("{}  ", crate::forge::welcome::PRODUCT_NAME),
                 Style::default()
                     .fg(theme.text_primary)
                     .add_modifier(Modifier::BOLD),
@@ -462,8 +462,8 @@ pub(super) fn render_version_badge(
         }
         VersionBadgeMode::HeroInline => {
             spans.push(Span::styled(
-                // Exaforge: product brand.
-                format!("{}  ", crate::exaforge::welcome::PRODUCT_NAME),
+                // Forge: product brand.
+                format!("{}  ", crate::forge::welcome::PRODUCT_NAME),
                 Style::default()
                     .fg(theme.text_primary)
                     .add_modifier(Modifier::BOLD),
@@ -762,7 +762,7 @@ pub fn render_welcome(
                 content_area,
                 buf,
                 Some((
-                    "Exaforge is not yet available for this account.",
+                    "Forge is not yet available for this account.",
                     theme.gray_bright,
                 )),
                 &menu,
@@ -949,7 +949,7 @@ fn render_welcome_trust(
         // Two lines so the warning never clips at narrow / compact widths
         // (a single ~78-char line would truncate "...posing security risks").
         Line::from(Span::styled(
-            "Exaforge may run or modify contents in this directory,",
+            "Forge may run or modify contents in this directory,",
             Style::default().fg(theme.gray),
         ))
         .alignment(Alignment::Center),
@@ -1680,9 +1680,9 @@ fn render_welcome_done(
     // the logo/centering space for its list. Plain compact mode keeps the
     // normal welcome layout.
     let welcome_compact = show_picker;
-    // Exaforge: welcome announcement/changelog policy.
-    let announcement = crate::exaforge::welcome::announcement(p.announcement);
-    let changelog_bullets = crate::exaforge::welcome::changelog_bullets(p.changelog_bullets);
+    // Forge: welcome announcement/changelog policy.
+    let announcement = crate::forge::welcome::announcement(p.announcement);
+    let changelog_bullets = crate::forge::welcome::changelog_bullets(p.changelog_bullets);
     let upgrade_cta = announcement.and(p.upgrade_cta);
 
     let cta = p
@@ -2102,7 +2102,7 @@ fn render_welcome_done(
         }
 
         let warning = p.credit_balance.and_then(|bal| {
-            crate::views::credit_bar::usage_warning_for_provider(
+            crate::forge::provider_usage::warning(
                 p.active_provider,
                 bal,
                 p.auto_topup,
@@ -3812,7 +3812,7 @@ mod tests {
     }
 
     #[test]
-    fn personal_welcome_uses_exaforge_and_suppresses_remote_announcement() {
+    fn personal_welcome_uses_forge_and_suppresses_remote_announcement() {
         let auth = AuthState::Done;
         let trust = TrustState::Done;
         let announcement = xai_grok_announcements::RemoteAnnouncement {
@@ -3824,10 +3824,7 @@ mod tests {
         params.announcement = Some(&announcement);
 
         let text = render_done_text(&params);
-        assert!(
-            text.contains("Exaforge"),
-            "missing personal brand: {text:?}"
-        );
+        assert!(text.contains("Forge"), "missing personal brand: {text:?}");
         assert!(
             text.contains(xai_grok_version::VERSION),
             "missing build version: {text:?}",

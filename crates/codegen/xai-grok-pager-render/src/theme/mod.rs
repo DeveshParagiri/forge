@@ -41,12 +41,12 @@ pub enum ThemeKind {
     /// only the resolved concrete kind lives in the cache.
     /// Excluded from [`ALL`] and [`available()`].
     Auto = 4,
-    // Exaforge: stable theme registration; keep discriminant 6 for cache compatibility.
-    /// Exaforge UI package (personal harness extension):
+    // Forge: stable theme registration; keep discriminant 6 for cache compatibility.
+    /// Forge UI package (fork extension):
     /// dark chatbox chrome + package behaviors
     /// ([`Self::package_show_shortcuts_bar_default`],
     /// [`Self::package_shift_tab_cycles_effort`]).
-    Exaforge = 6,
+    Forge = 6,
 }
 
 impl ThemeKind {
@@ -57,7 +57,7 @@ impl ThemeKind {
         ThemeKind::TokyoNight,
         ThemeKind::RosePineMoon,
         ThemeKind::OscuraMidnight,
-        ThemeKind::Exaforge,
+        ThemeKind::Forge,
     ];
 
     /// Theme kinds available on the current terminal.
@@ -68,11 +68,8 @@ impl ThemeKind {
         // Two possible results — pick the right const slice based on
         // the detected color level. No heap allocation needed.
         const ALL: &[ThemeKind] = ThemeKind::ALL;
-        const NO_TRUECOLOR: &[ThemeKind] = &[
-            ThemeKind::GrokNight,
-            ThemeKind::GrokDay,
-            ThemeKind::Exaforge,
-        ];
+        const NO_TRUECOLOR: &[ThemeKind] =
+            &[ThemeKind::GrokNight, ThemeKind::GrokDay, ThemeKind::Forge];
 
         if color_support::detect().has_truecolor() {
             ALL
@@ -89,7 +86,7 @@ impl ThemeKind {
             Self::GrokDay => "grokday",
             Self::RosePineMoon => "rosepine-moon",
             Self::OscuraMidnight => "oscura-midnight",
-            Self::Exaforge => "exaforge",
+            Self::Forge => "forge",
             Self::Auto => "auto",
         }
     }
@@ -106,7 +103,7 @@ impl ThemeKind {
             Self::GrokDay => false,
             Self::RosePineMoon => true,
             Self::OscuraMidnight => true,
-            Self::Exaforge => false,
+            Self::Forge => false,
             // Auto is resolved to a concrete theme before rendering.
             Self::Auto => false,
         }
@@ -125,7 +122,9 @@ impl ThemeKind {
                 Some(Self::RosePineMoon)
             }
             "oscura" | "oscura-midnight" => Some(Self::OscuraMidnight),
-            "exaforge" | "claude" | "claude-code" | "claudecode" => Some(Self::Exaforge),
+            // `exaforge` is a read-only compatibility alias for existing config.
+            // `display_name()` and `canonical_name()` always emit `forge`.
+            "forge" | "exaforge" | "claude" | "claude-code" | "claudecode" => Some(Self::Forge),
             _ => None,
         }
     }
@@ -140,15 +139,15 @@ impl ThemeKind {
     /// `None` → global client default (show bar).
     #[must_use]
     pub fn package_show_shortcuts_bar_default(self) -> Option<bool> {
-        // Exaforge: keep the stable theme API while package policy lives apart.
-        crate::exaforge::theme_policy::package_show_shortcuts_bar_default(self)
+        // Forge: keep the stable theme API while package policy lives apart.
+        crate::forge::theme_policy::package_show_shortcuts_bar_default(self)
     }
 
     /// When true, Shift+Tab cycles reasoning effort instead of permission mode.
     #[must_use]
     pub fn package_shift_tab_cycles_effort(self) -> bool {
-        // Exaforge: keep the stable theme API while package policy lives apart.
-        crate::exaforge::theme_policy::package_shift_tab_cycles_effort(self)
+        // Forge: keep the stable theme API while package policy lives apart.
+        crate::forge::theme_policy::package_shift_tab_cycles_effort(self)
     }
 }
 
@@ -176,7 +175,7 @@ pub fn display_name_for_canonical(value: &str) -> &str {
         "grokday" => "Grok Day",
         "tokyonight" => "Tokyo Night",
         "rosepine-moon" => "Rose Pine Moon",
-        "exaforge" | "claude" => "Exaforge",
+        "forge" | "exaforge" | "claude" => "Forge",
         other => other,
     }
 }
@@ -305,9 +304,9 @@ impl Theme {
             ThemeKind::GrokDay => Self::grokday(),
             ThemeKind::RosePineMoon => Self::rosepine_moon(),
             ThemeKind::OscuraMidnight => Self::oscura_midnight(),
-            // Exaforge: registration remains coupled to the exhaustive theme
+            // Forge: registration remains coupled to the exhaustive theme
             // switch while its palette implementation lives separately.
-            ThemeKind::Exaforge => Self::exaforge(),
+            ThemeKind::Forge => Self::forge(),
             // Auto is resolved to a concrete theme before being stored;
             // if reached, fall back to GrokNight.
             ThemeKind::Auto => Self::groknight(),
@@ -701,6 +700,14 @@ mod tests {
     }
 
     #[test]
+    fn legacy_exaforge_theme_alias_canonicalizes_to_forge() {
+        assert_eq!(ThemeKind::from_name("exaforge"), Some(ThemeKind::Forge));
+        assert_eq!(ThemeKind::from_name("EXAFORGE"), Some(ThemeKind::Forge));
+        assert_eq!(canonical_name("exaforge"), Some("forge"));
+        assert_eq!(display_name_for_canonical("exaforge"), "Forge");
+    }
+
+    #[test]
     fn display_name_auto() {
         assert_eq!(ThemeKind::Auto.display_name(), "auto");
     }
@@ -717,13 +724,13 @@ mod tests {
         assert!(!ThemeKind::TokyoNight.is_auto());
         assert!(!ThemeKind::RosePineMoon.is_auto());
         assert!(!ThemeKind::OscuraMidnight.is_auto());
-        assert!(!ThemeKind::Exaforge.is_auto());
+        assert!(!ThemeKind::Forge.is_auto());
     }
 
     #[test]
-    fn exaforge_package_hides_shortcuts_bar_by_default() {
+    fn forge_package_hides_shortcuts_bar_by_default() {
         assert_eq!(
-            ThemeKind::Exaforge.package_show_shortcuts_bar_default(),
+            ThemeKind::Forge.package_show_shortcuts_bar_default(),
             Some(false),
         );
         assert_eq!(
@@ -733,8 +740,8 @@ mod tests {
     }
 
     #[test]
-    fn exaforge_discriminant_stays_stable() {
-        assert_eq!(ThemeKind::Exaforge as u8, 6);
+    fn forge_discriminant_stays_stable() {
+        assert_eq!(ThemeKind::Forge as u8, 6);
     }
 
     #[test]
@@ -754,7 +761,7 @@ mod tests {
         assert!(Theme::tokyonight().is_dark());
         assert!(Theme::rosepine_moon().is_dark());
         assert!(Theme::oscura_midnight().is_dark());
-        assert!(Theme::exaforge().is_dark());
+        assert!(Theme::forge().is_dark());
         assert!(!Theme::grokday().is_dark());
     }
 
@@ -1037,7 +1044,7 @@ mod tests {
                 ThemeKind::TokyoNight => Theme::tokyonight(),
                 ThemeKind::RosePineMoon => Theme::rosepine_moon(),
                 ThemeKind::OscuraMidnight => Theme::oscura_midnight(),
-                ThemeKind::Exaforge => Theme::exaforge(),
+                ThemeKind::Forge => Theme::forge(),
                 ThemeKind::Auto => unreachable!("ALL excludes Auto"),
             };
             let track = lum(theme.scrollbar_bg, "scrollbar_bg", kind);

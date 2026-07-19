@@ -471,7 +471,7 @@ pub fn default_actions(mouse_reporting_toggle_enabled: bool) -> Vec<ActionDef> {
             ),
         },
         ActionDef {
-            // Behavior is theme-package-dependent (Exaforge → effort; else mode).
+            // Behavior is theme-package-dependent (Forge → effort; else mode).
             id: ActionId::CycleMode,
             label: "mode",
             description: "Cycle mode or effort (theme package)",
@@ -485,7 +485,7 @@ pub fn default_actions(mouse_reporting_toggle_enabled: bool) -> Vec<ActionDef> {
             requires_confirmation: false,
             long_help: Some(
                 "Default themes: steps session mode Normal → Plan → Always-Approve.\n\
-                 Exaforge UI package: steps the active model's reasoning effort instead \
+                 Forge UI package: steps the active model's reasoning effort instead \
                  (use Ctrl+O / /always-approve / /plan for permission mode).",
             ),
         },

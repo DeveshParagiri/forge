@@ -26,7 +26,7 @@
 //!       on an empty prompt) re-enters this level and runs CancelTurn.
 //!   → 3. Esc policy (try_handle_esc_policy) on Prompt or Scrollback only,
 //!       after overlays/dropdowns/selection returned Changed / stole Esc:
-//!       turn running → CancelTurn (Exaforge: Esc stops like Ctrl+C)
+//!       turn running → CancelTurn (Forge: Esc stops like Ctrl+C)
 //!       turn cancelling → CancelTurn (retry lost ack; Ctrl+C escalates to Quit)
 //!       idle + non-empty prompt, prompt pane only → ArmPending ClearPrompt (2× within 800ms, hint)
 //!       idle + empty + messages, either pane (Normal composer mode, no
@@ -1582,9 +1582,8 @@ fn translate_local_submit(
     if skipped {
         return InputOutcome::Changed;
     }
-    // Exaforge: OpenRouter key + provider picker submit translation.
-    if let Some(outcome) =
-        crate::exaforge::provider_login::translate_provider_login_submit(qv, &kind)
+    // Forge: OpenRouter key + provider picker submit translation.
+    if let Some(outcome) = crate::forge::provider_login::translate_provider_login_submit(qv, &kind)
     {
         return outcome;
     }
@@ -1652,7 +1651,7 @@ fn translate_local_submit(
                 effort,
             })
         }
-        // Exaforge: handled above via translate_provider_login_submit.
+        // Forge: handled above via translate_provider_login_submit.
         LocalQuestionKind::ProviderLogin | LocalQuestionKind::OpenRouterApiKey => {
             unreachable!("handled above")
         }
@@ -2127,7 +2126,7 @@ fn collect_citation_links(
 /// Shared fixtures for the queue-routing tests here, the queued-prompt
 /// editing tests in `queue_edit.rs`, and the parked-wait tests in
 /// `dispatch/queue.rs` / `acp_handler.rs`.
-// Exaforge tests reuse these fixtures for provider-login interaction coverage.
+// Forge tests reuse these fixtures for provider-login interaction coverage.
 #[cfg(test)]
 pub(crate) mod test_fixtures {
     use super::{AgentPane, AgentView};

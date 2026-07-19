@@ -171,7 +171,7 @@ impl ModelState {
                 .and_then(|id| self.available.get(id))
                 .and_then(|info| parse_reasoning_effort_meta(info.meta.as_ref()));
         }
-        crate::exaforge::fast_mode::reconcile(self);
+        crate::forge::fast_mode::reconcile(self);
     }
 
     /// Set the current model and resolve model-scoped session state from catalog
@@ -188,7 +188,7 @@ impl ModelState {
                 .get(&model_id)
                 .and_then(|info| parse_reasoning_effort_meta(info.meta.as_ref()))
         });
-        crate::exaforge::fast_mode::reconcile(self);
+        crate::forge::fast_mode::reconcile(self);
     }
 
     /// The reasoning-effort menu for the current model. Gate-first: an unset or

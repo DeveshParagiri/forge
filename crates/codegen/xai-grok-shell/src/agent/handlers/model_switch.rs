@@ -22,8 +22,8 @@ pub(crate) async fn apply(
     );
     tracing::debug!("session_session_model::mvp_agent: {:?}", &args);
     let effort_override = parse_reasoning_effort_meta(args.meta.as_ref());
-    // Exaforge: feature-specific request parsing lives in its additive module.
-    let fast_mode_override = crate::agent::exaforge::fast_mode::parse_request(args.meta.as_ref());
+    // Forge: feature-specific request parsing lives in its additive module.
+    let fast_mode_override = crate::agent::forge::fast_mode::parse_request(args.meta.as_ref());
     let acp::SetSessionModelRequest {
         session_id,
         model_id,
@@ -117,8 +117,8 @@ pub(crate) async fn apply(
     }
     let mut model_sampling =
         agent.prepare_sampling_config_for_model(&model, handle.origin_client.clone());
-    // Exaforge: preserve or clear feature state through one capability hook.
-    model_sampling.fast_mode = crate::agent::exaforge::fast_mode::resolve_for_switch(
+    // Forge: preserve or clear feature state through one capability hook.
+    model_sampling.fast_mode = crate::agent::forge::fast_mode::resolve_for_switch(
         &handle.cmd_tx,
         supports_fast_mode,
         fast_mode_override,

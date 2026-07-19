@@ -1,14 +1,14 @@
 //! Canonical, extensible tool types.
 mod ext;
-// Exaforge: shared, model-facing task extensions live in an additive module.
-mod exaforge;
+// Forge: shared, model-facing task extensions live in an additive module.
+mod forge;
 mod schema_utils;
 pub mod serde_lenient;
 mod task;
 mod types;
 
-pub use exaforge::SubagentReasoningEffort;
 pub use ext::Extensions;
+pub use forge::SubagentReasoningEffort;
 pub use schema_utils::parse_arguments_from_schema_lossy;
 pub use serde_lenient::{
     deserialize_lenient_bool, deserialize_lenient_option_bool, lenient_bool_from_json,

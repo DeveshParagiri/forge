@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fast-forward Exaforge from its published branch, rebuild, and install.
+# Fast-forward Forge from its published branch, rebuild, and install.
 set -euo pipefail
 
 REPO="${GROK_SRC:-$HOME/.local/share/grok/source}"

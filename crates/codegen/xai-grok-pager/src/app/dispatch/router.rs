@@ -852,9 +852,9 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
                 prev_model_id: None,
             }]
         }
-        // Exaforge: fast-mode behavior is isolated behind one narrow hook.
+        // Forge: fast-mode behavior is isolated behind one narrow hook.
         Action::SetFastMode(enabled) => {
-            crate::exaforge::fast_mode::dispatch_set_fast_mode(app, enabled)
+            crate::forge::fast_mode::dispatch_set_fast_mode(app, enabled)
         }
         Action::AnnouncementsHide => {
             let shown_key = crate::views::announcements::first_session_announcement(
@@ -913,10 +913,10 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::ViewCatalogEntry { kind, name } => {
             vec![Effect::FetchCatalogEntry { kind, name }]
         }
-        // Exaforge theme package: Shift+Tab cycles effort; other themes keep mode cycle.
+        // Forge theme package: Shift+Tab cycles effort; other themes keep mode cycle.
         Action::CycleMode => {
             if crate::theme::Theme::current_kind().package_shift_tab_cycles_effort() {
-                crate::exaforge::effort::dispatch_cycle_effort(app)
+                crate::forge::effort::dispatch_cycle_effort(app)
             } else {
                 dispatch_cycle_mode(app)
             }
@@ -1059,15 +1059,15 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
             vec![]
         }
         Action::Login => dispatch_login(app),
-        // Exaforge: multi-provider picker + handlers.
+        // Forge: multi-provider picker + handlers.
         Action::ChooseProviderLogin => {
-            crate::exaforge::provider_login::dispatch_choose_provider_login(app)
+            crate::forge::provider_login::dispatch_choose_provider_login(app)
         }
         Action::ProviderLoginSelected { provider_id } => {
-            crate::exaforge::provider_login::dispatch_provider_login_selected(app, provider_id)
+            crate::forge::provider_login::dispatch_provider_login_selected(app, provider_id)
         }
         Action::OpenRouterKeySubmitted { api_key } => {
-            crate::exaforge::provider_login::dispatch_openrouter_key_submitted(app, api_key)
+            crate::forge::provider_login::dispatch_openrouter_key_submitted(app, api_key)
         }
         Action::CancelLogin => dispatch_cancel_login(app),
         Action::SubmitAuthCode(code) => dispatch_submit_auth_code(app, code),

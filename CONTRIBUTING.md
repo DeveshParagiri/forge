@@ -1,15 +1,15 @@
-# Contributing to Exaforge
+# Contributing to Forge
 
-Exaforge is a personal fork of [xai-org/grok-build](https://github.com/xai-org/grok-build).
-Contributions that improve the Exaforge extension layer are welcome when they
+Forge is a personal fork of [xai-org/grok-build](https://github.com/xai-org/grok-build).
+Contributions that improve the Forge extension layer are welcome when they
 are focused, tested, and easy to carry across upstream updates.
 
 ## Scope
 
 - Put substantial fork-specific logic in the appropriate per-crate
-  `src/exaforge/` module.
+  `src/forge/` module.
 - Keep edits to upstream-owned files small and mark integration points with
-  `// Exaforge:` where practical.
+  `// Forge:` where practical.
 - Preserve the stock SpaceXAI login and model paths.
 - Do not combine behavior-neutral refactors with unrelated behavior changes.
 - Send changes that apply only to stock Grok Build to the upstream project.
