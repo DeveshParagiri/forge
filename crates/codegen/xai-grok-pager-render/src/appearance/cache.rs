@@ -136,6 +136,37 @@ pub fn set_show_timeline(enabled: bool) {
     TIMELINE_LOADED.with(|l| l.set(true));
 }
 
+// -- Shortcuts bar -------------------------------------------------------------
+
+/// Bottom contextual shortcuts bar default — single-sourced from UiConfig.
+const SHORTCUTS_BAR_DEFAULT: bool = UiConfig::SHOW_SHORTCUTS_BAR_DEFAULT;
+
+thread_local! {
+    static SHORTCUTS_BAR_CURRENT: Cell<bool> = const { Cell::new(SHORTCUTS_BAR_DEFAULT) };
+    static SHORTCUTS_BAR_LOADED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Cached `[ui].show_shortcuts_bar`, seeding from disk on first call.
+pub fn load_show_shortcuts_bar() -> bool {
+    SHORTCUTS_BAR_LOADED.with(|loaded| {
+        if !loaded.get() {
+            SHORTCUTS_BAR_CURRENT.with(|c| {
+                c.set(load_bool_from_effective_config(
+                    "show_shortcuts_bar",
+                    SHORTCUTS_BAR_DEFAULT,
+                ))
+            });
+            loaded.set(true);
+        }
+    });
+    SHORTCUTS_BAR_CURRENT.with(|c| c.get())
+}
+
+pub fn set_show_shortcuts_bar(enabled: bool) {
+    SHORTCUTS_BAR_CURRENT.with(|c| c.set(enabled));
+    SHORTCUTS_BAR_LOADED.with(|l| l.set(true));
+}
+
 // -- Page-flip on send ---------------------------------------------------------
 
 thread_local! {
@@ -574,6 +605,7 @@ pub fn prime(ui: &UiConfig) {
     set(ui.compact_mode);
     set_timestamps(ui.show_timestamps.unwrap_or(TIMESTAMPS_DEFAULT));
     set_show_timeline(ui.show_timeline_enabled());
+    set_show_shortcuts_bar(ui.show_shortcuts_bar_enabled());
     set_page_flip_on_send(ui.page_flip_on_send_enabled());
     set_simple_mode(ui.simple_mode.unwrap_or(SIMPLE_MODE_DEFAULT));
     set_keep_text_selection(text_selection_from_ui(ui));
@@ -686,6 +718,7 @@ mod tests {
         assert_eq!(COMPACT_DEFAULT, ui.compact_mode);
         assert_eq!(TIMESTAMPS_DEFAULT, ui.show_timestamps.unwrap_or(true));
         assert_eq!(TIMELINE_DEFAULT, ui.show_timeline_enabled());
+        assert_eq!(SHORTCUTS_BAR_DEFAULT, ui.show_shortcuts_bar_enabled());
         assert_eq!(PAGE_FLIP_ON_SEND_DEFAULT, ui.page_flip_on_send_enabled());
         assert_eq!(SIMPLE_MODE_DEFAULT, ui.simple_mode.unwrap_or(true));
         assert_eq!(VIM_MODE_DEFAULT, ui.vim_mode.unwrap_or(false));

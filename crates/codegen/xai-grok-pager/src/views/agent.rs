@@ -251,11 +251,19 @@ impl AgentViewLayout {
             constraints.push(Constraint::Length(voice_recording_height));
         }
         constraints.push(Constraint::Length(prompt_height));
-        let shortcuts_gap = if bottom_vpad == 0 { 0u16 } else { 1 };
+        // When the shortcuts bar is hidden (height 0), drop the gap too so the
+        // prompt sits on the bottom padding with no empty footer row.
+        let shortcuts_gap = if bottom_vpad == 0 || shortcuts_height == 0 {
+            0u16
+        } else {
+            1
+        };
         if shortcuts_gap > 0 {
             constraints.push(Constraint::Length(shortcuts_gap));
         }
-        constraints.push(Constraint::Length(shortcuts_height));
+        if shortcuts_height > 0 {
+            constraints.push(Constraint::Length(shortcuts_height));
+        }
         let chunks = Layout::vertical(constraints).split(inner_area);
         let mut i = 0;
         let status_bar = chunks[i];
@@ -357,7 +365,11 @@ impl AgentViewLayout {
         if shortcuts_gap > 0 {
             i += 1;
         }
-        let shortcuts = chunks[i];
+        let shortcuts = if shortcuts_height > 0 {
+            chunks[i]
+        } else {
+            Rect::default()
+        };
         let scrollbar_x = area.right().saturating_sub(scrollbar_cfg.gap_right + 1);
         let timeline_width = if scrollbar_cfg.enabled {
             timeline_width

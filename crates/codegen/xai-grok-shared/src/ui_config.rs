@@ -125,6 +125,10 @@ pub struct UiConfig {
     /// `None` = on (client default). Written by the pager's settings modal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub show_thinking_blocks: Option<bool>,
+    /// Bottom contextual shortcuts bar (`Enter:send | Shift+Tab:mode | …`).
+    /// `None` = on (client default). Config-file knob (`[ui] show_shortcuts_bar`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_shortcuts_bar: Option<bool>,
     /// Fold runs of consecutive non-destructive tool calls (reads, searches,
     /// lists) into one transcript row. `None` = on (client default). Written
     /// by the pager's settings modal.
@@ -266,6 +270,7 @@ impl Default for UiConfig {
             keep_text_selection: None,
             selection_highlight_duration_ms: None,
             show_thinking_blocks: None,
+            show_shortcuts_bar: None,
             group_tool_verbs: None,
             collapsed_edit_blocks: None,
             prompt_suggestions: None,
@@ -303,6 +308,14 @@ impl UiConfig {
     pub fn page_flip_on_send_enabled(&self) -> bool {
         self.page_flip_on_send
             .unwrap_or(Self::PAGE_FLIP_ON_SEND_DEFAULT)
+    }
+
+    /// Default for [`Self::show_shortcuts_bar`] when unset (on).
+    pub const SHOW_SHORTCUTS_BAR_DEFAULT: bool = true;
+
+    pub fn show_shortcuts_bar_enabled(&self) -> bool {
+        self.show_shortcuts_bar
+            .unwrap_or(Self::SHOW_SHORTCUTS_BAR_DEFAULT)
     }
 
     /// True when the highlight should not timer-dismiss (`hold` / `word_select`,

@@ -1091,6 +1091,7 @@ impl AgentView {
             area.width,
             self.scrollback.turn_count(),
         );
+        let shortcuts_height = u16::from(crate::appearance::cache::load_show_shortcuts_bar());
         let mut layout = AgentViewLayout::compute(
             area,
             layout_cfg,
@@ -1109,7 +1110,7 @@ impl AgentView {
             0,
             prompt_gap,
             voice_recording_height,
-            1,
+            shortcuts_height,
             compact,
         );
         let search_active =
@@ -1185,7 +1186,7 @@ impl AgentView {
                         0,
                         prompt_gap,
                         voice_recording_height,
-                        1,
+                        shortcuts_height,
                         compact,
                     );
                     if search_reserved_rows > 0 {
