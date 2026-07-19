@@ -96,12 +96,22 @@ pub struct TaskToolInput {
     /// Optional model slug for this subagent.
     #[schemars(
         description = "Optional model slug for this agent. If provided, it must resolve to one \
-            of the available model slugs. If omitted, the subagent uses the same model as the \
-            parent agent. Do not pass if resume_from is set (prior model will be used). Only \
-            choose an explicit model when the user directly requests it."
+            of the advertised model slugs. Choose one deliberately when a different provider or \
+            model adds useful specialization or an independent perspective; otherwise omit it to \
+            inherit the parent model. Do not pass if resume_from is set (prior model will be used)."
     )]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+
+    /// Optional reasoning budget for this subagent.
+    #[schemars(
+        description = "Optional reasoning effort for this task: low, medium, high, or xhigh. \
+            Use low for simple lookups, medium for ordinary implementation, high for complex \
+            debugging or architecture, and xhigh only for the hardest ambiguous work. Omit to \
+            inherit the selected model or harness default."
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<crate::SubagentReasoningEffort>,
 
     /// Server-injected before execution. Becomes the subagent's session ID.
     #[schemars(skip)]
@@ -1151,6 +1161,7 @@ mod tests {
             resume_from: None,
             cwd: None,
             model: None,
+            reasoning_effort: None,
             task_id: None,
         };
         let value = serde_json::to_value(&input).unwrap();
