@@ -39,10 +39,12 @@ The agent enters plan mode when it determines a task has genuine ambiguity. It c
 
 ### User-Initiated Entry
 
-You can enter plan mode yourself in two ways:
+Enter plan mode with **`/plan`**. Plan mode activates when you send your next
+prompt. Run `/plan <description>` to enter plan mode and start a turn with that
+description in one step.
 
-- **`/plan`** -- Enter plan mode. Plan mode activates when you send your next prompt. Run `/plan <description>` to enter plan mode and start a turn with that description in one step.
-- **Shift+Tab** -- Cycle the session mode: Normal, then Plan, then Always-approve, then back to Normal. From Normal, a single press lands on Plan.
+`Shift+Tab` cycles the active model's reasoning effort; it does not change plan
+or permission mode.
 
 After a plan exists, run **`/view-plan`** (aliases `/show-plan`, `/plan-view`) to reopen its saved preview.
 
@@ -112,7 +114,7 @@ Transitions:
 
 ```
 Inactive    --> Active   (enter_plan_mode tool called and approved -- skips Pending)
-Inactive    --> Pending  (you toggle plan mode on with /plan or Shift+Tab)
+Inactive    --> Pending  (you enter plan mode with /plan)
 Pending     --> Active   (your first prompt activates plan mode)
 Active      --> Inactive (exit_plan_mode approved, or you toggle plan mode off when idle)
 Active      --> ExitPending (you toggle plan mode off while a turn is in-flight)

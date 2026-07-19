@@ -913,14 +913,10 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::ViewCatalogEntry { kind, name } => {
             vec![Effect::FetchCatalogEntry { kind, name }]
         }
-        // Forge theme package: Shift+Tab cycles effort; other themes keep mode cycle.
-        Action::CycleMode => {
-            if crate::theme::Theme::current_kind().package_shift_tab_cycles_effort() {
-                crate::forge::effort::dispatch_cycle_effort(app)
-            } else {
-                dispatch_cycle_mode(app)
-            }
-        }
+        Action::CycleMode => dispatch_cycle_mode(app),
+        // Forge: the composed shortcut registry owns Shift+Tab semantics.
+        // Themes affect presentation only, never the resolved action behavior.
+        Action::CycleEffort => crate::forge::shortcuts::dispatch_cycle_effort(app),
         Action::ShareSession => dispatch_share_session(app),
         Action::ShowSessionInfo => dispatch_show_session_info(app),
         Action::ShowReleaseNotes { title, content } => {

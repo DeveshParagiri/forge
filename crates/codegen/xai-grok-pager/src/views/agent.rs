@@ -1022,13 +1022,11 @@ pub fn build_hints(
                         .pinned(),
                 );
             }
-            let shift_tab_label =
-                if crate::theme::Theme::current_kind().package_shift_tab_cycles_effort() {
-                    "effort"
-                } else {
-                    "mode"
-                };
-            hints.push(HintItem::new(crate::key!(BackTab), shift_tab_label));
+            // Forge: use the composed registry so the footer cannot drift from
+            // key dispatch or the shortcuts help metadata.
+            if let Some(def) = registry.find(ActionId::CycleEffort) {
+                hints.push(def.hint());
+            }
             for def in registry.hints(&[When::PromptFocused, When::AgentScreen, When::Always]) {
                 if def.id == ActionId::SendPrompt
                     || def.id == ActionId::CommandPalette
@@ -1584,6 +1582,45 @@ mod tests {
             "ExitSession (home) must not appear in prompt-focused bar"
         );
     }
+
+    #[test]
+    fn prompt_footer_uses_composed_effort_binding_once() {
+        let registry = ActionRegistry::defaults();
+        let hints = build_hints(
+            ActivePane::Prompt,
+            &PromptWidget::default(),
+            &registry,
+            false,
+            None,
+            None,
+            "expand thinking",
+            false,
+            false,
+            None,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            None,
+        );
+        let effort: Vec<_> = hints.iter().filter(|hint| hint.label == "effort").collect();
+        assert_eq!(
+            effort.len(),
+            1,
+            "footer must contain one effort hint: {hints:?}"
+        );
+        assert_eq!(effort[0].custom_display, Some("Shift+Tab"));
+        assert!(!hints.iter().any(|hint| hint.label == "mode"));
+    }
+
     fn prompt_hints_with_text(
         multiline_mode: bool,
         shift_enter_unavailable: bool,

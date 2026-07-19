@@ -1615,9 +1615,9 @@ pub(super) fn apply_pending_dispatch_config(
 /// Normal), the peek-panel counterpart to `DashboardCycleMode`. Reuses
 /// the shared cycle body `dispatch_cycle_mode_and_sync` by temporarily
 /// targeting the peeked agent (the same `active_view` swap as
-/// `dispatch_dashboard_toggle_auto_approve`), so the peek behaves exactly
-/// like Shift+Tab inside that agent's chat view. The bottom-border badge
-/// reflects the new mode on the next frame. Only top-level agents have a
+/// `dispatch_dashboard_toggle_auto_approve`). This remains a dashboard-local
+/// mode action; Shift+Tab in an agent prompt cycles reasoning effort instead.
+/// The bottom-border badge reflects the new mode on the next frame. Only top-level agents have a
 /// mode to cycle — subagents are parent-driven.
 pub(super) fn dispatch_dashboard_peek_cycle_mode(app: &mut AppView) -> Vec<Effect> {
     use crate::views::dashboard::DashboardRowId;

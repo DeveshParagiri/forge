@@ -47,6 +47,8 @@ mod interjection_reaches_model_in_same_turn;
 mod mid_turn_slash_dropdown_esc_dismisses_not_cancel;
 #[path = "pty_e2e/minimal/minimal_ctrl_o_send_now_queued_apple_terminal.rs"]
 mod minimal_ctrl_o_send_now_queued_apple_terminal;
+#[path = "pty_e2e/shift_tab_plan_nudge_from_always_approve_enters_plan.rs"]
+mod plan_nudge_keeps_shift_tab_effort_binding;
 #[path = "pty_e2e/queue_and_interjection_lifecycle.rs"]
 mod queue_and_interjection_lifecycle;
 #[path = "pty_e2e/queued_bash_promotion_renders_output_pty.rs"]
@@ -59,8 +61,6 @@ mod removed_queued_prompt_never_sent;
 mod send_now_tip_after_mid_turn_queue;
 #[path = "pty_e2e/send_then_ctrlc_rewinds_to_composer_no_history_dup.rs"]
 mod send_then_ctrlc_rewinds_to_composer_no_history_dup;
-#[path = "pty_e2e/shift_tab_plan_nudge_from_always_approve_enters_plan.rs"]
-mod shift_tab_plan_nudge_from_always_approve_enters_plan;
 #[path = "pty_e2e/verify_bashq_claim2_force_interject.rs"]
 mod verify_bashq_claim2_force_interject;
 #[path = "pty_e2e/verify_bashq_claim3_edit_keeps_bash.rs"]

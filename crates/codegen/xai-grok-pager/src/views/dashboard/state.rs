@@ -4445,6 +4445,7 @@ fn dashboard_action_for_id(
         | ActionId::OpenExtensions
         | ActionId::SendToBackground
         | ActionId::CycleMode
+        | ActionId::CycleEffort
         | ActionId::BashMode
         | ActionId::Rewind
         | ActionId::KillBgTask

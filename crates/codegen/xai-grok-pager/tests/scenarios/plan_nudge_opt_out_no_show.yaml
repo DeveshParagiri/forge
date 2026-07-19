@@ -2,7 +2,7 @@ name: plan-nudge-opt-out-no-show
 description: >
   Explicit opt-out: contextual hints now ship default-ON, so this scenario pins
   the master env `GROK_CONTEXTUAL_HINTS=0` (global kill switch) before typing a
-  planning keyword — the "Planning? Check out plan mode via shift+tab" banner
+  planning keyword — the "Planning? Enter plan mode with /plan" banner
   must NOT appear. Mirrors plan_nudge_shows (which pins `=1`), exercising the
   disabled path explicitly.
 terminal:
@@ -24,7 +24,7 @@ steps:
   - action: wait
     millis: 700
   - action: assert_not_contains
-    text: "plan mode via"
+    text: "Enter plan mode with"
   - action: screenshot
     name: plan-nudge-opt-out
     note: No plan-nudge banner when the contextual-hints flag is explicitly disabled.

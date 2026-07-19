@@ -160,8 +160,9 @@ running the active mode again turns it off:
 Running the other command while one mode is on **switches** modes (for example,
 `/auto` while always-approve is on switches to auto).
 
-`/auto` is only offered when the auto permission-mode feature is enabled. You
-can also change mode with `Shift+Tab` (cycle), `Ctrl+O`, or `/settings`.
+`/auto` is only offered when the auto permission-mode feature is enabled. Use
+`/plan`, `/auto`, `/always-approve`, `Ctrl+O`, or `/settings` to change modes.
+`Shift+Tab` is reserved for cycling reasoning effort in the agent prompt.
 
 ```
 /always-approve

@@ -2,17 +2,25 @@
 #[allow(unused_imports)]
 use super::common::*;
 
-/// 2b. **Shift+Tab on the welcome screen starts a session in Plan mode.**
-/// Pressing Shift+Tab (BackTab, `ESC [ Z`) before typing anything must
-/// leave the welcome screen, create a session, and cycle the mode —
-/// the transient "Switched to mode: Plan" banner proves both halves:
-/// the key was promoted to a new session (welcome → agent view) AND
-/// the forwarded BackTab resolved to `Action::CycleMode` pre-session.
-/// Cycle with the auto gate on (client default): Normal → Plan → Auto → …
+/// 2b. **Shift+Tab on the welcome screen starts a session and cycles effort.**
+/// Pressing Shift+Tab (BackTab, `ESC [ Z`) before typing anything promotes the
+/// welcome prompt to an agent session, then forwards the key through the same
+/// composed effort binding used by an established prompt.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore]
-async fn shift_tab_on_welcome_starts_session_in_plan_mode() {
-    let content = ContentController::start().await.expect("start content");
+async fn shift_tab_on_welcome_starts_session_and_cycles_effort() {
+    let content = ContentController::start_with_models(vec![
+        MockModel::new("test-model")
+            .with_supports_reasoning_effort(true)
+            .with_reasoning_effort("low")
+            .with_reasoning_efforts(vec![
+                json!({ "id": "low", "value": "low", "label": "Low" }),
+                json!({ "id": "medium", "value": "medium", "label": "Medium" }),
+                json!({ "id": "high", "value": "high", "label": "High" }),
+            ]),
+    ])
+    .await
+    .expect("start content");
 
     let binary = pager_binary().expect("resolve pager binary");
     let mut harness =
@@ -27,14 +35,19 @@ async fn shift_tab_on_welcome_starts_session_in_plan_mode() {
     harness.inject_keys(b"\x1b[Z").expect("inject BackTab");
 
     harness
-        .wait_for_text("Switched to mode: Plan", Duration::from_secs(10))
-        .expect("plan mode banner after Shift+Tab on welcome screen");
+        .wait_for_text("effort · medium", Duration::from_secs(10))
+        .expect("welcome promotion followed by low -> medium effort cycle");
 
-    // Second press cycles Plan → Auto (gate defaults ON).
     harness.inject_keys(b"\x1b[Z").expect("inject BackTab");
     harness
-        .wait_for_text("Switched to mode: Auto", Duration::from_secs(10))
-        .expect("auto banner on second Shift+Tab");
+        .wait_for_text("effort · high", Duration::from_secs(10))
+        .expect("second Shift+Tab advances medium -> high");
+
+    assert!(
+        !harness.contains_text("Switched to mode:"),
+        "welcome Shift+Tab must not change permission mode\nscreen:\n{}",
+        harness.screen_contents()
+    );
 
     harness.quit().expect("clean quit");
 }

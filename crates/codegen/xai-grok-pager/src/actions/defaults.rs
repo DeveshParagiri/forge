@@ -471,11 +471,12 @@ pub fn default_actions(mouse_reporting_toggle_enabled: bool) -> Vec<ActionDef> {
             ),
         },
         ActionDef {
-            // Behavior is theme-package-dependent (Forge → effort; else mode).
             id: ActionId::CycleMode,
             label: "mode",
-            description: "Cycle mode or effort (theme package)",
-            // All Shift+Tab encodings — see `input::key::shift_tab_keys()`.
+            description: "Cycle session mode",
+            // Forge replaces this prompt action through its registry
+            // contribution. Keeping the upstream definition intact makes the
+            // integration a narrow composition hook rather than a forked list.
             default_key: crate::input::key::shift_tab_keys()[0],
             alt_keys: crate::input::key::shift_tab_keys()[1..].to_vec(),
             category: Category::GettingStarted,
@@ -483,11 +484,7 @@ pub fn default_actions(mouse_reporting_toggle_enabled: bool) -> Vec<ActionDef> {
             hint_priority: None,
             hint_key_display: Some("Shift+Tab"),
             requires_confirmation: false,
-            long_help: Some(
-                "Default themes: steps session mode Normal → Plan → Always-Approve.\n\
-                 Forge UI package: steps the active model's reasoning effort instead \
-                 (use Ctrl+O / /always-approve / /plan for permission mode).",
-            ),
+            long_help: Some("Steps session mode Normal → Plan → Always-Approve → Normal."),
         },
         // ── Panes (agent-level — toggle side panes) ─────────────────
         ActionDef {
@@ -716,7 +713,7 @@ pub fn default_actions(mouse_reporting_toggle_enabled: bool) -> Vec<ActionDef> {
             hint_key_display: None,
             requires_confirmation: false,
             long_help: Some(
-                "Turns auto-approve (YOLO) on or off for this session.\nWhile on, the agent runs every tool call (edits, shell, deletes) with no per-action confirmation.\nSame state as the Shift+Tab cycle's Always-Approve; use with care.",
+                "Turns auto-approve (YOLO) on or off for this session.\nWhile on, the agent runs every tool call (edits, shell, deletes) with no per-action confirmation.\nUse with care.",
             ),
         },
         ActionDef {
@@ -965,7 +962,7 @@ pub fn default_actions(mouse_reporting_toggle_enabled: bool) -> Vec<ActionDef> {
             hint_key_display: Some("Shift+Tab"),
             requires_confirmation: false,
             long_help: Some(
-                "Cycles the dispatch mode for agents you launch from the dashboard: Normal, Plan, then Always-Approve.\nPlan has new agents plan before changing files; Always-Approve runs their tools without prompting.\nMirrors the in-session Shift+Tab cycle, applied to new dispatches.",
+                "Cycles the dispatch mode for agents you launch from the dashboard: Normal, Plan, then Always-Approve.\nPlan has new agents plan before changing files; Always-Approve runs their tools without prompting.\nThis dashboard-only binding does not change the prompt's reasoning effort.",
             ),
         },
         ActionDef {

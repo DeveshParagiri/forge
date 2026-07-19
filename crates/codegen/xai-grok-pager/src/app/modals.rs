@@ -96,6 +96,14 @@ impl AgentView {
     /// Matches the pressed character against the modal's options and resolves
     /// the result. All non-matching keys are consumed (blocked).
     pub(super) fn handle_modal_key(&mut self, key: &KeyEvent) -> InputOutcome {
+        self.handle_modal_key_with_registry(key, &crate::actions::ActionRegistry::defaults())
+    }
+
+    pub(super) fn handle_modal_key_with_registry(
+        &mut self,
+        key: &KeyEvent,
+        registry: &crate::actions::ActionRegistry,
+    ) -> InputOutcome {
         use crate::views::modal::ActiveModal;
         use crate::views::modal_window::{self as mw, ModalWindowOutcome};
 
@@ -165,7 +173,7 @@ impl AgentView {
                         return self.handle_doc_input(&ev);
                     }
                     let ev = crossterm::event::Event::Key(*key);
-                    return self.handle_palette_or_arg_input(&ev);
+                    return self.handle_palette_or_arg_input_with_registry(&ev, registry);
                 }
                 ModalWindowOutcome::Unhandled => {
                     // Non-Esc key (including Left/Right/h/l):
@@ -175,7 +183,7 @@ impl AgentView {
                         return self.handle_doc_input(&ev);
                     }
                     let ev = crossterm::event::Event::Key(*key);
-                    return self.handle_palette_or_arg_input(&ev);
+                    return self.handle_palette_or_arg_input_with_registry(&ev, registry);
                 }
                 _ => return InputOutcome::Changed,
             }
@@ -663,6 +671,17 @@ impl AgentView {
 
     /// Unified input handler for command palette and arg picker modals.
     fn handle_palette_or_arg_input(&mut self, ev: &crossterm::event::Event) -> InputOutcome {
+        self.handle_palette_or_arg_input_with_registry(
+            ev,
+            &crate::actions::ActionRegistry::defaults(),
+        )
+    }
+
+    fn handle_palette_or_arg_input_with_registry(
+        &mut self,
+        ev: &crossterm::event::Event,
+        registry: &crate::actions::ActionRegistry,
+    ) -> InputOutcome {
         use crate::views::modal::{ActiveModal, PaletteCommand};
         use crate::views::picker::{PickerConfig, PickerOutcome, handle_picker_input};
 
@@ -759,7 +778,6 @@ impl AgentView {
                             }
                             PaletteCommand::KeyboardShortcuts => {
                                 use crate::views::shortcuts_help;
-                                let reg = crate::actions::ActionRegistry::defaults();
                                 let mut contexts = active_contexts_for_pane(self.active_pane);
                                 // Same overlay-context push as the Ctrl+.
                                 // path (`handle_agent_action`,
@@ -767,8 +785,11 @@ impl AgentView {
                                 if self.in_dashboard_overlay {
                                     contexts.push(crate::actions::When::DashboardOverlay);
                                 }
-                                let entries =
-                                    shortcuts_help::build_entries(&contexts, &reg, self.vim_mode);
+                                let entries = shortcuts_help::build_entries(
+                                    &contexts,
+                                    registry,
+                                    self.vim_mode,
+                                );
                                 let state = shortcuts_help::build_initial_picker_state(&entries);
                                 self.active_modal = Some(ActiveModal::ShortcutsHelp {
                                     entries,

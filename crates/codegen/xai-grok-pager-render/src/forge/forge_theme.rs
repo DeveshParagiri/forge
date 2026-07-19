@@ -4,8 +4,8 @@
 //! - `promptBorder` / `promptBorderShimmer` for input frame
 //! - `userMessageBackground` for user-message / elevated fills
 //!
-//! Package behaviors (no shortcuts footer, Shift+Tab → effort) live in the
-//! sibling Forge policy modules, not in this palette alone.
+//! The package default that hides the shortcuts footer lives in the sibling
+//! Forge policy module; keyboard behavior is intentionally theme-independent.
 
 use ratatui::style::{Color, Modifier};
 

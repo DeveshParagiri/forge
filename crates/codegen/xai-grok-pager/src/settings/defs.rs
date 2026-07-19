@@ -73,7 +73,7 @@ const THEME_CHOICES: &[EnumChoice] = &[
     EnumChoice {
         canonical: "forge",
         display: "Forge",
-        description: "Forge chatbox; hides shortcuts footer; Shift+Tab cycles effort.",
+        description: "Forge chatbox; hides the shortcuts footer by default.",
     },
 ];
 
@@ -155,8 +155,8 @@ const CODING_DATA_SHARING_CHOICES: &[EnumChoice] = &[
 // NOT persisted to config.toml — resets every session start.
 //
 // Uses `on`/`off` canonical strings (not the shell's `plan`/`default`
-// wire ids). `Ask` mode is intentionally not exposed here — it's
-// only reachable via Shift+Tab.
+// wire ids). `Ask` mode is intentionally not exposed here; it remains an
+// internal permission-prompt state rather than a settings choice.
 //
 // `supports_preview: false` — toggling fires an ACP request that
 // gates tool dispatch. Commit on Enter only.
@@ -1419,9 +1419,8 @@ pub fn default_settings() -> Vec<SettingMeta> {
             category: SettingCategory::Advanced,
             owner: SettingOwner::Shell,
             label: "Plan mode",
-            description: "Suggest plan mode (Shift+Tab) when your prompt looks like a \
-                          planning request.",
-            keywords: &["plan", "mode", "nudge", "shift+tab", "hint"],
+            description: "Suggest /plan when your prompt looks like a planning request.",
+            keywords: &["plan", "mode", "nudge", "/plan", "hint"],
             kind: SettingKind::Bool {
                 default: ui_default.contextual_hints.plan_mode.unwrap_or(true),
             },

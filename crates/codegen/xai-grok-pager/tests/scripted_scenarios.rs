@@ -425,7 +425,7 @@ async fn scripted_undo_tip_completion_accept_no_show() {
 }
 
 /// Plan-nudge happy path: with contextual hints enabled, typing a planning
-/// keyword shows the "Planning? Check out plan mode via shift+tab" banner.
+/// keyword shows the explicit `/plan` suggestion.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "scripted scenario; run with cargo test -- --ignored"]
 async fn scripted_plan_nudge_shows() {

@@ -127,7 +127,7 @@ Actions that affect the agent session, available from the agent screen.
 | `Ctrl+O` | Agent screen | Toggle always-approve (YOLO) mode |
 | `Ctrl+S` | Agent screen | Open the session picker (resume a previous session) |
 | `Ctrl+;` (alt: `Ctrl+'`) | Agent screen | Toggle the prompt queue pane (when non-empty). **Local macOS** VS Code family only: primary **`Ctrl+4`** (`;` / `'` still alts). SSH and non-Mac keep **`Ctrl+;`** / **`Ctrl+'`**. |
-| `Shift+Tab` | Prompt focused | Cycle mode (Normal → Plan → Always-approve) |
+| `Shift+Tab` | Prompt focused | Cycle the active model's supported reasoning-effort levels. This binding is the same in every color theme. |
 | `Ctrl+G` | Agent screen | Send the current task to the background |
 | `Ctrl+T` | Agent screen | Toggle the todos pane |
 | `Ctrl+B` | Agent screen | Toggle the tasks pane |

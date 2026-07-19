@@ -2,13 +2,22 @@
 #[allow(unused_imports)]
 use super::common::*;
 
-/// Always-Approve + plan nudge: one Shift+Tab enters Plan (not Normal).
-/// The tip advertises `shift+tab` → plan mode; with the nudge up that chord
-/// must jump from Always-Approve rather than taking the next ring step.
+/// The plan nudge advertises `/plan`; Shift+Tab remains an effort binding even
+/// when Always-Approve is active and planning language triggered the nudge.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore]
-async fn shift_tab_plan_nudge_from_always_approve_enters_plan() {
-    let content = ContentController::start().await.expect("start content");
+async fn plan_nudge_does_not_rebind_shift_tab_from_effort() {
+    let content = ContentController::start_with_models(vec![
+        MockModel::new("test-model")
+            .with_supports_reasoning_effort(true)
+            .with_reasoning_effort("low")
+            .with_reasoning_efforts(vec![
+                json!({ "id": "low", "value": "low", "label": "Low" }),
+                json!({ "id": "medium", "value": "medium", "label": "Medium" }),
+            ]),
+    ])
+    .await
+    .expect("start content");
     content.set_response(format!("{MOCK_RESPONSE_SENTINEL} turn done."));
 
     let binary = pager_binary().expect("resolve pager binary");
@@ -45,7 +54,7 @@ async fn shift_tab_plan_nudge_from_always_approve_enters_plan() {
         .inject_keys(b"plan the refactor")
         .expect("type planning keyword");
     harness
-        .wait_for_text("plan mode via", Duration::from_secs(10))
+        .wait_for_text("Enter plan mode with", Duration::from_secs(10))
         .unwrap_or_else(|e| {
             panic!(
                 "plan nudge must show; {e}\nscreen:\n{}",
@@ -55,17 +64,17 @@ async fn shift_tab_plan_nudge_from_always_approve_enters_plan() {
 
     harness.inject_keys(b"\x1b[Z").expect("inject Shift+Tab");
     harness
-        .wait_for_text("Switched to mode: Plan", Duration::from_secs(10))
+        .wait_for_text("effort · medium", Duration::from_secs(10))
         .unwrap_or_else(|e| {
             panic!(
-                "nudge + Always-Approve Shift+Tab must enter Plan; {e}\nscreen:\n{}",
+                "nudge must leave Shift+Tab bound to effort; {e}\nscreen:\n{}",
                 harness.screen_contents()
             )
         });
 
     assert!(
-        !harness.contains_text("Switched to mode: Normal"),
-        "must not land on Normal while the plan nudge is showing; screen:\n{}",
+        !harness.contains_text("Switched to mode:"),
+        "effort binding must preserve Always-Approve; screen:\n{}",
         harness.screen_contents()
     );
     assert!(

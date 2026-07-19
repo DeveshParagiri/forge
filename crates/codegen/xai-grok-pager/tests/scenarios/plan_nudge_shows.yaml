@@ -3,7 +3,7 @@ description: >
   Plan-nudge end-to-end with the contextual-hints master pinned on
   (`GROK_CONTEXTUAL_HINTS=1` for deterministic env control; the feature now ships
   default-ON): typing a planning keyword into the prompt shows the "Planning?
-  Check out plan mode via shift+tab" banner. The seen cap is in-memory only, so a
+  Enter plan mode with /plan" banner. The seen cap is in-memory only, so a
   fresh run starts uncapped; the banner clears on its own ~3s TTL.
 terminal:
   rows: 32
@@ -35,7 +35,7 @@ steps:
   - action: type_text
     text: "plan the refactor"
   - action: wait_for_text
-    text: "plan mode via"
+    text: "Enter plan mode with"
     timeout_ms: 10000
   - action: assert_not_contains
     text: panicked

@@ -906,12 +906,12 @@ pub struct AppView {
     /// Default YOLO for new sessions, seeded at startup from `effective_yolo_for_launch`.
     pub default_yolo: bool,
     /// Soft-default still owns the mode: settings/update may rewrite UI +
-    /// `default_yolo`. Cleared on user Shift+Tab / settings / CLI claim.
+    /// `default_yolo`. Cleared on an explicit mode change from settings or CLI.
     /// Not inferred from the rendered permission string.
     pub permission_mode_from_soft_default: bool,
     /// Whether the **auto** permission-mode feature gate is enabled (resolved at
     /// startup from env / `[auto_mode] enabled` / remote settings, default OFF). When
-    /// `false`, the Shift+Tab cycle skips Auto. See
+    /// `false`, permission-mode controls omit Auto. See
     /// `xai_grok_shell::util::config::resolve_auto_permission_mode_enabled`.
     pub auto_mode_gate: bool,
     /// Managed-policy pin (set at startup); gates every runtime always-approve enable.

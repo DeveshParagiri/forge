@@ -1522,6 +1522,36 @@ mod tests {
     /// The cheatsheet must collapse identically-rendered keys instead
     /// of showing "Shift+Tab / Shift+Tab / Shift+Tab".
     #[test]
+    fn prompt_help_lists_the_composed_effort_binding_once() {
+        let registry = crate::actions::ActionRegistry::defaults();
+        let entries = build_entries(&[When::PromptFocused], &registry, false);
+        let effort_rows: Vec<_> = entries
+            .iter()
+            .filter_map(|entry| match entry {
+                ShortcutsHelpEntry::Hint {
+                    item,
+                    action_id: Some(crate::actions::ActionId::CycleEffort),
+                    ..
+                } => Some(item),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(effort_rows.len(), 1);
+        assert_eq!(
+            effort_rows[0].description.as_deref(),
+            Some("Cycle reasoning effort")
+        );
+        assert_eq!(hint_key_pretty(effort_rows[0]), "Shift+Tab");
+        assert!(!entries.iter().any(|entry| matches!(
+            entry,
+            ShortcutsHelpEntry::Hint {
+                action_id: Some(crate::actions::ActionId::CycleMode),
+                ..
+            }
+        )));
+    }
+
+    #[test]
     fn build_entries_dedupes_identically_rendered_alt_keys() {
         let registry = crate::actions::ActionRegistry::defaults();
         let entries = build_entries(&[When::DashboardFocused], &registry, false);

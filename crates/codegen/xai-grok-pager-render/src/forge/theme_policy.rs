@@ -12,12 +12,6 @@ pub(crate) const fn package_show_shortcuts_bar_default(kind: ThemeKind) -> Optio
     }
 }
 
-/// Whether Shift+Tab cycles reasoning effort instead of permission mode.
-#[must_use]
-pub(crate) const fn package_shift_tab_cycles_effort(kind: ThemeKind) -> bool {
-    matches!(kind, ThemeKind::Forge)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -28,7 +22,6 @@ mod tests {
             package_show_shortcuts_bar_default(ThemeKind::Forge),
             Some(false)
         );
-        assert!(package_shift_tab_cycles_effort(ThemeKind::Forge));
 
         for kind in [
             ThemeKind::GrokNight,
@@ -39,7 +32,6 @@ mod tests {
             ThemeKind::Auto,
         ] {
             assert_eq!(package_show_shortcuts_bar_default(kind), None);
-            assert!(!package_shift_tab_cycles_effort(kind));
         }
     }
 }

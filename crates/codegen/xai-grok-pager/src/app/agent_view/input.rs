@@ -686,7 +686,7 @@ impl AgentView {
                     if registry.lookup(key, When::Always) == Some(ActionId::Quit) {
                         return InputOutcome::Unchanged;
                     }
-                    self.handle_modal_key(key)
+                    self.handle_modal_key_with_registry(key, registry)
                 }
                 Event::Mouse(mouse) => self.handle_modal_mouse(mouse),
                 Event::Paste(text) => self.handle_modal_paste(text),
@@ -877,7 +877,8 @@ impl AgentView {
                             || self.session.state.is_cancelling())
                     {
                         self.dismiss_jump_picker();
-                        return self.handle_agent_action(ActionId::CancelTurn);
+                        return self
+                            .handle_agent_action_with_registry(ActionId::CancelTurn, registry);
                     }
                     self.handle_jump_key(key)
                 }
@@ -1120,7 +1121,7 @@ impl AgentView {
                 );
             }
             if let Some(action_id) = registry.lookup(key, When::AgentScreen) {
-                return self.handle_agent_action(action_id);
+                return self.handle_agent_action_with_registry(action_id, registry);
             }
         }
         if let Event::Key(key) = ev
@@ -1139,6 +1140,14 @@ impl AgentView {
     }
     /// Handle an agent-level action (from registry lookup with `When::AgentScreen`).
     pub(super) fn handle_agent_action(&mut self, action_id: ActionId) -> InputOutcome {
+        self.handle_agent_action_with_registry(action_id, &ActionRegistry::defaults())
+    }
+
+    fn handle_agent_action_with_registry(
+        &mut self,
+        action_id: ActionId,
+        registry: &ActionRegistry,
+    ) -> InputOutcome {
         match action_id {
             ActionId::CancelTurn => {
                 if self.session.state.is_turn_running() {
@@ -1196,12 +1205,11 @@ impl AgentView {
             }
             ActionId::ShortcutsHelp => {
                 use crate::views::shortcuts_help;
-                let reg = crate::actions::ActionRegistry::defaults();
                 let mut contexts = active_contexts_for_pane(self.active_pane);
                 if self.in_dashboard_overlay {
                     contexts.push(crate::actions::When::DashboardOverlay);
                 }
-                let entries = shortcuts_help::build_entries(&contexts, &reg, self.vim_mode);
+                let entries = shortcuts_help::build_entries(&contexts, registry, self.vim_mode);
                 let state = shortcuts_help::build_initial_picker_state(&entries);
                 self.active_modal = Some(crate::views::modal::ActiveModal::ShortcutsHelp {
                     entries,

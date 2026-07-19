@@ -26,9 +26,9 @@ mod renders_on_action;
 #[path = "pty_e2e/requirements_version_failure_exits_2_with_guidance.rs"]
 mod requirements_version_failure_exits_2_with_guidance;
 #[path = "pty_e2e/shift_tab_in_session_cycles_mode.rs"]
-mod shift_tab_in_session_cycles_mode;
+mod shift_tab_in_session_cycles_effort;
 #[path = "pty_e2e/shift_tab_on_welcome_starts_session_in_plan_mode.rs"]
-mod shift_tab_on_welcome_starts_session_in_plan_mode;
+mod shift_tab_on_welcome_cycles_effort;
 #[path = "pty_e2e/small_screen_tip_survives_slow_turn.rs"]
 mod small_screen_tip_survives_slow_turn;
 #[path = "pty_e2e/tab_focuses_scrollback_in_vim_and_default_modes.rs"]

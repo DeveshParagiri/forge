@@ -501,9 +501,9 @@ impl AgentView {
             }
         }
 
-        // Shift+Tab (cycle session mode) is not special-cased here — the
-        // `CycleMode` ActionDef carries all encodings; the registry lookup
-        // below resolves it (same as `DashboardCycleMode`).
+        // Shift+Tab is not special-cased here. The composed registry carries
+        // all terminal encodings for Forge's `CycleEffort` action and resolves
+        // it through the same path as every other prompt binding.
 
         // 2. Multiline mode: Shift+Enter (or Alt+Enter) sends.
         //    This must come BEFORE the action registry lookup so that
@@ -998,7 +998,7 @@ impl AgentView {
 }
 
 #[cfg(test)]
-mod shift_tab_cycle_mode_tests {
+mod shift_tab_cycle_effort_tests {
     use super::*;
     use crate::app::app_view::InputOutcome;
     use crate::input::key::shift_tab_keys;
@@ -1006,27 +1006,27 @@ mod shift_tab_cycle_mode_tests {
 
     /// Guards the full routed path, not just registry resolution.
     #[test]
-    fn shift_tab_emits_cycle_mode_through_prompt_key_routing() {
+    fn shift_tab_emits_cycle_effort_action_through_prompt_key_routing() {
         for shortcut in shift_tab_keys() {
             let mut agent = super::test_fixtures::make_agent();
             let outcome = agent.handle_prompt_key_for_test(&shortcut.to_key_event());
             assert!(
-                matches!(outcome, InputOutcome::Action(Action::CycleMode)),
-                "{shortcut:?} must resolve to Action::CycleMode, got {outcome:?}",
+                matches!(outcome, InputOutcome::Action(Action::CycleEffort)),
+                "{shortcut:?} must resolve to the Forge effort action, got {outcome:?}",
             );
         }
     }
 
     /// `is_mod_enter` must not treat Shift+Tab as send when multiline is on.
     #[test]
-    fn multiline_shift_tab_still_cycles_mode_with_non_empty_draft() {
+    fn multiline_shift_tab_still_cycles_effort_with_non_empty_draft() {
         for shortcut in shift_tab_keys() {
             let mut agent = super::test_fixtures::make_agent();
             agent.multiline_mode = true;
             agent.prompt.set_text("draft text");
             let outcome = agent.handle_prompt_key_for_test(&shortcut.to_key_event());
             assert!(
-                matches!(outcome, InputOutcome::Action(Action::CycleMode)),
+                matches!(outcome, InputOutcome::Action(Action::CycleEffort)),
                 "multiline + {shortcut:?} must CycleMode, not send, got {outcome:?}",
             );
             assert_eq!(
@@ -1044,7 +1044,7 @@ mod shift_tab_cycle_mode_tests {
             agent.handle_prompt_key_for_test(&KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
         assert!(
             matches!(outcome, InputOutcome::Action(Action::FocusScrollback)),
-            "plain Tab must focus scrollback, got {outcome:?}",
+            "plain Tab must focus scrollback rather than cycle effort, got {outcome:?}",
         );
     }
 }

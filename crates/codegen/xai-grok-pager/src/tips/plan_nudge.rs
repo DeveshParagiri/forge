@@ -1,5 +1,5 @@
 //! Plan-nudge trigger: detects planning keywords typed into the prompt so the
-//! pager can hint that Shift+Tab cycles into plan mode first.
+//! pager can suggest the explicit `/plan` command.
 
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -32,16 +32,9 @@ const PLANNING_KEYWORDS: &[&str] = &[
     "strategy",
 ];
 
-/// Plan-mode chord for the tip copy: always `shift+tab`. Derived from the real
-/// `CycleMode` binding (not a literal) — `shift_tab_keys()[0]` is one of the
-/// encodings [`crate::input::key::is_shift_tab`] accepts — so it can't drift.
-fn plan_chord_label() -> String {
-    crate::input::key::shift_tab_keys()[0]
-        .display()
-        .to_ascii_lowercase()
-}
+const PLAN_COMMAND: &str = "/plan";
 
-/// Build the "Planning? Check out plan mode via {chord}" tip, seen-gated to
+/// Build the "Planning? Enter plan mode with /plan" tip, seen-gated to
 /// [`PLAN_NUDGE_SEEN_CAP`] shows per session (in-memory).
 pub fn plan_nudge_tip() -> EphemeralTip {
     let theme = Theme::current();
@@ -53,8 +46,8 @@ pub fn plan_nudge_tip() -> EphemeralTip {
     EphemeralTip::new(
         PLAN_NUDGE_KEY,
         Line::from(vec![
-            Span::styled("Planning? Check out plan mode via ", dim),
-            Span::styled(plan_chord_label(), chord),
+            Span::styled("Planning? Enter plan mode with ", dim),
+            Span::styled(PLAN_COMMAND, chord),
         ]),
     )
     .with_session_seen_cap(PLAN_NUDGE_SEEN_KEY, PLAN_NUDGE_SEEN_CAP)
@@ -143,15 +136,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_nudge_chord_is_shift_tab() {
-        // Always shift+tab — derived from the real binding so it can't drift.
-        assert_eq!(plan_chord_label(), "shift+tab");
-        // The advertised chord is genuinely one is_shift_tab accepts.
-        assert!(crate::input::key::is_shift_tab(
-            &crossterm::event::KeyEvent::new(
-                crossterm::event::KeyCode::BackTab,
-                crossterm::event::KeyModifiers::NONE,
-            )
-        ));
+    fn plan_nudge_uses_explicit_plan_command() {
+        assert_eq!(PLAN_COMMAND, "/plan");
     }
 }

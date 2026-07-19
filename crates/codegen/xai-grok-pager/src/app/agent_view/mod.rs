@@ -2004,6 +2004,7 @@ fn resolve_action(action_id: Option<ActionId>) -> Option<InputOutcome> {
         ActionId::FocusScrollback => Action::FocusScrollback,
         ActionId::NextModel => Action::NextModel,
         ActionId::CycleMode => Action::CycleMode,
+        ActionId::CycleEffort => Action::CycleEffort,
         ActionId::CancelTurn
         | ActionId::Quit
         | ActionId::ExitSession

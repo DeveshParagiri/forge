@@ -1,9 +1,7 @@
 //! PTY e2e: permission Auto mode is distinct on the real pager screen.
 //!
-//! Uses `xai-grok-pager-pty-harness` (`PtyHarness`) + Shift+Tab (CSI Z,
-//! compatible with `ptyctl` key injection) to cycle Normal → Plan → Auto
-//! and assert the mode banner / status shows Auto without conflating
-//! Always-Approve.
+//! Permission modes are selected explicitly with slash commands. Shift+Tab is
+//! reserved for reasoning effort and is covered separately by prompt tests.
 //!
 //! Auth: seeds `HOME/.grok/auth.json` from `GROK_AUTH_JSON` (path) or the
 //! developer's `~/.grok/auth.json` so the pager skips device-login when

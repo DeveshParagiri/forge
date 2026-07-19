@@ -202,8 +202,8 @@ pub fn is_altgr(_modifiers: KeyModifiers) -> bool {
 
 /// Canonical Shift+Tab encodings: `BackTab` (most xterm-likes),
 /// `BackTab+SHIFT` (some terminals), `Tab+SHIFT` (kitty protocol, some
-/// Windows terminals). Single source of truth for the `CycleMode` /
-/// `DashboardCycleMode` ActionDefs and [`is_shift_tab`].
+/// Windows terminals). Single source of truth for the Forge `CycleEffort` and
+/// contextual `DashboardCycleMode` ActionDefs plus [`is_shift_tab`].
 pub fn shift_tab_keys() -> [KeyShortcut; 3] {
     [
         KeyShortcut::key(KeyCode::BackTab),
@@ -214,6 +214,10 @@ pub fn shift_tab_keys() -> [KeyShortcut; 3] {
 
 /// True when the event is Shift+Tab in any encoding from
 /// [`shift_tab_keys`]. Release events never match.
+///
+/// The prompt-focused binding is contributed by Forge as reasoning-effort
+/// cycling; dashboard and modal contexts may assign the same physical chord to
+/// their own contextual actions.
 pub fn is_shift_tab(key: &KeyEvent) -> bool {
     shift_tab_keys().iter().any(|k| k.matches(key))
 }

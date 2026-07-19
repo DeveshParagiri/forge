@@ -90,6 +90,8 @@ pub enum ActionId {
 
     // Prompt
     CycleMode,
+    /// Forge extension action: cycle the active model's reasoning effort.
+    CycleEffort,
     BashMode,
 
     // Scrollback (contextual)
@@ -223,14 +225,23 @@ impl ActionRegistry {
         Self { actions }
     }
 
-    /// Create the default registry with all standard actions.
-    pub fn defaults() -> Self {
-        Self::new(default_actions(false))
+    /// Compose upstream defaults with additive Forge shortcut contributions.
+    fn composed_actions(mouse_reporting_toggle_enabled: bool) -> Vec<ActionDef> {
+        let mut actions = default_actions(mouse_reporting_toggle_enabled);
+        // Forge: one narrow construction hook keeps fork key semantics and UI
+        // metadata out of upstream-owned action definitions.
+        crate::forge::shortcuts::contribute(&mut actions);
+        actions
     }
 
-    /// Create the default registry, optionally including config-gated actions.
+    /// Create the composed registry with all standard and Forge actions.
+    pub fn defaults() -> Self {
+        Self::new(Self::composed_actions(false))
+    }
+
+    /// Create the composed registry, optionally including config-gated actions.
     pub fn defaults_with_config(mouse_reporting_toggle_enabled: bool) -> Self {
-        Self::new(default_actions(mouse_reporting_toggle_enabled))
+        Self::new(Self::composed_actions(mouse_reporting_toggle_enabled))
     }
 
     /// Look up an action by key event and current context.
@@ -275,7 +286,7 @@ impl ActionRegistry {
     #[cfg(test)]
     pub fn non_vscode_for_test() -> Self {
         use crate::key;
-        let mut actions = default_actions(false);
+        let mut actions = Self::composed_actions(false);
         for def in actions.iter_mut() {
             if def.id == ActionId::Quit {
                 def.default_key = key!('q', CONTROL);
@@ -303,7 +314,7 @@ impl ActionRegistry {
     #[cfg(test)]
     pub fn apple_terminal_for_test() -> Self {
         use crate::key;
-        let mut actions = default_actions(false);
+        let mut actions = Self::composed_actions(false);
         for def in actions.iter_mut() {
             if def.id == ActionId::InterjectPrompt {
                 def.default_key = key!('o', CONTROL);
@@ -317,7 +328,7 @@ impl ActionRegistry {
     #[cfg(test)]
     pub fn vscode_family_for_test() -> Self {
         use crate::key;
-        let mut actions = default_actions(false);
+        let mut actions = Self::composed_actions(false);
         for def in actions.iter_mut() {
             if def.id == ActionId::InterjectPrompt {
                 def.default_key = key!('l', CONTROL);

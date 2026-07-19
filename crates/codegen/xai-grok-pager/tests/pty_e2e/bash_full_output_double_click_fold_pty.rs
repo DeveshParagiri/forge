@@ -101,7 +101,7 @@ async fn bash_full_output_double_click_fold_pty() {
     // 3. A failing command finishes fully expanded too.
     harness.inject_keys(b"\t").expect("refocus prompt");
     harness
-        .wait_for_text("Shift+Tab:mode", Duration::from_secs(10))
+        .wait_for_text("Shift+Tab:effort", Duration::from_secs(10))
         .expect("prompt owns keys");
     harness
         .inject_keys(b"! printf 'E%02d\\n' $(seq 1 12); false\r")

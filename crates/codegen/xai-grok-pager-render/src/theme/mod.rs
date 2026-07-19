@@ -42,10 +42,8 @@ pub enum ThemeKind {
     /// Excluded from [`ALL`] and [`available()`].
     Auto = 4,
     // Forge: stable theme registration; keep discriminant 6 for cache compatibility.
-    /// Forge UI package (fork extension):
-    /// dark chatbox chrome + package behaviors
-    /// ([`Self::package_show_shortcuts_bar_default`],
-    /// [`Self::package_shift_tab_cycles_effort`]).
+    /// Forge UI package (fork extension): dark chatbox chrome with a package
+    /// default that hides the shortcuts bar.
     Forge = 6,
 }
 
@@ -139,13 +137,6 @@ impl ThemeKind {
     pub fn package_show_shortcuts_bar_default(self) -> Option<bool> {
         // Forge: keep the stable theme API while package policy lives apart.
         crate::forge::theme_policy::package_show_shortcuts_bar_default(self)
-    }
-
-    /// When true, Shift+Tab cycles reasoning effort instead of permission mode.
-    #[must_use]
-    pub fn package_shift_tab_cycles_effort(self) -> bool {
-        // Forge: keep the stable theme API while package policy lives apart.
-        crate::forge::theme_policy::package_shift_tab_cycles_effort(self)
     }
 }
 

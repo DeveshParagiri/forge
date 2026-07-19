@@ -4,14 +4,24 @@ use super::common::*;
 
 // ── Interactive flow e2e tests ──────────────────────────────────────────
 
-/// 15. **In-session Shift+Tab cycles permission mode.**
-/// Routes BackTab through the agent view's `resolve_action`, the path that
-/// previously dropped `CycleMode`; test 2b only covers the welcome screen.
-/// With the auto gate on (client default): Normal → Plan → Auto → Always-Approve → Normal.
+/// 15. **In-session Shift+Tab cycles reasoning effort.**
+/// Routes BackTab through the composed prompt registry and verifies that the
+/// runtime action advances the active model's advertised effort menu.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore]
-async fn shift_tab_in_session_cycles_mode() {
-    let content = ContentController::start().await.expect("start content");
+async fn shift_tab_in_session_cycles_reasoning_effort() {
+    let content = ContentController::start_with_models(vec![
+        MockModel::new("test-model")
+            .with_supports_reasoning_effort(true)
+            .with_reasoning_effort("low")
+            .with_reasoning_efforts(vec![
+                json!({ "id": "low", "value": "low", "label": "Low" }),
+                json!({ "id": "medium", "value": "medium", "label": "Medium" }),
+                json!({ "id": "high", "value": "high", "label": "High" }),
+            ]),
+    ])
+    .await
+    .expect("start content");
     content.set_response(format!("{MOCK_RESPONSE_SENTINEL} turn done."));
 
     let binary = pager_binary().expect("resolve pager binary");
@@ -32,23 +42,24 @@ async fn shift_tab_in_session_cycles_mode() {
 
     harness.inject_keys(b"\x1b[Z").expect("inject BackTab");
     harness
-        .wait_for_text("Switched to mode: Plan", Duration::from_secs(10))
-        .expect("first cycle: Normal -> Plan");
+        .wait_for_text("effort · medium", Duration::from_secs(10))
+        .expect("first cycle: low -> medium");
 
     harness.inject_keys(b"\x1b[Z").expect("inject BackTab");
     harness
-        .wait_for_text("Switched to mode: Auto", Duration::from_secs(10))
-        .expect("second cycle: Plan -> Auto");
+        .wait_for_text("effort · high", Duration::from_secs(10))
+        .expect("second cycle: medium -> high");
 
     harness.inject_keys(b"\x1b[Z").expect("inject BackTab");
     harness
-        .wait_for_text("Switched to mode: Always-Approve", Duration::from_secs(10))
-        .expect("third cycle: Auto -> Always-Approve");
+        .wait_for_text("effort · low", Duration::from_secs(10))
+        .expect("third cycle: high -> low (full loop)");
 
-    harness.inject_keys(b"\x1b[Z").expect("inject BackTab");
-    harness
-        .wait_for_text("Switched to mode: Normal", Duration::from_secs(10))
-        .expect("fourth cycle: Always-Approve -> Normal (full loop)");
+    let screen = harness.screen_contents();
+    assert!(
+        !screen.contains("Switched to mode:"),
+        "effort cycling must not change permission mode\nscreen:\n{screen}"
+    );
 
     assert!(
         !harness.contains_text("panicked"),
