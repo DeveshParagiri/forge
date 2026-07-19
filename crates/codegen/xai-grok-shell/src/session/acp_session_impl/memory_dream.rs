@@ -328,9 +328,14 @@ impl SessionActor {
             .map(|c| c.model)
             .unwrap_or_default();
         let session_id = self.session_info.id.to_string();
+        // Forge: teach the existing Dream pass to consolidate model/harness
+        // preferences without introducing a separate preference store.
+        let system_prompt = crate::forge::memory_extension::extend_prompt(
+            crate::session::memory::dream::DREAM_SYSTEM_PROMPT.to_owned(),
+        );
         let request = ConversationRequest {
             items: vec![
-                ConversationItem::system(crate::session::memory::dream::DREAM_SYSTEM_PROMPT),
+                ConversationItem::system(system_prompt),
                 ConversationItem::user(user_message),
             ],
             model: Some(model),
@@ -416,6 +421,9 @@ impl SessionActor {
             } else {
                 FLUSH_SYSTEM_PROMPT.to_owned()
             };
+            // Forge: let the existing LLM-based flush infer durable routing
+            // preferences from the interaction rather than lexical triggers.
+            let system_prompt = crate::forge::memory_extension::extend_prompt(system_prompt);
             let mut items: Vec<ConversationItem> = vec![ConversationItem::system(system_prompt)];
             tracing::info!(
                 target: xai_grok_telemetry::memory_log::TARGET,
