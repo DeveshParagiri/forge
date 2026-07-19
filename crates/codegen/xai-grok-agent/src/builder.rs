@@ -1255,7 +1255,8 @@ fn task_model_guidance(model_slugs: &[String]) -> String {
     if model_slugs.is_empty() {
         return format!(
             "\n\nNo explicit model slugs are currently available. \
-             Omit `{TASK_MODEL_PARAM}` to inherit the parent model."
+             Omit `{TASK_MODEL_PARAM}` to inherit the parent model or use an external harness's \
+             configured default."
         );
     }
     let model_list = model_slugs
@@ -1264,9 +1265,11 @@ fn task_model_guidance(model_slugs: &[String]) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "\n\nIf the user explicitly asks for the model of a subagent/task, you may ONLY use model slugs from this list:\n\
+        "\n\nWhen selecting a model for a subagent/task, you may ONLY use model slugs from this list:\n\
          {model_list}\n\n\
-         If the user does not explicitly request a model, omit `{TASK_MODEL_PARAM}` to inherit the parent model."
+         Choose an explicit `{TASK_MODEL_PARAM}` only when a different model or provider adds useful \
+         specialization or an independent perspective. Otherwise omit it to inherit the parent model. \
+         For external harness types, omit it to use the CLI-configured default."
     )
 }
 /// Build the Task tool description with the effective subagent list.
@@ -1297,6 +1300,8 @@ pub(crate) fn build_task_description(
         .collect();
     let mut description = xai_tool_types::build_task_description(&descriptors, &TASK_TOOL_NAMING);
     description.push_str(&task_model_guidance(model_slugs));
+    // Exaforge: describe the additive per-task reasoning override.
+    crate::exaforge::task_guidance::append(&mut description);
     description
 }
 /// Resolve the shell name for the system prompt.
@@ -1465,13 +1470,15 @@ mod tests {
         );
         assert!(
             desc
-            .contains("If the user explicitly asks for the model of a subagent/task, you may ONLY use model slugs from this list:\n\
+                .contains("When selecting a model for a subagent/task, you may ONLY use model slugs from this list:\n\
              - alpha\n\
              - zeta")
         );
+        assert!(desc.contains(
+            "Choose an explicit `${{ params.task.model }}` only when a different model or provider adds useful specialization or an independent perspective."
+        ));
         assert!(
-            desc
-            .contains("If the user does not explicitly request a model, omit `${{ params.task.model }}` to inherit the parent model.")
+            desc.contains("For external harness types, omit it to use the CLI-configured default.")
         );
         assert!(!desc.contains("Available model slugs:"));
         assert!(!desc.contains(concat!("grok", " models")));
@@ -1485,7 +1492,9 @@ mod tests {
         )];
         let desc = build_task_description(&subagents, &[]);
         assert!(desc.contains("No explicit model slugs are currently available."));
-        assert!(desc.contains("Omit `${{ params.task.model }}` to inherit the parent model."));
+        assert!(desc.contains(
+            "Omit `${{ params.task.model }}` to inherit the parent model or use an external harness's configured default."
+        ));
         assert!(!desc.contains(concat!("grok", " models")));
     }
     #[test]

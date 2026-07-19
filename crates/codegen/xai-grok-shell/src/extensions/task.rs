@@ -392,7 +392,10 @@ pub async fn handle_subagent(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtRes
         "x.ai/subagent/cancel" => {
             let req: CancelSubagentRequest = parse(args)?;
             tracing::info!(subagent_id = %req.subagent_id, "Cancelling subagent via ext method");
-            let outcome = SubagentCancelOutcomeDto::from(agent.cancel_subagent(&req.subagent_id));
+            let native = agent.cancel_subagent(&req.subagent_id);
+            let outcome = SubagentCancelOutcomeDto::from(
+                crate::exaforge::external_subagents::resolve_cancel(&req.subagent_id, native),
+            );
             respond(Ok::<_, String>(CancelSubagentResponse {
                 subagent_id: req.subagent_id,
                 cancelled: outcome.cancelled_bool(),

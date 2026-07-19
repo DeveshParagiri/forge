@@ -1,15 +1,18 @@
-//! Headless external-agent adapters for Exaforge subagents.
+//! Provider-neutral process and lifecycle host for Exaforge CLI subagents.
 //!
-//! Native subagents continue through Grok Build's channel coordinator. Only the
-//! explicit `claude-code` and `codex-cli` types are routed to child processes.
+//! Provider-specific command construction and JSONL translation live in
+//! `external_subagents/providers/`. Adding another CLI requires an adapter and
+//! one registry entry, without changing polling, cancellation, or TUI routing.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, LazyLock, Mutex as StdMutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use agent_client_protocol as acp;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{Mutex, Notify};
 use tokio_util::sync::CancellationToken;
@@ -22,27 +25,93 @@ use xai_grok_tools::types::tool::ToolKind;
 use xai_tool_runtime::ToolError;
 use xai_tool_types::{SubagentCapabilityMode, SubagentIsolationMode};
 
-pub(crate) const CLAUDE_CODE_TYPE: &str = "claude-code";
-pub(crate) const CODEX_CLI_TYPE: &str = "codex-cli";
-const EXTERNAL_TYPES: [&str; 2] = [CLAUDE_CODE_TYPE, CODEX_CLI_TYPE];
+use self::providers::{
+    ExternalProvider, ExternalProviderSession, ProviderInvocation, ProviderState,
+};
+use super::subagent_ui::ExternalSubagentUi;
 
-/// Route explicit external harness types to headless CLIs and preserve the
-/// stock channel backend for every native/user-defined subagent.
+mod providers;
+
+pub(crate) use providers::{CLAUDE_CODE_TYPE, CODEX_CLI_TYPE};
+
+const REGISTRY_RUNNING: u8 = 0;
+const REGISTRY_COMPLETED: u8 = 1;
+const REGISTRY_FAILED: u8 = 2;
+const REGISTRY_CANCELLED: u8 = 3;
+
+struct RegistryTask {
+    cancel: CancellationToken,
+    status: AtomicU8,
+}
+
+static EXTERNAL_TASKS: LazyLock<StdMutex<HashMap<String, Arc<RegistryTask>>>> =
+    LazyLock::new(|| StdMutex::new(HashMap::new()));
+
+/// Minimal delegation target for the generic ACP cancel endpoint. External
+/// task ownership and cancellation behavior remain entirely inside Exaforge.
+pub(crate) fn resolve_cancel(id: &str, native: SubagentCancelOutcome) -> SubagentCancelOutcome {
+    if matches!(native, SubagentCancelOutcome::NotFound) {
+        cancel_registered(id)
+    } else {
+        native
+    }
+}
+
+fn cancel_registered(id: &str) -> SubagentCancelOutcome {
+    let task = EXTERNAL_TASKS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(id)
+        .cloned();
+    let Some(task) = task else {
+        return SubagentCancelOutcome::NotFound;
+    };
+    match task.status.load(Ordering::Acquire) {
+        REGISTRY_RUNNING => {
+            task.cancel.cancel();
+            SubagentCancelOutcome::Cancelled
+        }
+        REGISTRY_COMPLETED => SubagentCancelOutcome::AlreadyFinished {
+            status: "completed".to_owned(),
+        },
+        REGISTRY_CANCELLED => SubagentCancelOutcome::AlreadyFinished {
+            status: "cancelled".to_owned(),
+        },
+        _ => SubagentCancelOutcome::AlreadyFinished {
+            status: "failed".to_owned(),
+        },
+    }
+}
+
+fn register_task(id: &str, cancel: CancellationToken) -> Arc<RegistryTask> {
+    let task = Arc::new(RegistryTask {
+        cancel,
+        status: AtomicU8::new(REGISTRY_RUNNING),
+    });
+    EXTERNAL_TASKS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(id.to_owned(), task.clone());
+    task
+}
+
+/// Routes registered external harnesses to CLI adapters and preserves the
+/// stock channel backend for every native or user-defined subagent.
 pub(crate) struct CompositeSubagentBackend {
     native: Arc<dyn SubagentBackend>,
     external: ExternalSubagentBackend,
 }
 
 impl CompositeSubagentBackend {
-    pub(crate) fn new(native: Arc<dyn SubagentBackend>) -> Self {
+    pub(crate) fn new(native: Arc<dyn SubagentBackend>, ui: Option<ExternalSubagentUi>) -> Self {
         Self {
             native,
-            external: ExternalSubagentBackend::default(),
+            external: ExternalSubagentBackend::new(ui),
         }
     }
 
     fn is_external(name: &str) -> bool {
-        EXTERNAL_TYPES.contains(&name)
+        providers::find(name).is_some()
     }
 }
 
@@ -110,11 +179,7 @@ impl SubagentBackend for CompositeSubagentBackend {
         } else {
             match self
                 .native
-                .describe_subagent_type(
-                    subagent_type,
-                    harness_agent_type,
-                    parent_session_id,
-                )
+                .describe_subagent_type(subagent_type, harness_agent_type, parent_session_id)
                 .await
             {
                 SubagentDescribeOutcome::Unknown { mut available } => {
@@ -128,7 +193,7 @@ impl SubagentBackend for CompositeSubagentBackend {
 }
 
 fn extend_available(available: &mut Vec<String>) {
-    for name in EXTERNAL_TYPES {
+    for name in providers::names() {
         if !available.iter().any(|candidate| candidate == name) {
             available.push(name.to_owned());
         }
@@ -148,25 +213,23 @@ fn external_type_summary() -> SubagentTypeSummary {
         can_read: true,
         can_search: true,
         can_execute: true,
-        can_edit: true,
-        can_write: true,
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct ExternalSubagentBackend {
     tasks: Arc<Mutex<HashMap<String, Arc<ExternalTask>>>>,
-}
-
-struct ExternalTask {
-    snapshot: Mutex<SubagentSnapshot>,
-    result: Mutex<Option<SubagentResult>>,
-    external_session_id: Mutex<Option<String>>,
-    cancel: CancellationToken,
-    completed: Notify,
+    ui: Option<ExternalSubagentUi>,
 }
 
 impl ExternalSubagentBackend {
+    fn new(ui: Option<ExternalSubagentUi>) -> Self {
+        Self {
+            tasks: Arc::default(),
+            ui,
+        }
+    }
+
     async fn contains(&self, id: &str) -> bool {
         self.tasks.lock().await.contains_key(id)
     }
@@ -189,24 +252,34 @@ impl ExternalSubagentBackend {
             )));
         }
         drop(snapshot);
-        let session_id = task.external_session_id.lock().await.clone();
-        session_id.ok_or_else(|| {
-            ToolError::invalid_arguments(format!(
-                "Cannot resume external subagent '{id}': the CLI did not return a session ID"
-            ))
-        })
+        task.external_session_id
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| {
+                ToolError::invalid_arguments(format!(
+                    "Cannot resume external subagent '{id}': the CLI did not return a session ID"
+                ))
+            })
     }
 
     async fn run(&self, request: SubagentRequest) -> Result<SubagentResult, ToolError> {
-        let started_at_epoch_ms = now_epoch_ms();
+        let resume_session_id = match request.resume_from.as_deref() {
+            Some(source) => Some(
+                self.resume_session_id(source, &request.subagent_type)
+                    .await?,
+            ),
+            None => None,
+        };
+        let mut spec = ExternalCommandSpec::from_request(&request, resume_session_id.as_deref())?;
         let started = Instant::now();
         let task = Arc::new(ExternalTask {
             snapshot: Mutex::new(SubagentSnapshot {
                 subagent_id: request.id.clone(),
                 description: request.description.clone(),
                 subagent_type: request.subagent_type.clone(),
-                status: SubagentSnapshotStatus::Initializing,
-                started_at_epoch_ms,
+                status: running_status(0, 0, 0, 0, 0, Vec::new(), 0),
+                started_at_epoch_ms: now_epoch_ms(),
                 duration_ms: 0,
                 persona: None,
             }),
@@ -219,22 +292,38 @@ impl ExternalSubagentBackend {
             .lock()
             .await
             .insert(request.id.clone(), task.clone());
+        let registry_task = register_task(&request.id, task.cancel.clone());
 
-        let resume_session_id = match request.resume_from.as_deref() {
-            Some(source) => Some(
-                self.resume_session_id(source, &request.subagent_type)
-                    .await?,
-            ),
-            None => None,
-        };
-        let spec = ExternalCommandSpec::from_request(&request, resume_session_id.as_deref())?;
-
-        {
-            let mut snapshot = task.snapshot.lock().await;
-            snapshot.status = running_status(0, 0);
+        if let Some(ui) = &self.ui {
+            let effective_model = spawned_model(&spec);
+            persist_external_child_meta(
+                ui.parent_session_id(),
+                ui.parent_cwd(),
+                &request,
+                &spec.cwd,
+                &effective_model,
+            );
+            ui.spawned(
+                &request.id,
+                &request.subagent_type,
+                &request.description,
+                &request.prompt,
+                &spec.cwd,
+                request.parent_prompt_id.clone(),
+                request
+                    .runtime_overrides
+                    .capability_mode
+                    .map(|mode| mode.as_str().to_owned()),
+                Some(effective_model),
+                request.resume_from.clone(),
+                spec.provider.display_name(),
+            );
+            ui.workspace(&request.id, &spec.cwd).await;
+            ui.progress(&request.id, 0, 0, 0, 0, 0, 0, Vec::new(), 0);
         }
 
-        let result = run_external_process(&request, &spec, &task, started).await;
+        let result =
+            run_external_process(&request, &mut spec, &task, started, self.ui.as_ref()).await;
         let result = match result {
             Ok(result) => result,
             Err(error) => SubagentResult {
@@ -242,18 +331,26 @@ impl ExternalSubagentBackend {
                 error: Some(error.to_string()),
                 cancelled: task.cancel.is_cancelled(),
                 subagent_id: request.id.clone(),
-                child_session_id: task
-                    .external_session_id
-                    .lock()
-                    .await
-                    .clone()
-                    .unwrap_or_else(|| request.id.clone()),
+                child_session_id: request.id.clone(),
                 duration_ms: started.elapsed().as_millis() as u64,
                 ..Default::default()
             },
         };
+        let (registry_status, ui_status) = if result.cancelled {
+            (REGISTRY_CANCELLED, "cancelled")
+        } else if result.success {
+            (REGISTRY_COMPLETED, "completed")
+        } else {
+            (REGISTRY_FAILED, "failed")
+        };
+        registry_task
+            .status
+            .store(registry_status, Ordering::Release);
+
         let terminal_status = if result.cancelled {
-            SubagentSnapshotStatus::Cancelled
+            SubagentSnapshotStatus::Cancelled {
+                reason: result.error.clone(),
+            }
         } else if result.success {
             SubagentSnapshotStatus::Completed {
                 output: result.output.to_string(),
@@ -276,8 +373,28 @@ impl ExternalSubagentBackend {
         }
         *task.result.lock().await = Some(result.clone());
         task.completed.notify_waiters();
+        if let Some(ui) = &self.ui {
+            ui.finished(
+                &request.id,
+                ui_status,
+                result.error.clone(),
+                result.tool_calls,
+                result.turns,
+                result.duration_ms,
+                result.tokens_used,
+                result.success.then(|| result.output.to_string()),
+            );
+        }
         Ok(result)
     }
+}
+
+struct ExternalTask {
+    snapshot: Mutex<SubagentSnapshot>,
+    result: Mutex<Option<SubagentResult>>,
+    external_session_id: Mutex<Option<String>>,
+    cancel: CancellationToken,
+    completed: Notify,
 }
 
 #[async_trait::async_trait]
@@ -319,11 +436,11 @@ impl SubagentBackend for ExternalSubagentBackend {
         subagent_type: &str,
         _parent_session_id: &str,
     ) -> SubagentValidateTypeOutcome {
-        if EXTERNAL_TYPES.contains(&subagent_type) {
+        if providers::find(subagent_type).is_some() {
             SubagentValidateTypeOutcome::Ok
         } else {
             SubagentValidateTypeOutcome::Unknown {
-                available: EXTERNAL_TYPES.iter().map(|name| (*name).to_owned()).collect(),
+                available: providers::names().map(str::to_owned).collect(),
             }
         }
     }
@@ -334,31 +451,31 @@ impl SubagentBackend for ExternalSubagentBackend {
         _harness_agent_type: Option<&str>,
         _parent_session_id: &str,
     ) -> SubagentDescribeOutcome {
-        if EXTERNAL_TYPES.contains(&subagent_type) {
+        if providers::find(subagent_type).is_some() {
             SubagentDescribeOutcome::Ok(external_type_summary())
         } else {
             SubagentDescribeOutcome::Unknown {
-                available: EXTERNAL_TYPES.iter().map(|name| (*name).to_owned()).collect(),
+                available: providers::names().map(str::to_owned).collect(),
             }
         }
     }
 }
 
 struct ExternalCommandSpec {
-    program: &'static str,
-    args: Vec<String>,
+    provider: &'static dyn ExternalProvider,
+    session: Box<dyn ExternalProviderSession>,
     cwd: PathBuf,
-    kind: ExternalKind,
 }
 
-#[derive(Clone, Copy)]
-enum ExternalKind {
-    Claude,
-    Codex,
+fn spawned_model(spec: &ExternalCommandSpec) -> String {
+    spec.session.state().effective_model.clone()
 }
 
 impl ExternalCommandSpec {
-    fn from_request(request: &SubagentRequest, resume_session_id: Option<&str>) -> Result<Self, ToolError> {
+    fn from_request(
+        request: &SubagentRequest,
+        resume_session_id: Option<&str>,
+    ) -> Result<Self, ToolError> {
         if request.fork_context {
             return Err(ToolError::invalid_arguments(
                 "External CLI subagents do not support fork_context",
@@ -374,134 +491,106 @@ impl ExternalCommandSpec {
                 "External CLI subagents do not yet support isolation=worktree; provide cwd or use isolation=none",
             ));
         }
-        let cwd = request
-            .cwd
-            .as_deref()
-            .map(PathBuf::from)
-            .unwrap_or(std::env::current_dir().map_err(|error| {
-                ToolError::custom("cwd_unavailable", format!("Cannot resolve cwd: {error}"))
-            })?);
+        let cwd =
+            request
+                .cwd
+                .as_deref()
+                .map(PathBuf::from)
+                .unwrap_or(std::env::current_dir().map_err(|error| {
+                    ToolError::custom("cwd_unavailable", format!("Cannot resolve cwd: {error}"))
+                })?);
         if !cwd.is_dir() {
             return Err(ToolError::invalid_arguments(format!(
                 "cwd '{}' is not a directory",
                 cwd.display()
             )));
         }
-        let capability = request
-            .runtime_overrides
-            .capability_mode
-            .unwrap_or(SubagentCapabilityMode::All);
-        let model = request.runtime_overrides.model.as_deref();
-        match request.subagent_type.as_str() {
-            CLAUDE_CODE_TYPE => Ok(Self {
-                program: "claude",
-                args: claude_args(&request.prompt, capability, model, resume_session_id),
-                cwd,
-                kind: ExternalKind::Claude,
-            }),
-            CODEX_CLI_TYPE => Ok(Self {
-                program: "codex",
-                args: codex_args(&request.prompt, capability, model, resume_session_id),
-                cwd,
-                kind: ExternalKind::Codex,
-            }),
-            other => Err(ToolError::invalid_arguments(format!(
-                "Unsupported external subagent type: {other}"
-            ))),
-        }
+        let provider = providers::find(&request.subagent_type).ok_or_else(|| {
+            ToolError::invalid_arguments(format!(
+                "Unsupported external subagent type: {}",
+                request.subagent_type
+            ))
+        })?;
+        let session = provider.create_session(
+            ProviderInvocation {
+                prompt: &request.prompt,
+                capability: request
+                    .runtime_overrides
+                    .capability_mode
+                    .unwrap_or(SubagentCapabilityMode::All),
+                model: request.runtime_overrides.model.as_deref(),
+                reasoning_effort: request.runtime_overrides.reasoning_effort.as_deref(),
+                resume_session_id,
+            },
+            &cwd,
+        );
+        Ok(Self {
+            provider,
+            session,
+            cwd,
+        })
     }
-}
-
-fn claude_args(
-    prompt: &str,
-    capability: SubagentCapabilityMode,
-    model: Option<&str>,
-    resume_session_id: Option<&str>,
-) -> Vec<String> {
-    let mut args = vec![
-        "--print".to_owned(),
-        "--output-format".to_owned(),
-        "stream-json".to_owned(),
-        "--verbose".to_owned(),
-        "--forward-subagent-text".to_owned(),
-        "--permission-mode".to_owned(),
-        "dontAsk".to_owned(),
-        "--allowedTools".to_owned(),
-        claude_allowed_tools(capability).to_owned(),
-    ];
-    if let Some(model) = model {
-        args.extend(["--model".to_owned(), model.to_owned()]);
-    }
-    if let Some(session_id) = resume_session_id {
-        args.extend(["--resume".to_owned(), session_id.to_owned()]);
-    }
-    args.push(prompt.to_owned());
-    args
-}
-
-fn claude_allowed_tools(capability: SubagentCapabilityMode) -> &'static str {
-    match capability {
-        SubagentCapabilityMode::ReadOnly => "Read,Glob,Grep,WebSearch,WebFetch",
-        SubagentCapabilityMode::ReadWrite => {
-            "Read,Glob,Grep,Edit,Write,NotebookEdit,WebSearch,WebFetch"
-        }
-        SubagentCapabilityMode::Execute => "Read,Glob,Grep,Bash,WebSearch,WebFetch",
-        SubagentCapabilityMode::All => {
-            "Read,Glob,Grep,Edit,Write,NotebookEdit,Bash,WebSearch,WebFetch"
-        }
-    }
-}
-
-fn codex_args(
-    prompt: &str,
-    capability: SubagentCapabilityMode,
-    model: Option<&str>,
-    resume_session_id: Option<&str>,
-) -> Vec<String> {
-    let sandbox = match capability {
-        SubagentCapabilityMode::ReadOnly | SubagentCapabilityMode::Execute => "read-only",
-        SubagentCapabilityMode::ReadWrite | SubagentCapabilityMode::All => "workspace-write",
-    };
-    let mut args = vec!["exec".to_owned()];
-    if let Some(session_id) = resume_session_id {
-        args.extend(["resume".to_owned(), session_id.to_owned()]);
-    }
-    args.extend([
-        "--json".to_owned(),
-        "--sandbox".to_owned(),
-        sandbox.to_owned(),
-        "--skip-git-repo-check".to_owned(),
-    ]);
-    if let Some(model) = model {
-        args.extend(["--model".to_owned(), model.to_owned()]);
-    }
-    args.push(prompt.to_owned());
-    args
 }
 
 async fn run_external_process(
     request: &SubagentRequest,
-    spec: &ExternalCommandSpec,
+    spec: &mut ExternalCommandSpec,
     task: &Arc<ExternalTask>,
     started: Instant,
+    ui: Option<&ExternalSubagentUi>,
 ) -> Result<SubagentResult, ToolError> {
-    let mut child = Command::new(spec.program)
-        .args(&spec.args)
+    let program = spec.session.program();
+    let args = spec.session.args().to_vec();
+    let initial_input = spec.session.initial_input();
+    let interactive = !initial_input.is_empty();
+    let mut command = Command::new(program);
+    command
+        .args(&args)
         .current_dir(&spec.cwd)
-        .stdin(Stdio::null())
+        .stdin(if interactive {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
+        .kill_on_drop(true);
+    // Own the complete CLI tree. npm/sh wrappers can otherwise exit before a
+    // long-lived app-server descendant, leaving it re-parented and unkillable
+    // through the Tokio child handle.
+    xai_tty_utils::new_process_group(&mut command);
+    let mut process_group = xai_tty_utils::ProcessGroup::new().map_err(|error| {
+        ToolError::custom(
+            "external_cli_unavailable",
+            format!("Cannot create a process group for {program}: {error}"),
+        )
+    })?;
+    let mut child = command
         .spawn()
         .map_err(|error| {
             ToolError::custom(
                 "external_cli_unavailable",
                 format!(
-                    "Cannot start {} for subagent '{}': {error}. Ensure the CLI is installed and authenticated.",
-                    spec.program, request.subagent_type
+                    "Cannot start {program} for subagent '{}': {error}. Ensure the CLI is installed and authenticated.",
+                    request.subagent_type
                 ),
             )
         })?;
+    if let Err(error) = process_group.attach(&child) {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        return Err(ToolError::custom(
+            "external_cli_unavailable",
+            format!("Cannot attach {program} to its process group: {error}"),
+        ));
+    }
+    let mut stdin = child.stdin.take();
+    if let Some(writer) = stdin.as_mut()
+        && let Err(error) = write_provider_messages(writer, initial_input).await
+    {
+        kill_external_process_group(&process_group, &mut child).await;
+        return Err(error);
+    }
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
     let stderr_task = tokio::spawn(async move {
@@ -511,14 +600,15 @@ async fn run_external_process(
         output
     });
     let mut lines = BufReader::new(stdout).lines();
-    let mut parsed = ParsedOutput::default();
+    let mut protocol_terminal: Option<Result<(), String>> = None;
 
     loop {
         tokio::select! {
             _ = task.cancel.cancelled() => {
-                let _ = child.kill().await;
+                kill_external_process_group(&process_group, &mut child).await;
                 let _ = child.wait().await;
                 let stderr = stderr_task.await.unwrap_or_default();
+                let state = spec.session.state();
                 return Ok(SubagentResult {
                     success: false,
                     output: Arc::from(""),
@@ -526,29 +616,81 @@ async fn run_external_process(
                     cancelled: true,
                     subagent_id: request.id.clone(),
                     child_session_id: request.id.clone(),
-                    tool_calls: parsed.tool_calls,
-                    turns: parsed.turns,
+                    tool_calls: state.tool_calls,
+                    turns: state.turns,
                     duration_ms: started.elapsed().as_millis() as u64,
+                    tokens_used: state.tokens_used,
                     ..Default::default()
                 });
             }
             line = lines.next_line() => {
                 match line {
                     Ok(Some(line)) => {
-                        parse_event(spec.kind, &line, &mut parsed);
-                        if let Some(session_id) = parsed.session_id.clone() {
+                        let update = spec.session.handle_line(&line);
+                        if !update.outbound.is_empty() {
+                            let write_result = match stdin.as_mut() {
+                                Some(writer) => write_provider_messages(writer, update.outbound).await,
+                                None => Err(ToolError::custom(
+                                    "external_protocol_error",
+                                    format!("{program} requested an interactive protocol write without piped stdin"),
+                                )),
+                            };
+                            if let Err(error) = write_result {
+                                kill_external_process_group(&process_group, &mut child).await;
+                                let _ = stderr_task.await;
+                                return Err(error);
+                            }
+                        }
+                        let state = spec.session.state();
+                        if let Some(session_id) = state.session_id.clone() {
                             *task.external_session_id.lock().await = Some(session_id);
+                        }
+                        let tools_used = sorted_tools(state);
+                        if let Some(ui) = ui {
+                            for event in update.events {
+                                ui.child_event(&request.id, event);
+                            }
+                            ui.progress(
+                                &request.id,
+                                started.elapsed().as_millis() as u64,
+                                state.turns,
+                                state.tool_calls,
+                                state.tokens_used,
+                                state.context_window_tokens,
+                                state.context_usage_pct(),
+                                tools_used.clone(),
+                                state.error_count,
+                            );
+                            if state.tokens_used > 0 {
+                                ui.context(&request.id, state.tokens_used);
+                            }
                         }
                         let mut snapshot = task.snapshot.lock().await;
                         snapshot.duration_ms = started.elapsed().as_millis() as u64;
-                        snapshot.status = running_status(parsed.turns, parsed.tool_calls);
+                        snapshot.status = running_status(
+                            state.turns,
+                            state.tool_calls,
+                            state.tokens_used,
+                            state.context_window_tokens,
+                            state.context_usage_pct(),
+                            tools_used,
+                            state.error_count,
+                        );
+                        if let Some(terminal) = update.terminal {
+                            protocol_terminal = Some(terminal);
+                            // Do not keep the stdout reader borrowed while
+                            // terminating the long-lived app-server tree.
+                            drop(lines);
+                            kill_external_process_group(&process_group, &mut child).await;
+                            break;
+                        }
                     }
                     Ok(None) => break,
                     Err(error) => {
-                        let _ = child.kill().await;
+                        kill_external_process_group(&process_group, &mut child).await;
                         return Err(ToolError::custom(
                             "external_stream_error",
-                            format!("Failed reading {} JSON stream: {error}", spec.program),
+                            format!("Failed reading {program} JSON stream: {error}"),
                         ));
                     }
                 }
@@ -556,132 +698,171 @@ async fn run_external_process(
         }
     }
 
-    let status = child.wait().await.map_err(|error| {
-        ToolError::custom(
-            "external_cli_wait_failed",
-            format!("Failed waiting for {}: {error}", spec.program),
-        )
-    })?;
+    // App-server is intentionally long-lived; protocol terminal events already
+    // stopped its complete process group inside the read loop.
+    let status = match child.wait().await {
+        Ok(status) => status,
+        Err(error) => {
+            let _ = process_group.kill();
+            let _ = child.kill().await;
+            return Err(ToolError::custom(
+                "external_cli_wait_failed",
+                format!("Failed waiting for {program}: {error}"),
+            ));
+        }
+    };
     let stderr = stderr_task.await.unwrap_or_default();
-    let external_session_id = parsed
-        .session_id
-        .clone()
-        .unwrap_or_else(|| request.id.clone());
-    *task.external_session_id.lock().await = parsed.session_id.clone();
-    if !status.success() {
+    let state = spec.session.state();
+    *task.external_session_id.lock().await = state.session_id.clone();
+    if let Some(Err(error)) = protocol_terminal {
+        return Ok(failed_external_result(request, state, started, error));
+    }
+    if protocol_terminal.is_none() && !status.success() {
         let detail = if stderr.trim().is_empty() {
-            format!("{} exited with status {status}", spec.program)
+            format!("{program} exited with status {status}")
         } else {
             stderr.trim().to_owned()
         };
-        return Ok(SubagentResult {
-            success: false,
-            error: Some(detail),
-            subagent_id: request.id.clone(),
-            child_session_id: external_session_id,
-            tool_calls: parsed.tool_calls,
-            turns: parsed.turns,
-            duration_ms: started.elapsed().as_millis() as u64,
-            ..Default::default()
-        });
+        return Ok(failed_external_result(request, state, started, detail));
     }
-    if parsed.final_text.trim().is_empty() {
-        parsed.final_text = "External subagent completed without a final text response.".to_owned();
-    }
+    let output = if state.final_text.trim().is_empty() {
+        "External subagent completed without a final text response.".to_owned()
+    } else {
+        state.final_text.clone()
+    };
     Ok(SubagentResult {
         success: true,
-        output: Arc::from(parsed.final_text),
+        output: Arc::from(output),
         subagent_id: request.id.clone(),
-        child_session_id: external_session_id,
-        tool_calls: parsed.tool_calls,
-        turns: parsed.turns.max(1),
+        child_session_id: request.id.clone(),
+        tool_calls: state.tool_calls,
+        turns: state.turns.max(1),
         duration_ms: started.elapsed().as_millis() as u64,
+        tokens_used: state.tokens_used,
         worktree_path: None,
         ..Default::default()
     })
 }
 
-#[derive(Default)]
-struct ParsedOutput {
-    final_text: String,
-    session_id: Option<String>,
-    tool_calls: u32,
-    turns: u32,
-}
-
-fn parse_event(kind: ExternalKind, line: &str, output: &mut ParsedOutput) {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+async fn kill_external_process_group(
+    process_group: &xai_tty_utils::ProcessGroup,
+    child: &mut tokio::process::Child,
+) {
+    let _ = process_group.terminate();
+    // Give wrappers and descendants a brief chance to close cleanly.
+    if tokio::time::timeout(Duration::from_millis(500), child.wait())
+        .await
+        .is_ok()
+    {
+        // The direct child may have exited before its app-server descendant.
+        // Always close the validated group after reaping the leader.
+        let _ = process_group.kill();
         return;
+    }
+    let _ = process_group.kill();
+    let _ = child.kill().await;
+    let _ = child.wait().await;
+}
+
+async fn write_provider_messages(
+    stdin: &mut tokio::process::ChildStdin,
+    messages: Vec<String>,
+) -> Result<(), ToolError> {
+    for message in messages {
+        stdin.write_all(message.as_bytes()).await.map_err(|error| {
+            ToolError::custom(
+                "external_protocol_error",
+                format!("Failed writing provider protocol message: {error}"),
+            )
+        })?;
+        stdin.write_all(b"\n").await.map_err(|error| {
+            ToolError::custom(
+                "external_protocol_error",
+                format!("Failed terminating provider protocol message: {error}"),
+            )
+        })?;
+    }
+    stdin.flush().await.map_err(|error| {
+        ToolError::custom(
+            "external_protocol_error",
+            format!("Failed flushing provider protocol messages: {error}"),
+        )
+    })
+}
+
+fn persist_external_child_meta(
+    parent_session_id: &str,
+    parent_cwd: &Path,
+    request: &SubagentRequest,
+    cwd: &Path,
+    effective_model: &str,
+) {
+    let parent_info = crate::session::info::Info {
+        id: acp::SessionId::new(parent_session_id.to_owned()),
+        cwd: parent_cwd.to_string_lossy().into_owned(),
     };
-    match kind {
-        ExternalKind::Claude => parse_claude_event(&value, output),
-        ExternalKind::Codex => parse_codex_event(&value, output),
+    let dir = crate::session::persistence::session_dir(&parent_info)
+        .join("subagents")
+        .join(&request.id);
+    if let Err(error) = std::fs::create_dir_all(&dir) {
+        tracing::warn!(%error, subagent_id = request.id, "failed to create external subagent metadata directory");
+        return;
+    }
+    let meta = serde_json::json!({
+        "prompt": request.prompt,
+        "child_cwd": cwd,
+        "worktree_path": null,
+        "effective_model_id": effective_model
+    });
+    if let Err(error) = std::fs::write(
+        dir.join("meta.json"),
+        serde_json::to_vec_pretty(&meta).unwrap_or_default(),
+    ) {
+        tracing::warn!(%error, subagent_id = request.id, "failed to persist external subagent metadata");
     }
 }
 
-fn parse_claude_event(value: &serde_json::Value, output: &mut ParsedOutput) {
-    if let Some(session_id) = value.get("session_id").and_then(|v| v.as_str()) {
-        output.session_id = Some(session_id.to_owned());
-    }
-    match value.get("type").and_then(|v| v.as_str()) {
-        Some("assistant") => {
-            output.turns = output.turns.saturating_add(1);
-            if let Some(content) = value
-                .pointer("/message/content")
-                .and_then(|content| content.as_array())
-            {
-                output.tool_calls = output.tool_calls.saturating_add(
-                    content
-                        .iter()
-                        .filter(|item| item.get("type").and_then(|v| v.as_str()) == Some("tool_use"))
-                        .count() as u32,
-                );
-            }
-        }
-        Some("result") => {
-            if let Some(result) = value.get("result").and_then(|v| v.as_str()) {
-                output.final_text = result.to_owned();
-            }
-        }
-        _ => {}
+fn failed_external_result(
+    request: &SubagentRequest,
+    state: &ProviderState,
+    started: Instant,
+    error: String,
+) -> SubagentResult {
+    SubagentResult {
+        success: false,
+        error: Some(error),
+        subagent_id: request.id.clone(),
+        child_session_id: request.id.clone(),
+        tool_calls: state.tool_calls,
+        turns: state.turns,
+        duration_ms: started.elapsed().as_millis() as u64,
+        tokens_used: state.tokens_used,
+        ..Default::default()
     }
 }
-
-fn parse_codex_event(value: &serde_json::Value, output: &mut ParsedOutput) {
-    match value.get("type").and_then(|v| v.as_str()) {
-        Some("thread.started") => {
-            if let Some(thread_id) = value.get("thread_id").and_then(|v| v.as_str()) {
-                output.session_id = Some(thread_id.to_owned());
-            }
-        }
-        Some("turn.completed") => output.turns = output.turns.saturating_add(1),
-        Some("item.completed") => {
-            let item_type = value.pointer("/item/type").and_then(|v| v.as_str());
-            if item_type == Some("agent_message")
-                && let Some(text) = value.pointer("/item/text").and_then(|v| v.as_str())
-            {
-                output.final_text = text.to_owned();
-            }
-            if matches!(
-                item_type,
-                Some("command_execution" | "file_change" | "mcp_tool_call")
-            ) {
-                output.tool_calls = output.tool_calls.saturating_add(1);
-            }
-        }
-        _ => {}
-    }
+fn sorted_tools(state: &ProviderState) -> Vec<String> {
+    let mut tools = state.tools_used.iter().cloned().collect::<Vec<_>>();
+    tools.sort();
+    tools
 }
 
-fn running_status(turn_count: u32, tool_call_count: u32) -> SubagentSnapshotStatus {
+fn running_status(
+    turn_count: u32,
+    tool_call_count: u32,
+    tokens_used: u64,
+    context_window_tokens: u64,
+    context_usage_pct: u8,
+    tools_used: Vec<String>,
+    error_count: u32,
+) -> SubagentSnapshotStatus {
     SubagentSnapshotStatus::Running {
         turn_count,
         tool_call_count,
-        tokens_used: 0,
-        context_window_tokens: 0,
-        context_usage_pct: 0,
-        tools_used: Vec::new(),
-        error_count: 0,
+        tokens_used,
+        context_window_tokens,
+        context_usage_pct,
+        tools_used,
+        error_count,
     }
 }
 
@@ -697,52 +878,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn claude_capabilities_never_use_dangerous_bypass() {
-        let args = claude_args(
-            "test",
-            SubagentCapabilityMode::All,
-            None,
-            None,
-        );
-        assert!(!args.iter().any(|arg| arg.contains("dangerously")));
-        assert!(args.iter().any(|arg| arg == "dontAsk"));
+    fn registry_cancel_is_exaforge_owned() {
+        let id = format!("registry-test-{}", now_epoch_ms());
+        let token = CancellationToken::new();
+        let registered = register_task(&id, token.clone());
+        assert!(matches!(
+            cancel_registered(&id),
+            SubagentCancelOutcome::Cancelled
+        ));
+        assert!(token.is_cancelled());
+        registered
+            .status
+            .store(REGISTRY_COMPLETED, Ordering::Release);
+        assert!(matches!(
+            cancel_registered(&id),
+            SubagentCancelOutcome::AlreadyFinished { status } if status == "completed"
+        ));
+        EXTERNAL_TASKS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&id);
     }
 
     #[test]
-    fn codex_capabilities_use_bounded_sandboxes() {
-        let all = codex_args("test", SubagentCapabilityMode::All, None, None);
-        assert!(all.iter().any(|arg| arg == "workspace-write"));
-        assert!(!all.iter().any(|arg| arg.contains("dangerously")));
-        let read_only = codex_args("test", SubagentCapabilityMode::ReadOnly, None, None);
-        assert!(read_only.iter().any(|arg| arg == "read-only"));
-    }
-
-    #[test]
-    fn parses_claude_result_and_session() {
-        let mut output = ParsedOutput::default();
-        parse_event(
-            ExternalKind::Claude,
-            r#"{"type":"result","session_id":"claude-session","result":"done"}"#,
-            &mut output,
-        );
-        assert_eq!(output.session_id.as_deref(), Some("claude-session"));
-        assert_eq!(output.final_text, "done");
-    }
-
-    #[test]
-    fn parses_codex_result_and_session() {
-        let mut output = ParsedOutput::default();
-        parse_event(
-            ExternalKind::Codex,
-            r#"{"type":"thread.started","thread_id":"codex-session"}"#,
-            &mut output,
-        );
-        parse_event(
-            ExternalKind::Codex,
-            r#"{"type":"item.completed","item":{"type":"agent_message","text":"done"}}"#,
-            &mut output,
-        );
-        assert_eq!(output.session_id.as_deref(), Some("codex-session"));
-        assert_eq!(output.final_text, "done");
+    fn available_types_come_from_provider_registry() {
+        let mut available = vec!["general-purpose".to_owned()];
+        extend_available(&mut available);
+        assert!(available.iter().any(|name| name == CLAUDE_CODE_TYPE));
+        assert!(available.iter().any(|name| name == CODEX_CLI_TYPE));
     }
 }

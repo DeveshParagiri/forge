@@ -83,7 +83,11 @@ fn all_subagents_with_home(
     grok_home: Option<&Path>,
 ) -> Vec<SubagentEntry> {
     let discovered = discover_with_home(cwd, home, grok_home);
-    merge_subagents(discovered, toggle)
+    let mut entries = merge_subagents(discovered, toggle);
+    // Exaforge: advertise headless external harness adapters alongside the
+    // stock built-in and user-defined subagents.
+    crate::exaforge::external_subagents::append(&mut entries, toggle);
+    entries
 }
 
 /// Internal: merge discovered agents with built-in subagents, apply toggles.
@@ -438,6 +442,8 @@ fn all_subagents_with_plugins_and_home(
         }
     }
 
+    // Exaforge: the plugin-aware path is the normal prompt/runtime roster.
+    crate::exaforge::external_subagents::append(&mut entries, toggle);
     entries
 }
 
