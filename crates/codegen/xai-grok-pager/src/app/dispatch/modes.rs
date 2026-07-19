@@ -550,9 +550,9 @@ pub(super) fn dispatch_cycle_effort(app: &mut AppView) -> Vec<Effect> {
         .and_then(|c| options.iter().position(|o| o.value == c))
         .unwrap_or(0);
     let next = options[(idx + 1) % options.len()].clone();
-    let label = next.id.clone();
     let effort = next.value;
-    agent.show_mode_switch_banner(&format!("Effort: {label}"));
+    // Quiet: only a short toast — no scrollback spam, no mode banner.
+    agent.show_toast(&format!("effort · {}", next.id));
     // Mirror Action::SwitchModel: defer until session exists.
     let Some(session_id) = agent.session.session_id.clone() else {
         agent.session.deferred_model_switch = Some((model_id, Some(effort)));

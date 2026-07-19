@@ -1067,9 +1067,11 @@ pub(in crate::app::dispatch) fn handle_switch_model_complete(
                 let prev_effort = agent.session.models.reasoning_effort;
                 agent.session.models.set_current(model_id.clone(), effort);
                 let resolved_effort = agent.session.models.reasoning_effort;
-                let unchanged =
-                    prev_model.as_ref() == Some(&model_id) && prev_effort == resolved_effort;
-                if !unchanged {
+                let same_model = prev_model.as_ref() == Some(&model_id);
+                let unchanged = same_model && prev_effort == resolved_effort;
+                // Effort-only changes (Shift+Tab / /effort): no scrollback spam.
+                // Full model switches still get a system line.
+                if !unchanged && !same_model {
                     let msg = if let Some(eff) = resolved_effort {
                         format!("Switched to {display_name} ({eff} effort)")
                     } else {
