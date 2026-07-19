@@ -45,6 +45,9 @@ use xai_grok_shell::leader::{
     ControlPayload, LeaderClient, LeaderEnvUrls, connect_or_spawn, socket_path_for_ws_url,
 };
 use xai_grok_update::{UpdateConfig, auto_update, enforce_minimum_version_or_exit};
+
+// Forge: substantive fork-owned CLI behavior lives under this module.
+mod forge;
 /// Apply headless args to an existing config, only overriding values that are
 /// explicitly set. This allows environment defaults to be preserved when
 /// specific args are not provided.
@@ -1879,6 +1882,19 @@ async fn async_main() -> Result<()> {
                 stable,
                 enterprise,
             } => {
+                // Forge: a plain `grok update` delegates to the source updater;
+                // explicit stock channel/version flags retain upstream behavior.
+                if forge::update::should_handle(
+                    check,
+                    json,
+                    force_reinstall,
+                    version.as_deref(),
+                    alpha,
+                    stable,
+                    enterprise,
+                ) {
+                    return forge::update::run();
+                }
                 init_tracing_simple("cli");
                 let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
                 let channel_switch = get_channel_switch(alpha, stable, enterprise);

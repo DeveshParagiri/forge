@@ -51,14 +51,14 @@ additional harnesses in the future.
 
 ### Prerequisites
 
-Building Forge currently requires:
+The default installer requires `curl`, `tar`, and either `shasum` or
+`sha256sum`. It downloads a checksummed prebuilt binary, so ordinary users do
+not need Rust, Cargo, Git, `dotslash`, or `protoc`.
 
-- Git
-- [Rust](https://rustup.rs/) and `cargo`
-- Either [`dotslash`](https://dotslash-cli.com/) or `protoc` on `PATH`
-
-The installer checks these prerequisites and stops with a clear message if one
-is missing. It does not install system packages or alter shell configuration.
+Building Forge from source requires Git, [Rust](https://rustup.rs/) and `cargo`,
+plus either [`dotslash`](https://dotslash-cli.com/) or `protoc` on `PATH`. The
+installer checks prerequisites and does not install system packages or alter
+shell configuration.
 
 ### Install from GitHub
 
@@ -66,28 +66,26 @@ is missing. It does not install system packages or alter shell configuration.
 curl -fsSL https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install | sh
 ```
 
-The installer clones the published `main` branch into
-`~/.local/share/grok/source`, performs a release build, and atomically installs
-the executable at `~/.grok/bin/grok`. On macOS, it ad-hoc signs the installed
-binary when `codesign` is available. Compatibility links are created for common
-previous install locations.
+The installer detects the operating system and architecture, downloads the
+matching artifact from the latest GitHub Release, verifies its SHA-256 checksum,
+and atomically installs it at `~/.grok/bin/grok`. On macOS, it ad-hoc signs the
+installed binary when `codesign` is available. Compatibility links are created
+for common previous install locations.
 
-Configuration, authentication, and sessions under `~/.grok/` are preserved. A
-managed checkout using the former `DeveshParagiri/grok-build` remote is migrated
-to the renamed Forge repository automatically.
+Configuration, authentication, and sessions under `~/.grok/` are preserved.
+Normal installations do not create or maintain a source checkout.
 
-### Install from a checkout
+### Install from source
 
-Use this path when you want to inspect the source or build a particular branch:
+Contributors can explicitly clone and compile the `dev` branch under
+`~/Projects/forge`:
 
 ```sh
-git clone https://github.com/DeveshParagiri/forge.git
-cd forge
-./scripts/install
+FORGE_INSTALL_MODE=source \
+  curl -fsSL https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install | sh
 ```
 
-When invoked from a checkout, the installer builds that checkout rather than
-cloning another copy.
+Source mode is intentionally separate from the fast end-user installation path.
 
 ### Verify
 
@@ -119,16 +117,21 @@ subscription authentication.
 For installations created by the GitHub installer, run:
 
 ```sh
+grok update
+```
+
+A plain `grok update` delegates to the same release installer used by the
+quickstart. The historical direct command remains as a recovery or automation
+alias, but follows the identical binary path:
+
+```sh
 ~/bin/grok-update-from-source
 ```
 
-The updater fetches `origin/main`, fast-forwards the managed checkout, rebuilds
-Forge, and atomically replaces the installed binary. It refreshes compatibility
-links and signs the binary on macOS. It stops without overwriting work if the
-checkout is dirty or if local and remote history have diverged.
-
+Both commands download and verify the latest published artifact before replacing
+the binary atomically; they do not fetch, rebase, or compile a source checkout.
 Re-running the GitHub install command is also safe. Authentication,
-configuration, and session data remain untouched during either update path.
+configuration, and session data remain untouched during every update path.
 
 ## Releases and versioning
 

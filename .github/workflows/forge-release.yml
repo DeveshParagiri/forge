@@ -1,0 +1,87 @@
+name: Forge Release
+
+on:
+  push:
+    tags:
+      - "forge-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing forge-v* tag to package
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build Forge
+        run: cargo build --locked --release -p xai-grok-pager-bin --target ${{ matrix.target }}
+      - name: Package and checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/package
+          install -m 755 "target/${{ matrix.target }}/release/xai-grok-pager" dist/package/grok
+          tar -C dist/package -czf "dist/forge-${{ matrix.target }}.tar.gz" grok
+          cd dist
+          if command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "forge-${{ matrix.target }}.tar.gz" > "forge-${{ matrix.target }}.tar.gz.sha256"
+          else
+            sha256sum "forge-${{ matrix.target }}.tar.gz" > "forge-${{ matrix.target }}.tar.gz.sha256"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forge-${{ matrix.target }}
+          path: |
+            dist/forge-${{ matrix.target }}.tar.gz
+            dist/forge-${{ matrix.target }}.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: forge-*
+          path: dist
+          merge-multiple: true
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "Forge ${TAG#forge-v}" --generate-notes
+          gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber

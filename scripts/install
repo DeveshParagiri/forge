@@ -1,77 +1,122 @@
 #!/bin/sh
-# Bootstrap Forge from the default branch, then build and install it.
+# Install or update Forge from a checksummed GitHub Release binary.
 set -eu
 
-REPO_URL="${GROK_REPO_URL:-https://github.com/DeveshParagiri/forge.git}"
-BRANCH="${GROK_BRANCH:-${GROK_DEV_BRANCH:-main}}"
-DEFAULT_SOURCE_DIR="$HOME/.local/share/grok/source"
+REPO="${FORGE_REPO:-DeveshParagiri/forge}"
+VERSION="${FORGE_VERSION:-latest}"
+MODE="${FORGE_INSTALL_MODE:-binary}"
+INSTALL_BIN="${GROK_INSTALL_BIN:-$HOME/.grok/bin/grok}"
 UPDATER="${GROK_UPDATER:-$HOME/bin/grok-update-from-source}"
+SOURCE_DIR="${GROK_SRC:-$HOME/Projects/forge}"
+BRANCH="${GROK_BRANCH:-dev}"
+REPO_URL="${GROK_REPO_URL:-https://github.com/$REPO.git}"
 
-# When executed from a checkout, build that checkout. When piped through sh,
-# clone into the managed source directory instead.
-SCRIPT_DIR=""
-case "$0" in
-  */*) SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" 2>/dev/null && pwd) || true ;;
+fail() {
+  echo "BLOCKED: $*" >&2
+  exit 1
+}
+
+need() {
+  command -v "$1" >/dev/null 2>&1 || fail "$1 is not installed. $2"
+}
+
+install_links() {
+  for link_path in \
+    "$HOME/.local/bin/grok" \
+    "$HOME/.local/share/grok/versions/current" \
+    "$HOME/.grok/local/grok" \
+    "$HOME/bin/grok"
+  do
+    mkdir -p "$(dirname "$link_path")"
+    ln -sfn "$INSTALL_BIN" "$link_path"
+  done
+}
+
+install_binary() {
+  need curl "Install curl and retry."
+  need tar "Install tar and retry."
+
+  os=$(uname -s)
+  arch=$(uname -m)
+  case "$os-$arch" in
+    Darwin-arm64) target="aarch64-apple-darwin" ;;
+    Darwin-x86_64) target="x86_64-apple-darwin" ;;
+    Linux-x86_64) target="x86_64-unknown-linux-gnu" ;;
+    Linux-aarch64|Linux-arm64) target="aarch64-unknown-linux-gnu" ;;
+    *) fail "no Forge release binary is available for $os/$arch" ;;
+  esac
+
+  asset="forge-$target.tar.gz"
+  if [ "$VERSION" = "latest" ]; then
+    base="https://github.com/$REPO/releases/latest/download"
+  else
+    case "$VERSION" in forge-v*) tag="$VERSION" ;; *) tag="forge-v$VERSION" ;; esac
+    base="https://github.com/$REPO/releases/download/$tag"
+  fi
+
+  tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/forge-install.XXXXXX")
+  trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
+  echo "==> downloading Forge ${VERSION} for $target"
+  curl --fail --location --silent --show-error "$base/$asset" -o "$tmp_dir/$asset"
+  curl --fail --location --silent --show-error "$base/$asset.sha256" -o "$tmp_dir/$asset.sha256"
+
+  if command -v shasum >/dev/null 2>&1; then
+    (cd "$tmp_dir" && shasum -a 256 -c "$asset.sha256")
+  elif command -v sha256sum >/dev/null 2>&1; then
+    (cd "$tmp_dir" && sha256sum -c "$asset.sha256")
+  else
+    fail "shasum or sha256sum is required to verify the release"
+  fi
+
+  tar -xzf "$tmp_dir/$asset" -C "$tmp_dir"
+  [ -x "$tmp_dir/grok" ] || fail "release archive did not contain an executable named grok"
+
+  mkdir -p "$(dirname "$INSTALL_BIN")"
+  install -m 755 "$tmp_dir/grok" "$INSTALL_BIN.new.$$"
+  mv -f "$INSTALL_BIN.new.$$" "$INSTALL_BIN"
+
+  if [ "$os" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
+    codesign --force --sign - "$INSTALL_BIN"
+    codesign --verify "$INSTALL_BIN"
+  fi
+
+  # Keep `grok update` and the documented recovery command on one canonical
+  # installer implementation. The updater simply re-runs this release installer.
+  mkdir -p "$(dirname "$UPDATER")"
+  curl --fail --location --silent --show-error \
+    "https://raw.githubusercontent.com/$REPO/main/scripts/install" -o "$UPDATER.new.$$"
+  chmod 755 "$UPDATER.new.$$"
+  mv -f "$UPDATER.new.$$" "$UPDATER"
+
+  install_links
+  trap - EXIT HUP INT TERM
+  rm -rf "$tmp_dir"
+  echo "Installed: $($INSTALL_BIN --version 2>/dev/null || echo Forge)"
+  echo "  binary: $INSTALL_BIN"
+  echo "  update: grok update"
+}
+
+install_source() {
+  need git "Install Git and retry."
+  need cargo "Run https://rustup.rs and retry."
+  if ! command -v dotslash >/dev/null 2>&1 && ! command -v protoc >/dev/null 2>&1; then
+    fail "dotslash or protoc is not installed. Install either one and retry."
+  fi
+  [ ! -e "$SOURCE_DIR" ] || [ -d "$SOURCE_DIR/.git" ] || \
+    fail "$SOURCE_DIR exists but is not a Git checkout"
+  if [ ! -d "$SOURCE_DIR/.git" ]; then
+    mkdir -p "$(dirname "$SOURCE_DIR")"
+    git clone --branch "$BRANCH" "$REPO_URL" "$SOURCE_DIR"
+  fi
+  (cd "$SOURCE_DIR" && cargo build -p xai-grok-pager-bin --release)
+  mkdir -p "$(dirname "$INSTALL_BIN")"
+  install -m 755 "$SOURCE_DIR/target/release/xai-grok-pager" "$INSTALL_BIN"
+  install_links
+  echo "Installed source build from $SOURCE_DIR"
+}
+
+case "$MODE" in
+  binary) install_binary ;;
+  source) install_source ;;
+  *) fail "FORGE_INSTALL_MODE must be 'binary' or 'source'" ;;
 esac
-if [ -n "${GROK_SRC:-}" ]; then
-  SOURCE_DIR="$GROK_SRC"
-elif [ -n "$SCRIPT_DIR" ] && [ -d "$SCRIPT_DIR/../.git" ]; then
-  SOURCE_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
-else
-  SOURCE_DIR="$DEFAULT_SOURCE_DIR"
-fi
-
-if ! command -v git >/dev/null 2>&1; then
-  echo "BLOCKED: git is not installed. Install Git and retry."
-  exit 1
-fi
-
-if ! command -v cargo >/dev/null 2>&1; then
-  echo "BLOCKED: cargo is not installed. Run https://rustup.rs and retry."
-  exit 1
-fi
-
-if ! command -v dotslash >/dev/null 2>&1 && ! command -v protoc >/dev/null 2>&1; then
-  echo "BLOCKED: dotslash or protoc is not installed. Install either one and retry."
-  exit 1
-fi
-
-if [ -e "$SOURCE_DIR" ] && [ ! -d "$SOURCE_DIR/.git" ]; then
-  echo "BLOCKED: $SOURCE_DIR exists but is not a Git checkout."
-  exit 1
-fi
-
-if [ ! -d "$SOURCE_DIR/.git" ]; then
-  echo "==> cloning Forge ($BRANCH) into $SOURCE_DIR"
-  mkdir -p "$(dirname "$SOURCE_DIR")"
-  git clone --branch "$BRANCH" --single-branch "$REPO_URL" "$SOURCE_DIR"
-else
-  origin_url="$(git -C "$SOURCE_DIR" remote get-url origin 2>/dev/null || true)"
-  if [ -z "$origin_url" ]; then
-    echo "BLOCKED: existing checkout at $SOURCE_DIR has no origin remote."
-    exit 1
-  fi
-
-  # Protect the managed curl-install checkout from accidentally using an
-  # unrelated repository. Explicit GROK_SRC and direct-checkout installs are
-  # allowed to use forks or alternate remotes.
-  if [ "$SOURCE_DIR" = "$DEFAULT_SOURCE_DIR" ] && [ -z "${GROK_SRC:-}" ]; then
-    expected_url="${REPO_URL%.git}"
-    actual_url="${origin_url%.git}"
-    legacy_url="https://github.com/DeveshParagiri/grok-build"
-    if [ "$actual_url" = "$legacy_url" ]; then
-      echo "==> migrating origin from grok-build to Forge"
-      git -C "$SOURCE_DIR" remote set-url origin "$REPO_URL"
-    elif [ "$actual_url" != "$expected_url" ]; then
-      echo "BLOCKED: existing checkout at $SOURCE_DIR has an unexpected origin: $origin_url"
-      exit 1
-    fi
-  fi
-
-  echo "==> using existing checkout at $SOURCE_DIR"
-fi
-
-mkdir -p "$(dirname "$UPDATER")"
-install -m 755 "$SOURCE_DIR/scripts/grok-update-from-source" "$UPDATER"
-
-GROK_SRC="$SOURCE_DIR" GROK_BRANCH="$BRANCH" exec "$UPDATER"
