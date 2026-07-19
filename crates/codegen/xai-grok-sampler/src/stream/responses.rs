@@ -11,19 +11,13 @@ use futures_util::stream::{BoxStream, Stream};
 
 use xai_grok_sampling_types::{
     ConversationItem, ConversationResponse, ResponseModelMetadata, SamplingError, StopReason,
-    TokenUsage, ToolCall, rs,
+    TokenUsage, rs,
 };
 
 use crate::events::{SamplingChannel, SamplingErrorInfo, SamplingEvent};
+use crate::exaforge::responses_terminal_recovery::ResponsesTerminalRecovery;
 use crate::metrics::InferenceLatencyStats;
 use crate::types::RequestId;
-
-#[derive(Debug, Clone)]
-struct StreamedFunctionCall {
-    id: String,
-    name: String,
-    arguments: String,
-}
 
 /// Returns whether a Responses API event reflects real model progress
 /// rather than a liveness-only heartbeat / status transition.
@@ -127,7 +121,8 @@ pub fn stream_responses<'a>(
         let mut chunk_index: u64 = 0;
         let mut message_chunk_count: u64 = 0;
         let mut first_token_emitted = false;
-        let mut text_acc = String::new();
+        // Exaforge: construct backend-agnostic terminal recovery state.
+        let mut terminal_recovery = ResponsesTerminalRecovery::default();
         let mut reasoning_acc = String::new();
         let mut last_content_chunk_at = Instant::now();
 
@@ -136,7 +131,6 @@ pub fn stream_responses<'a>(
         // later `ResponseFunctionCallArgumentsDelta` events
         // look up `output_index` here to find the matching `tool_index`.
         let mut output_to_tool_index: BTreeMap<u32, u32> = BTreeMap::new();
-        let mut streamed_function_calls: BTreeMap<u32, StreamedFunctionCall> = BTreeMap::new();
         let mut next_tool_index: u32 = 0;
 
         let mut stream = raw_stream;
@@ -203,7 +197,8 @@ pub fn stream_responses<'a>(
                         chunk_timestamps.push(Instant::now());
                         chunk_index += 1;
                         message_chunk_count += 1;
-                        text_acc.push_str(&delta);
+                        // Exaforge: observe visible text for terminal recovery.
+                        terminal_recovery.observe_text_delta(&delta);
                         yield SamplingEvent::ChannelToken {
                             request_id: request_id.clone(),
                             channel: SamplingChannel::Text,
@@ -259,14 +254,9 @@ pub fn stream_responses<'a>(
                         let tool_index = next_tool_index;
                         next_tool_index += 1;
                         output_to_tool_index.insert(added_event.output_index, tool_index);
-                        streamed_function_calls.insert(
-                            added_event.output_index,
-                            StreamedFunctionCall {
-                                id: fc.call_id.clone(),
-                                name: fc.name.clone(),
-                                arguments: fc.arguments.clone(),
-                            },
-                        );
+                        // Exaforge: observe streamed calls for terminal recovery.
+                        terminal_recovery
+                            .observe_function_call_added(added_event.output_index, &fc);
 
                         yield SamplingEvent::ToolCallDelta {
                             request_id: request_id.clone(),
@@ -286,11 +276,11 @@ pub fn stream_responses<'a>(
                         && let Some(&tool_index) =
                             output_to_tool_index.get(&args_event.output_index)
                     {
-                        if let Some(call) =
-                            streamed_function_calls.get_mut(&args_event.output_index)
-                        {
-                            call.arguments.push_str(&delta);
-                        }
+                        // Exaforge: observe argument deltas for terminal recovery.
+                        terminal_recovery.observe_function_call_arguments_delta(
+                            args_event.output_index,
+                            &delta,
+                        );
                         yield SamplingEvent::ToolCallDelta {
                             request_id: request_id.clone(),
                             tool_index,
@@ -302,12 +292,12 @@ pub fn stream_responses<'a>(
                 }
 
                 ResponseStreamEvent::ResponseFunctionCallArgumentsDone(args_event) => {
-                    if let Some(call) = streamed_function_calls.get_mut(&args_event.output_index) {
-                        call.arguments = args_event.arguments;
-                        if let Some(name) = args_event.name {
-                            call.name = name;
-                        }
-                    }
+                    // Exaforge: observe final arguments for terminal recovery.
+                    terminal_recovery.observe_function_call_arguments_done(
+                        args_event.output_index,
+                        args_event.name,
+                        args_event.arguments,
+                    );
                 }
 
                 ResponseStreamEvent::ResponseCompleted(completed_event) => {
@@ -381,14 +371,9 @@ pub fn stream_responses<'a>(
                 ResponseStreamEvent::ResponseOutputItemDone(done_event) => {
                     match &done_event.item {
                         rs::OutputItem::FunctionCall(fc) => {
-                            streamed_function_calls.insert(
-                                done_event.output_index,
-                                StreamedFunctionCall {
-                                    id: fc.call_id.clone(),
-                                    name: fc.name.clone(),
-                                    arguments: fc.arguments.clone(),
-                                },
-                            );
+                            // Exaforge: observe completed calls for terminal recovery.
+                            terminal_recovery
+                                .observe_function_call_done(done_event.output_index, fc);
                         }
                         rs::OutputItem::WebSearchCall(ws) => {
                             let result = serde_json::to_value(ws).ok();
@@ -505,47 +490,8 @@ pub fn stream_responses<'a>(
         // Splice policy lives in `inject_streaming_reasoning_fallback`.
         let mut items = xai_grok_sampling_types::response_to_conversation_items(response);
         xai_grok_sampling_types::inject_streaming_reasoning_fallback(&mut items, reasoning_acc);
-        // Codex may stream a complete function call but omit it from the
-        // terminal response.output array. Merge the streamed call into the
-        // terminal Assistant item so the shell executes it instead of
-        // classifying the turn as empty and retrying the model.
-        if !streamed_function_calls.is_empty() {
-            let fallback_calls = streamed_function_calls.into_values().map(|call| ToolCall {
-                id: std::sync::Arc::<str>::from(call.id),
-                name: call.name,
-                arguments: std::sync::Arc::<str>::from(call.arguments),
-            });
-            if let Some(ConversationItem::Assistant(assistant)) = items
-                .iter_mut()
-                .rev()
-                .find(|item| matches!(item, ConversationItem::Assistant(_)))
-            {
-                for call in fallback_calls {
-                    if !assistant.tool_calls.iter().any(|existing| existing.id == call.id) {
-                        assistant.tool_calls.push(call);
-                    }
-                }
-            } else {
-                items.push(ConversationItem::assistant_tool_calls(fallback_calls.collect()));
-            }
-        }
-        // Personal: Codex can stream output_text deltas while its terminal
-        // response omits the message body. Preserve those visible deltas in
-        // the accepted response so the empty-response classifier cannot retry
-        // and duplicate text the user already saw.
-        if !text_acc.is_empty() {
-            if let Some(ConversationItem::Assistant(assistant)) = items
-                .iter_mut()
-                .rev()
-                .find(|item| matches!(item, ConversationItem::Assistant(_)))
-            {
-                if assistant.content.is_empty() {
-                    assistant.content = std::sync::Arc::<str>::from(text_acc);
-                }
-            } else {
-                items.push(ConversationItem::assistant(text_acc));
-            }
-        }
+        // Exaforge: apply backend-agnostic streamed terminal recovery.
+        terminal_recovery.apply(&mut items);
 
         let has_tool_calls = items.iter().any(|i| match i {
             ConversationItem::Assistant(a) => !a.tool_calls.is_empty(),

@@ -23,6 +23,7 @@ pub mod commands;
 pub mod config;
 pub mod doom_loop;
 pub mod events;
+mod exaforge;
 pub mod handle;
 pub mod metrics;
 pub mod retry;
