@@ -573,7 +573,6 @@ pub(super) fn dispatch_cycle_effort(app: &mut AppView) -> Vec<Effect> {
 /// dashboard peek calls [`dispatch_cycle_mode_and_sync`] instead, so a peeked
 /// agent — whose prompt the user is not looking at — never attributes an accept
 /// and never collapses Auto/Always-Approve for the nudge jump.
-#[allow(dead_code)] // kept for dashboard/plan-nudge paths; chat chord remapped to effort
 pub(super) fn dispatch_cycle_mode(app: &mut AppView) -> Vec<Effect> {
     // Capture the pre-cycle nudge visibility + plan state so only a transition
     // into Plan taken while the nudge is on screen attributes as an acceptance;

@@ -11,6 +11,7 @@
 //! highlighting, blending) are also quantized via [`color_support::quantize`].
 
 pub mod cache;
+mod claude;
 pub mod color_support;
 mod grokday;
 mod groknight;
@@ -41,6 +42,11 @@ pub enum ThemeKind {
     /// only the resolved concrete kind lives in the cache.
     /// Excluded from [`ALL`] and [`available()`].
     Auto = 4,
+    /// Claude Code–inspired UI package (personal harness extension):
+    /// Claude dark chatbox chrome + package behaviors
+    /// ([`Self::package_show_shortcuts_bar_default`],
+    /// [`Self::package_shift_tab_cycles_effort`]).
+    Claude = 6,
 }
 
 impl ThemeKind {
@@ -51,6 +57,7 @@ impl ThemeKind {
         ThemeKind::TokyoNight,
         ThemeKind::RosePineMoon,
         ThemeKind::OscuraMidnight,
+        ThemeKind::Claude,
     ];
 
     /// Theme kinds available on the current terminal.
@@ -61,7 +68,11 @@ impl ThemeKind {
         // Two possible results — pick the right const slice based on
         // the detected color level. No heap allocation needed.
         const ALL: &[ThemeKind] = ThemeKind::ALL;
-        const NO_TRUECOLOR: &[ThemeKind] = &[ThemeKind::GrokNight, ThemeKind::GrokDay];
+        const NO_TRUECOLOR: &[ThemeKind] = &[
+            ThemeKind::GrokNight,
+            ThemeKind::GrokDay,
+            ThemeKind::Claude,
+        ];
 
         if color_support::detect().has_truecolor() {
             ALL
@@ -78,6 +89,7 @@ impl ThemeKind {
             Self::GrokDay => "grokday",
             Self::RosePineMoon => "rosepine-moon",
             Self::OscuraMidnight => "oscura-midnight",
+            Self::Claude => "claude",
             Self::Auto => "auto",
         }
     }
@@ -94,6 +106,7 @@ impl ThemeKind {
             Self::GrokDay => false,
             Self::RosePineMoon => true,
             Self::OscuraMidnight => true,
+            Self::Claude => false,
             // Auto is resolved to a concrete theme before rendering.
             Self::Auto => false,
         }
@@ -112,6 +125,7 @@ impl ThemeKind {
                 Some(Self::RosePineMoon)
             }
             "oscura" | "oscura-midnight" => Some(Self::OscuraMidnight),
+            "claude" | "claude-code" | "claudecode" => Some(Self::Claude),
             _ => None,
         }
     }
@@ -120,6 +134,22 @@ impl ThemeKind {
     #[must_use]
     pub fn is_auto(self) -> bool {
         self == Self::Auto
+    }
+
+    /// Package default for `[ui].show_shortcuts_bar` when the key is unset.
+    /// `None` → global client default (show bar).
+    #[must_use]
+    pub fn package_show_shortcuts_bar_default(self) -> Option<bool> {
+        match self {
+            Self::Claude => Some(false),
+            _ => None,
+        }
+    }
+
+    /// When true, Shift+Tab cycles reasoning effort instead of permission mode.
+    #[must_use]
+    pub fn package_shift_tab_cycles_effort(self) -> bool {
+        matches!(self, Self::Claude)
     }
 }
 
@@ -147,6 +177,7 @@ pub fn display_name_for_canonical(value: &str) -> &str {
         "grokday" => "Grok Day",
         "tokyonight" => "Tokyo Night",
         "rosepine-moon" => "Rose Pine Moon",
+        "claude" => "Claude",
         other => other,
     }
 }
@@ -275,6 +306,7 @@ impl Theme {
             ThemeKind::GrokDay => Self::grokday(),
             ThemeKind::RosePineMoon => Self::rosepine_moon(),
             ThemeKind::OscuraMidnight => Self::oscura_midnight(),
+            ThemeKind::Claude => Self::claude(),
             // Auto is resolved to a concrete theme before being stored;
             // if reached, fall back to GrokNight.
             ThemeKind::Auto => Self::groknight(),
@@ -684,6 +716,7 @@ mod tests {
         assert!(!ThemeKind::TokyoNight.is_auto());
         assert!(!ThemeKind::RosePineMoon.is_auto());
         assert!(!ThemeKind::OscuraMidnight.is_auto());
+        assert!(!ThemeKind::Claude.is_auto());
     }
 
     #[test]
@@ -703,6 +736,7 @@ mod tests {
         assert!(Theme::tokyonight().is_dark());
         assert!(Theme::rosepine_moon().is_dark());
         assert!(Theme::oscura_midnight().is_dark());
+        assert!(Theme::claude().is_dark());
         assert!(!Theme::grokday().is_dark());
     }
 
@@ -985,6 +1019,7 @@ mod tests {
                 ThemeKind::TokyoNight => Theme::tokyonight(),
                 ThemeKind::RosePineMoon => Theme::rosepine_moon(),
                 ThemeKind::OscuraMidnight => Theme::oscura_midnight(),
+                ThemeKind::Claude => Theme::claude(),
                 ThemeKind::Auto => unreachable!("ALL excludes Auto"),
             };
             let track = lum(theme.scrollbar_bg, "scrollbar_bg", kind);

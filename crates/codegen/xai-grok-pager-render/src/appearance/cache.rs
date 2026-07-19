@@ -142,28 +142,41 @@ pub fn set_show_timeline(enabled: bool) {
 const SHORTCUTS_BAR_DEFAULT: bool = UiConfig::SHOW_SHORTCUTS_BAR_DEFAULT;
 
 thread_local! {
-    static SHORTCUTS_BAR_CURRENT: Cell<bool> = const { Cell::new(SHORTCUTS_BAR_DEFAULT) };
+    /// Explicit override from config.toml or settings (`Some`); when `None`,
+    /// the active theme package may supply a default (Claude → hide footer).
+    static SHORTCUTS_BAR_EXPLICIT: Cell<Option<bool>> = const { Cell::new(None) };
     static SHORTCUTS_BAR_LOADED: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Cached `[ui].show_shortcuts_bar`, seeding from disk on first call.
+/// Resolve `[ui].show_shortcuts_bar`.
+///
+/// Precedence: explicit config / settings → active theme package default
+/// (e.g. Claude hides the bar) → global default (show).
 pub fn load_show_shortcuts_bar() -> bool {
     SHORTCUTS_BAR_LOADED.with(|loaded| {
         if !loaded.get() {
-            SHORTCUTS_BAR_CURRENT.with(|c| {
-                c.set(load_bool_from_effective_config(
-                    "show_shortcuts_bar",
-                    SHORTCUTS_BAR_DEFAULT,
-                ))
-            });
+            let explicit = load_optional_bool_from_effective_config("show_shortcuts_bar");
+            SHORTCUTS_BAR_EXPLICIT.with(|c| c.set(explicit));
             loaded.set(true);
         }
     });
-    SHORTCUTS_BAR_CURRENT.with(|c| c.get())
+    if let Some(v) = SHORTCUTS_BAR_EXPLICIT.with(|c| c.get()) {
+        return v;
+    }
+    crate::theme::cache::current_kind()
+        .package_show_shortcuts_bar_default()
+        .unwrap_or(SHORTCUTS_BAR_DEFAULT)
+}
+
+fn load_optional_bool_from_effective_config(key: &str) -> Option<bool> {
+    let root = xai_grok_config::load_effective_config_disk_only().ok()?;
+    root.get("ui")
+        .and_then(|ui| ui.get(key))
+        .and_then(|v| v.as_bool())
 }
 
 pub fn set_show_shortcuts_bar(enabled: bool) {
-    SHORTCUTS_BAR_CURRENT.with(|c| c.set(enabled));
+    SHORTCUTS_BAR_EXPLICIT.with(|c| c.set(Some(enabled)));
     SHORTCUTS_BAR_LOADED.with(|l| l.set(true));
 }
 
@@ -605,7 +618,14 @@ pub fn prime(ui: &UiConfig) {
     set(ui.compact_mode);
     set_timestamps(ui.show_timestamps.unwrap_or(TIMESTAMPS_DEFAULT));
     set_show_timeline(ui.show_timeline_enabled());
-    set_show_shortcuts_bar(ui.show_shortcuts_bar_enabled());
+    // Only pin an explicit value when the user set the key; otherwise leave
+    // package defaults (Claude → hide bar) free to apply.
+    if let Some(v) = ui.show_shortcuts_bar {
+        set_show_shortcuts_bar(v);
+    } else {
+        SHORTCUTS_BAR_EXPLICIT.with(|c| c.set(None));
+        SHORTCUTS_BAR_LOADED.with(|l| l.set(true));
+    }
     set_page_flip_on_send(ui.page_flip_on_send_enabled());
     set_simple_mode(ui.simple_mode.unwrap_or(SIMPLE_MODE_DEFAULT));
     set_keep_text_selection(text_selection_from_ui(ui));

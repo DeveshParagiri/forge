@@ -1280,6 +1280,10 @@ pub struct Config {
     /// `[model.*]` overrides from config.toml. Resolve via `resolve_model_list()`.
     #[serde(skip)]
     pub config_models: IndexMap<String, ConfigModelOverride>,
+    /// `[provider.*]` shared auth/endpoint packs (personal harness extension).
+    /// Models reference them with `provider = "codex"` etc.
+    #[serde(skip)]
+    pub providers: IndexMap<String, ProviderConfig>,
     /// Warnings from `[model.*]` parsing; surfaced by `grok inspect`.
     #[serde(skip)]
     pub model_override_warnings: Vec<super::config_model_override_parse::ModelOverrideWarning>,
@@ -1708,6 +1712,7 @@ impl Default for Config {
             doom_loop_recovery: crate::util::config::DoomLoopRecoverySettings::default(),
             auto_mode: AutoModeConfig::default(),
             config_models: IndexMap::new(),
+            providers: IndexMap::new(),
             model_override_warnings: Vec::new(),
             grok_com_config: GrokComConfig::default(),
             shortcuts: None,
@@ -1850,13 +1855,16 @@ impl Config {
             warnings: model_override_warnings,
         } = super::config_model_override_parse::parse_model_overrides(raw_config);
         super::config_model_override_parse::log_model_override_warnings(&model_override_warnings);
+        let providers = parse_provider_configs(raw_config);
         let mut base = toml::Value::try_from(Self::default()).map_err(|e| e.to_string())?;
         if let toml::Value::Table(ref mut t) = base {
             t.remove("model");
+            t.remove("provider");
         }
         let mut raw_without_model_sections = raw_config.clone();
         if let toml::Value::Table(ref mut t) = raw_without_model_sections {
             t.remove("model");
+            t.remove("provider");
         }
         crate::config::deep_merge_toml(&mut base, &raw_without_model_sections);
         let (mut config, user_unused) =
@@ -1868,6 +1876,7 @@ impl Config {
             );
         }
         config.config_models = config_models;
+        config.providers = providers;
         config.model_override_warnings = model_override_warnings;
         if config.grok_com_config.oidc.is_none() {
             config.grok_com_config.oidc = OidcAuthConfig::from_env();
@@ -3193,7 +3202,23 @@ pub fn resolve_model_list(
                 );
             }
         }
-        let entry = model_override.apply(key, base, &cfg.endpoints);
+        let mut entry = model_override.apply(key, base, &cfg.endpoints);
+        if let Some(ref pname) = model_override.provider {
+            if let Some(provider) = cfg.providers.get(pname) {
+                provider.apply_to_entry(
+                    &mut entry,
+                    model_override.base_url.is_some(),
+                    model_override.api_backend.is_some(),
+                    model_override.api_key.is_some() || model_override.env_key.is_some(),
+                );
+            } else {
+                tracing::warn!(
+                    model_key = %key,
+                    provider = %pname,
+                    "model references unknown [provider.{pname}]; check config.toml"
+                );
+            }
+        }
         tracing::debug!(
             model_key = % key, base_url = % entry.info.base_url, has_api_key = entry
             .api_key.is_some(), env_key = ? entry.env_key, had_base,
@@ -3567,6 +3592,113 @@ pub struct ModelEntryConfig {
 fn is_default_laziness_detector(cfg: &LazinessDetectorPerModelConfig) -> bool {
     cfg == &LazinessDetectorPerModelConfig::default()
 }
+/// Shared endpoint + credential pack for multiple `[model.*]` entries.
+///
+/// ```toml
+/// [provider.codex]
+/// base_url = "https://chatgpt.com/backend-api/codex"
+/// api_backend = "responses"
+/// auth = "codex"   # reads ~/.codex/auth.json
+///
+/// [model."gpt-5.4"]
+/// provider = "codex"
+/// model = "gpt-5.4"
+/// ```
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ProviderConfig {
+    pub name: Option<String>,
+    pub base_url: Option<String>,
+    pub api_backend: Option<ApiBackend>,
+    pub api_key: Option<String>,
+    pub env_key: Option<EnvKeys>,
+    /// `"codex"` → ChatGPT OAuth from `~/.codex/auth.json` (and CODEX_ACCESS_TOKEN).
+    pub auth: Option<String>,
+    #[serde(default)]
+    pub extra_headers: IndexMap<String, String>,
+}
+
+impl ProviderConfig {
+    /// Fold provider defaults into a model entry.
+    ///
+    /// Call after `[model.*]` apply. Pass whether the model table set
+    /// `base_url` / `api_backend` / credentials so model-local fields win.
+    pub fn apply_to_entry(
+        &self,
+        entry: &mut ModelEntry,
+        model_set_base_url: bool,
+        model_set_backend: bool,
+        model_set_creds: bool,
+    ) {
+        if !model_set_base_url {
+            if let Some(ref url) = self.base_url {
+                entry.info.base_url = url.clone();
+            }
+        }
+        if !model_set_backend {
+            if let Some(ref backend) = self.api_backend {
+                entry.info.api_backend = backend.clone();
+            }
+        }
+        if !model_set_creds {
+            if let Some(ref k) = self.api_key {
+                entry.api_key = Some(k.clone());
+            }
+            if let Some(ref ek) = self.env_key {
+                entry.env_key = Some(ek.clone());
+            }
+        }
+        // auth = "codex" → ChatGPT OAuth file + Responses defaults
+        if self
+            .auth
+            .as_deref()
+            .is_some_and(|a| a.eq_ignore_ascii_case("codex"))
+        {
+            if entry.env_key.is_none() {
+                entry.env_key = Some(EnvKeys::single("CODEX_ACCESS_TOKEN"));
+            }
+            if !model_set_base_url && self.base_url.is_none() {
+                entry.info.base_url =
+                    "https://chatgpt.com/backend-api/codex".to_string();
+            }
+            if !model_set_backend && self.api_backend.is_none() {
+                entry.info.api_backend = ApiBackend::Responses;
+            }
+        }
+        for (k, v) in &self.extra_headers {
+            entry
+                .info
+                .extra_headers
+                .entry(k.clone())
+                .or_insert_with(|| v.clone());
+        }
+        entry.info.supported_in_api = true;
+    }
+}
+
+/// Parse `[provider.<name>]` tables from raw config.toml.
+fn parse_provider_configs(raw_config: &toml::Value) -> IndexMap<String, ProviderConfig> {
+    let mut out = IndexMap::new();
+    let Some(section) = raw_config.get("provider").and_then(|v| v.as_table()) else {
+        return out;
+    };
+    for (name, value) in section {
+        match value.clone().try_into::<ProviderConfig>() {
+            Ok(cfg) => {
+                out.insert(name.clone(), cfg);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    provider = %name,
+                    error = %e,
+                    "failed to parse [provider.{name}]; entry skipped"
+                );
+            }
+        }
+    }
+    out
+}
+
 /// A `[model.foo]` entry from config.toml, parsed directly from raw TOML
 /// (bypassing deep merge). Scalar fields are `Option` so absent means "inherit
 /// from defaults/prefetched"; the collection fields (`extra_headers`,
@@ -3582,6 +3714,10 @@ pub struct ConfigModelOverride {
     pub api_key: Option<String>,
     /// Env var name(s) for the provider key — string or array in config.toml.
     pub env_key: Option<EnvKeys>,
+    /// Reference a `[provider.<name>]` pack (base_url / auth / headers).
+    /// Model-local fields override the provider after merge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
     pub api_base_url: Option<String>,
     pub max_completion_tokens: Option<u32>,
     pub temperature: Option<f32>,

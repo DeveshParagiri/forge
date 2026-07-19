@@ -1022,7 +1022,13 @@ pub fn build_hints(
                         .pinned(),
                 );
             }
-            hints.push(HintItem::new(crate::key!(BackTab), "effort"));
+            let shift_tab_label =
+                if crate::theme::Theme::current_kind().package_shift_tab_cycles_effort() {
+                    "effort"
+                } else {
+                    "mode"
+                };
+            hints.push(HintItem::new(crate::key!(BackTab), shift_tab_label));
             for def in registry.hints(&[When::PromptFocused, When::AgentScreen, When::Always]) {
                 if def.id == ActionId::SendPrompt
                     || def.id == ActionId::CommandPalette
