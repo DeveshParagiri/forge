@@ -44,13 +44,11 @@ for the version of the code present in this tree.
 
 | Area | Added behavior |
 |------|----------------|
-| Providers | Interactive `/login` flow for SpaceXAI, ChatGPT Codex OAuth, and OpenRouter API keys |
-| Model catalog | Provider-aware models with configurable include/exclude patterns and authentication state in `/model` |
-| Provider switching | Mid-session model changes remove provider-bound reasoning data before crossing provider families |
-| Codex compatibility | ChatGPT Codex request shaping, OAuth/account headers, streaming-text recovery, and provider-specific retries |
-| Interface | Claude-inspired theme, reasoning-effort cycling, optional shortcut footer, and corrected footer-free dashboard/modal geometry |
-| Branding | Rebase-friendly Exaforge welcome screen with the build version, no promotional announcement, and no startup changelog block |
-| Local install | One canonical extended binary at `~/.grok/bin/grok`; compatibility commands are symlinks, never duplicate builds |
+| Multi-provider authentication | Interactive `/login` setup for SpaceXAI, ChatGPT Codex, and OpenRouter |
+| Model catalog | Provider-aware models with configurable include/exclude patterns and authentication status in `/model` |
+| Provider switching | Safe mid-session model changes across provider families |
+| Interface | Claude-inspired theme, reasoning-effort controls, an optional shortcut footer, and polished dashboard and modal layouts |
+| Branding | A clean, rebase-friendly Exaforge welcome screen that displays the build version |
 
 The larger architecture and rebase notes live in [`PERSONAL.md`](PERSONAL.md).
 
