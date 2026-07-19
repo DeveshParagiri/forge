@@ -107,15 +107,6 @@ Forge palette implementation: `src/forge/forge_theme.rs`.
 - Running-turn `Esc` cancels generation like `Ctrl+C` after overlays and
   selections receive their normal priority.
 
-## Rename compatibility
-
-The legacy `theme = "exaforge"` value remains an accepted read alias so
-existing installations upgrade without configuration breakage. The runtime
-variant, settings catalogs, display surfaces, canonical output, and new writes
-all use `Forge` or `forge`. Theme cache discriminant `6` is unchanged for
-persisted cache compatibility. No other former fork-name identifiers were
-persisted or serialized.
-
 ## Focused verification
 
 Use crate-specific checks instead of full-workspace test runs:

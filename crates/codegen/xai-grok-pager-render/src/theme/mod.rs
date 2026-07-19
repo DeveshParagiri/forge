@@ -122,9 +122,7 @@ impl ThemeKind {
                 Some(Self::RosePineMoon)
             }
             "oscura" | "oscura-midnight" => Some(Self::OscuraMidnight),
-            // `exaforge` is a read-only compatibility alias for existing config.
-            // `display_name()` and `canonical_name()` always emit `forge`.
-            "forge" | "exaforge" | "claude" | "claude-code" | "claudecode" => Some(Self::Forge),
+            "forge" | "claude" | "claude-code" | "claudecode" => Some(Self::Forge),
             _ => None,
         }
     }
@@ -175,7 +173,7 @@ pub fn display_name_for_canonical(value: &str) -> &str {
         "grokday" => "Grok Day",
         "tokyonight" => "Tokyo Night",
         "rosepine-moon" => "Rose Pine Moon",
-        "forge" | "exaforge" | "claude" => "Forge",
+        "forge" | "claude" => "Forge",
         other => other,
     }
 }
@@ -697,14 +695,6 @@ mod tests {
         assert_eq!(ThemeKind::from_name("AUTO"), Some(ThemeKind::Auto));
         assert_eq!(ThemeKind::from_name("Auto"), Some(ThemeKind::Auto));
         assert_eq!(ThemeKind::from_name("SYSTEM"), Some(ThemeKind::Auto));
-    }
-
-    #[test]
-    fn legacy_exaforge_theme_alias_canonicalizes_to_forge() {
-        assert_eq!(ThemeKind::from_name("exaforge"), Some(ThemeKind::Forge));
-        assert_eq!(ThemeKind::from_name("EXAFORGE"), Some(ThemeKind::Forge));
-        assert_eq!(canonical_name("exaforge"), Some("forge"));
-        assert_eq!(display_name_for_canonical("exaforge"), "Forge");
     }
 
     #[test]

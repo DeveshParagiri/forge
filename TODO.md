@@ -21,7 +21,6 @@ All work below must follow these constraints:
 |---|---|---|
 | FR-2 | Product README and extensibility documentation | P1 |
 | FR-3 | Cross-harness session browsing and resume | P0 |
-| FR-4 | Rename Exaforge to Forge | P0 |
 | FR-5 | Reliable, extensible external subagent harnesses | P0 |
 | FR-6 | Prompt and navigate subagents | P1 |
 | FR-7 | Complete extension context in harness prompts | P0 |
@@ -78,28 +77,6 @@ Make `/sessions` a unified browser for native Forge sessions and supported exter
 - Clicking/selecting a Claude Code or Codex session resumes it with enough context to continue meaningfully.
 - Adding another source requires a new adapter and registration, not edits throughout the session UI.
 - Fixtures test discovery, metadata normalization, filtering, context extraction, resume, and malformed data.
-
-## FR-4: Rename Exaforge to Forge
-
-### Goal
-
-Rename the fork from Exaforge to Forge across all user-facing and internal fork-owned surfaces.
-
-### Requirements
-
-- Replace user-visible `Exaforge`/`exaforge` branding with `Forge`/`forge` in the README, UI, themes, documentation, scripts, comments, tests, and fork-owned module naming.
-- Preserve the executable name `grok` unless separately changed.
-- Do not rename upstream-owned `xai-grok-*` crates merely for branding.
-- Provide compatibility for existing configuration, theme names, paths, or serialized identifiers where removal would break users.
-- Legacy identifiers should be read as aliases and migrated or written back using the new canonical name where practical.
-- Document any intentionally retained legacy identifier and its removal policy.
-
-### Acceptance criteria
-
-- A case-insensitive repository search finds no unexplained fork-owned Exaforge branding.
-- Existing users can upgrade without losing configuration, auth, sessions, or theme settings.
-- Welcome, help, version, login, and error surfaces consistently say Forge.
-- Naming changes are isolated from unrelated behavior changes.
 
 ## FR-5: Reliable and extensible external subagent harnesses
 
@@ -237,7 +214,7 @@ Core orchestration and UI should consume these contracts. Provider-, source-, an
 
 ## Delivery order
 
-1. **Foundation:** FR-4 naming policy and compatibility aliases; capability and adapter contracts.
+1. **Foundation:** capability and adapter contracts.
 2. **Correctness:** FR-9 keyboard regressions; FR-7 prompt-context contract; FR-5 harness lifecycle reliability.
 3. **User workflows:** FR-3 unified sessions; FR-6 subagent navigation and prompting.
 4. **Documentation:** FR-2 README updated alongside each shipped feature.

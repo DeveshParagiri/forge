@@ -40,7 +40,7 @@ pub(crate) fn set_enabled(models: &mut ModelState, enabled: bool) -> Result<(), 
 /// Decorate the canonical primary model label when fast mode is active.
 pub(crate) fn decorate_model_label(label: String, enabled: bool) -> String {
     if enabled {
-        format!("⚡ {label}")
+        format!("⚡︎ {label}")
     } else {
         label
     }
@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn lightning_follows_actual_state() {
-        assert_eq!(decorate_model_label("Codex".into(), true), "⚡ Codex");
+        assert_eq!(decorate_model_label("Codex".into(), true), "⚡︎ Codex");
         assert_eq!(decorate_model_label("Codex".into(), false), "Codex");
     }
 }

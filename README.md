@@ -1,4 +1,4 @@
-# Forge (`grok`)
+# Forge
 
 Forge is an independent, upstream-friendly extension of
 [Grok Build](https://github.com/xai-org/grok-build), the terminal coding agent.
@@ -12,40 +12,11 @@ synchronized with upstream Grok Build.
 
 ## Extended features
 
-### More models and provider-aware controls
-
-Use models through SpaceXAI, ChatGPT Codex, or OpenRouter without giving up the
-native TUI. Forge adds interactive `/login` setup, provider-aware model catalogs,
-and safe session switching across provider families.
-
-Codex OAuth sessions support capability-driven `/fast` mode, including a visible
-`⚡` state indicator. `/usage` reports quota windows and reset times for the active
-provider instead of assuming every model uses the native SpaceXAI credit system.
-OpenRouter model catalogs can be narrowed with configurable include and exclude
-patterns.
-
-### A simpler Forge theme
-
-Forge includes a focused theme and welcome experience designed to keep the
-terminal readable and reduce visual noise. It provides compact model labels,
-reasoning-effort controls, an optional shortcut footer, and predictable `Esc`
-cancellation while preserving the familiar Grok workflow.
-
-Existing configurations using `theme = "exaforge"` continue to work as a legacy
-read alias. Forge canonicalizes the setting to `theme = "forge"` for display and
-future writes.
-
-### Multi-model subagent swarms
-
-Delegate work to multiple subagents at once, mixing native model roles with
-subscription-backed external harnesses such as Claude Code and Codex CLI. These
-agents appear in Forge's native Subagents UI, stream progress and tool activity,
-and support cancellation, context metadata, and resumable harness sessions.
-
-Claude Code and Codex CLI are optional external programs. Forge detects them when
-they are already installed and authenticated; it does not silently install or
-modify third-party harnesses. This adapter-based design also leaves room for
-additional harnesses in the future.
+| Feature | What Forge adds |
+|---|---|
+| **More models and provider-aware controls** | Use SpaceXAI, ChatGPT Codex, and OpenRouter from the native TUI. Forge provides interactive `/login`, provider-aware model catalogs, configurable OpenRouter filters, and safe switching across provider families. Codex OAuth supports capability-driven `/fast` mode with a visible `⚡︎` indicator, while `/usage` reports provider-specific quota windows and reset times. |
+| **Simpler Forge theme** | A focused theme and welcome experience with less visual noise, compact model labels, reasoning-effort controls, an optional shortcut footer, and predictable `Esc` cancellation. |
+| **Multi-model subagent swarms** | Run native model roles alongside Claude Code and Codex CLI agents. External agents appear in the native Subagents UI and support streamed progress, tool activity, cancellation, context metadata, and resumable sessions. Harnesses are detected when installed and authenticated separately, and the adapter design supports adding more harnesses later. |
 
 ## Quickstart
 

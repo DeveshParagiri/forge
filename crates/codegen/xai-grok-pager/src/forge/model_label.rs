@@ -51,7 +51,7 @@ mod tests {
     fn adds_lightning_only_when_fast_mode_is_enabled() {
         assert_eq!(
             primary_model_label("OpenAI · Codex".to_owned(), true),
-            "⚡ Codex"
+            "⚡︎ Codex"
         );
         assert_eq!(
             primary_model_label("OpenAI · Codex".to_owned(), false),
