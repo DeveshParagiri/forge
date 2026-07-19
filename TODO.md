@@ -19,7 +19,6 @@ All work below must follow these constraints:
 
 | ID | Requirement | Priority |
 |---|---|---|
-| FR-1 | Codex OAuth `/fast` mode | P1 |
 | FR-2 | Product README and extensibility documentation | P1 |
 | FR-3 | Cross-harness session browsing and resume | P0 |
 | FR-4 | Rename Exaforge to Forge | P0 |
@@ -28,29 +27,6 @@ All work below must follow these constraints:
 | FR-7 | Complete extension context in harness prompts | P0 |
 | FR-8 | Personalized, self-evolving harness/model learning | P2 |
 | FR-9 | Keyboard shortcut consistency and regressions | P0 |
-
-## FR-1: Codex OAuth `/fast` mode
-
-### Goal
-
-Allow users authenticated through Codex OAuth to enable a fast inference mode from the TUI.
-
-### Requirements
-
-- `/fast` is available only when the active provider/model supports it.
-- The command toggles fast mode for the active session and clearly reports the resulting state.
-- When fast mode is enabled, a lightning indicator (`⚡`) appears next to the active model wherever the model is shown in the primary UI.
-- The selected state survives ordinary turns and model UI redraws.
-- Provider capability metadata, not string matching, determines whether fast mode is supported.
-- Unsupported providers/models receive a clear non-destructive message rather than silently ignoring the command.
-
-### Acceptance criteria
-
-- A Codex OAuth session can enable and disable fast mode with `/fast`.
-- Requests contain the correct Codex fast-mode option only while enabled.
-- The lightning indicator accurately follows actual request state.
-- SpaceXAI and other providers are unchanged unless they explicitly declare the same capability.
-- Tests cover supported, unsupported, enabled, disabled, and model-switch cases.
 
 ## FR-2: README and extensibility architecture
 
@@ -263,7 +239,7 @@ Core orchestration and UI should consume these contracts. Provider-, source-, an
 
 1. **Foundation:** FR-4 naming policy and compatibility aliases; capability and adapter contracts.
 2. **Correctness:** FR-9 keyboard regressions; FR-7 prompt-context contract; FR-5 harness lifecycle reliability.
-3. **User workflows:** FR-3 unified sessions; FR-6 subagent navigation and prompting; FR-1 Codex fast mode.
+3. **User workflows:** FR-3 unified sessions; FR-6 subagent navigation and prompting.
 4. **Documentation:** FR-2 README updated alongside each shipped feature.
 5. **Personalization:** FR-8 local learning after stable model, harness, and outcome telemetry exists.
 
