@@ -23,6 +23,8 @@ canonical executable.
 
 - `main`: published Forge source and the repository default branch.
 - `dev`: integration branch; publish it to `main` only after validation.
+- `forge-vMAJOR.MINOR.PATCH`: immutable Forge SemVer release tags. Record the
+  synchronized upstream Grok version separately in release notes/build metadata.
 - `refactor/*`: temporary local worktrees only.
 - `upstream/main`: upstream source from `https://github.com/xai-org/grok-build.git`.
 - `origin`: Forge fork.

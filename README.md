@@ -12,11 +12,11 @@ synchronized with upstream Grok Build.
 
 ## Extended features
 
-| Feature | What Forge adds |
-|---|---|
-| **More models and provider-aware controls** | Use SpaceXAI, ChatGPT Codex, and OpenRouter from the native TUI. Forge provides interactive `/login`, provider-aware model catalogs, configurable OpenRouter filters, and safe switching across provider families. Codex OAuth supports capability-driven `/fast` mode with a visible `⚡︎` indicator, while `/usage` reports provider-specific quota windows and reset times. |
-| **Simpler Forge theme** | A focused theme and welcome experience with less visual noise, compact model labels, reasoning-effort controls, an optional shortcut footer, and predictable `Esc` cancellation. |
-| **Multi-model subagent swarms** | Run native model roles alongside Claude Code and Codex CLI agents. External agents appear in the native Subagents UI and support streamed progress, tool activity, cancellation, context metadata, and resumable sessions. Harnesses are detected when installed and authenticated separately, and the adapter design supports adding more harnesses later. |
+| # | Feature | What Forge adds |
+|---:|---|---|
+| 1 | **More models** | Use SpaceXAI, ChatGPT Codex, and OpenRouter in one TUI, with Codex `/fast` and provider-aware `/usage`. |
+| 2 | **Simpler Forge theme** | A cleaner, less distracting interface with compact controls and model information. |
+| 3 | **Multi-model, multi-harness subagents** | Run subagents across different models and harnesses—including native roles, Claude Code, and Codex CLI—to match each task with the best agent and produce better work. |
 
 ## Quickstart
 
@@ -107,19 +107,20 @@ configuration, and session data remain untouched during every update path.
 ## Releases and versioning
 
 `main` is the rolling stable install channel, while Git commit hashes identify
-an exact source revision. Forge release tags may be used for pinned builds; the
-tag includes the inherited upstream version and a Forge revision, for example
-`forge-v0.2.105.1`.
+an exact source revision. Future Forge releases use independent semantic
+versioning such as `forge-v0.1.0` and `forge-v0.1.1`; the synchronized upstream
+Grok version is recorded separately in release notes and build metadata.
 
-To install a published tag instead of the latest `main`:
+To install a published version instead of the latest release:
 
 ```sh
-curl -fsSL \
-  https://raw.githubusercontent.com/DeveshParagiri/forge/forge-v0.2.105.1/scripts/install \
-  | GROK_BRANCH=forge-v0.2.105.1 sh
+FORGE_VERSION=0.1.0 \
+  curl -fsSL https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install | sh
 ```
 
-Use an existing published tag in place of the example version.
+Use an existing published version in place of the example. The initial
+`forge-v0.2.105.1` pipeline tag is retained for release provenance, but new tags
+follow Forge SemVer.
 
 ## Architecture
 
