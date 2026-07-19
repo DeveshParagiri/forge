@@ -1,46 +1,84 @@
 # Forge (`grok`)
 
-Forge extends the open-source
-[Grok Build](https://github.com/xai-org/grok-build) terminal coding agent with
-multi-provider models, provider-safe session switching, and a streamlined
-interface.
+Forge is an independent, upstream-friendly extension of
+[Grok Build](https://github.com/xai-org/grok-build), the terminal coding agent.
+It keeps the native Grok experience while adding more model choices, a simpler
+interface, and first-class multi-agent orchestration across native and external
+coding harnesses.
 
-This is an independent fork, not an official SpaceXAI distribution. Its
-`main` branch contains the installable Forge source and tracks upstream
-`main`.
+Forge is not an official SpaceXAI distribution. The `main` branch is the stable,
+installable Forge channel; development is integrated on `dev` and periodically
+synchronized with upstream Grok Build.
 
-## Features
+## Extended features
 
-| Area | Added behavior |
-|------|----------------|
-| Authentication | Interactive `/login` setup for SpaceXAI, ChatGPT Codex, and OpenRouter |
-| Models | Provider-aware catalog with configurable include/exclude patterns |
-| Sessions | Safe model switching across provider families |
-| Interface | Forge theme, reasoning-effort controls, optional shortcut footer, and `Esc` cancellation |
-| Branding | Forge welcome screen and build version |
+### More models and provider-aware controls
 
-## Architecture
+Use models through SpaceXAI, ChatGPT Codex, or OpenRouter without giving up the
+native TUI. Forge adds interactive `/login` setup, provider-aware model catalogs,
+and safe session switching across provider families.
 
-Fork-specific behavior is isolated in per-crate `forge/` modules, with
-small integration hooks in upstream code. See
-[`FORK-MAINTENANCE.md`](FORK-MAINTENANCE.md) for implementation and rebase notes.
+Codex OAuth sessions support capability-driven `/fast` mode, including a visible
+`⚡` state indicator. `/usage` reports quota windows and reset times for the active
+provider instead of assuming every model uses the native SpaceXAI credit system.
+OpenRouter model catalogs can be narrowed with configurable include and exclude
+patterns.
 
-Existing configurations that set `theme = "exaforge"` remain supported as a
-legacy read alias. Forge canonicalizes that value to `forge`, and settings UI
-selections and subsequent writes use `theme = "forge"`.
+### A simpler Forge theme
 
-## Install
+Forge includes a focused theme and welcome experience designed to keep the
+terminal readable and reduce visual noise. It provides compact model labels,
+reasoning-effort controls, an optional shortcut footer, and predictable `Esc`
+cancellation while preserving the familiar Grok workflow.
 
-Requires [Rust](https://rustup.rs/) (`cargo`) and either `dotslash` or `protoc`
-on `PATH`.
+Existing configurations using `theme = "exaforge"` continue to work as a legacy
+read alias. Forge canonicalizes the setting to `theme = "forge"` for display and
+future writes.
 
-Install directly from GitHub:
+### Multi-model subagent swarms
+
+Delegate work to multiple subagents at once, mixing native model roles with
+subscription-backed external harnesses such as Claude Code and Codex CLI. These
+agents appear in Forge's native Subagents UI, stream progress and tool activity,
+and support cancellation, context metadata, and resumable harness sessions.
+
+Claude Code and Codex CLI are optional external programs. Forge detects them when
+they are already installed and authenticated; it does not silently install or
+modify third-party harnesses. This adapter-based design also leaves room for
+additional harnesses in the future.
+
+## Quickstart
+
+### Prerequisites
+
+Building Forge currently requires:
+
+- Git
+- [Rust](https://rustup.rs/) and `cargo`
+- Either [`dotslash`](https://dotslash-cli.com/) or `protoc` on `PATH`
+
+The installer checks these prerequisites and stops with a clear message if one
+is missing. It does not install system packages or alter shell configuration.
+
+### Install from GitHub
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install | sh
 ```
 
-Or clone first and run the same installer from the checkout:
+The installer clones the published `main` branch into
+`~/.local/share/grok/source`, performs a release build, and atomically installs
+the executable at `~/.grok/bin/grok`. On macOS, it ad-hoc signs the installed
+binary when `codesign` is available. Compatibility links are created for common
+previous install locations.
+
+Configuration, authentication, and sessions under `~/.grok/` are preserved. A
+managed checkout using the former `DeveshParagiri/grok-build` remote is migrated
+to the renamed Forge repository automatically.
+
+### Install from a checkout
+
+Use this path when you want to inspect the source or build a particular branch:
 
 ```sh
 git clone https://github.com/DeveshParagiri/forge.git
@@ -48,27 +86,112 @@ cd forge
 ./scripts/install
 ```
 
-The curl pathway clones `main` into `~/.local/share/grok/source`; the checkout
-pathway builds the checkout you invoked it from. Both install `grok` at
-`~/.grok/bin/grok`. They do not replace configuration, authentication, or
-sessions under `~/.grok/`.
+When invoked from a checkout, the installer builds that checkout rather than
+cloning another copy.
 
-Verify the installation:
+### Verify
+
+Ensure `~/.grok/bin` is on `PATH`, then run:
 
 ```sh
 grok --version
+grok
 ```
 
+## Optional external harnesses
+
+External subagents require their corresponding official CLI to be installed and
+authenticated separately:
+
+```sh
+claude --version
+codex --version
+```
+
+Forge discovers available harnesses at runtime. You can use Forge normally when
+neither is installed, and installing only one enables only that adapter. Follow
+the official [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and
+[Codex CLI](https://github.com/openai/codex) instructions for installation and
+subscription authentication.
+
 ## Update
+
+For installations created by the GitHub installer, run:
 
 ```sh
 ~/bin/grok-update-from-source
 ```
 
-The updater fetches the published `main` branch, fast-forwards the local
-checkout, rebuilds, and installs the new binary. It stops without changing
-local work when the checkout is dirty or branches have diverged. Rebasing onto
-upstream remains an explicit maintainer operation.
+The updater fetches `origin/main`, fast-forwards the managed checkout, rebuilds
+Forge, and atomically replaces the installed binary. It refreshes compatibility
+links and signs the binary on macOS. It stops without overwriting work if the
+checkout is dirty or if local and remote history have diverged.
+
+Re-running the GitHub install command is also safe. Authentication,
+configuration, and session data remain untouched during either update path.
+
+## Releases and versioning
+
+`main` is the rolling stable install channel, while Git commit hashes identify
+an exact source revision. Forge release tags may be used for pinned builds; the
+tag includes the inherited upstream version and a Forge revision, for example
+`forge-v0.2.105.1`.
+
+To install a published tag instead of the latest `main`:
+
+```sh
+curl -fsSL \
+  https://raw.githubusercontent.com/DeveshParagiri/forge/forge-v0.2.105.1/scripts/install \
+  | GROK_BRANCH=forge-v0.2.105.1 sh
+```
+
+Use an existing published tag in place of the example version.
+
+## Architecture
+
+Fork-specific behavior is isolated in additive, per-crate `forge/` modules.
+Provider policy, external-harness adapters, prompt extensions, UI behavior, and
+compatibility logic live beside their owning crates rather than being spread
+through upstream implementation files. Upstream-owned code contains only narrow,
+generic hooks where Forge must enter an existing lifecycle or render path.
+
+External harness support is provider-neutral at the orchestration boundary, with
+separate Claude Code and Codex CLI adapters. Model features such as Codex fast
+mode are capability-driven rather than selected through model-name matching.
+These boundaries keep new providers and harnesses extensible and reduce the
+surface likely to conflict when upstream Grok Build changes.
+
+See [`FORK-MAINTENANCE.md`](FORK-MAINTENANCE.md) for module ownership,
+integration points, compatibility policy, focused verification commands,
+branch conventions, and upstream rebase guidance.
+
+## Maintainer workflow
+
+Forge uses three principal refs:
+
+| Ref | Purpose |
+|---|---|
+| `upstream/main` | Official source from `xai-org/grok-build` |
+| `dev` | Forge integration and upstream synchronization |
+| `main` | Validated, published, installable Forge |
+
+Synchronize a clean `dev` branch with upstream:
+
+```sh
+scripts/forge-sync-upstream
+```
+
+The script fetches `upstream/main` and rebases `dev` locally. After resolving any
+conflicts and validating the result, publish the exact integration commit:
+
+```sh
+scripts/forge-publish main
+```
+
+The publisher runs focused formatting, compilation, and Forge tests by default.
+It refuses dirty trees, the wrong source branch, and non-fast-forward publication;
+it never rewrites published history. End-user updates never rebase against
+upstream—the explicit synchronization workflow is only for maintainers.
 
 ## Build manually
 
@@ -80,9 +203,16 @@ mkdir -p ~/.grok/bin
 install -m 755 target/release/xai-grok-pager ~/.grok/bin/grok
 ```
 
+On macOS, sign a manually installed build with:
+
+```sh
+codesign --force --sign - ~/.grok/bin/grok
+codesign --verify ~/.grok/bin/grok
+```
+
 ## Development
 
-Target individual crates; full-workspace builds are slow.
+Target individual crates because full-workspace builds and test suites are slow:
 
 ```sh
 cargo fmt --all
@@ -91,10 +221,12 @@ cargo test -p <crate>
 cargo clippy -p <crate>
 ```
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the fork contribution policy.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the contribution policy and
+[`FORK-MAINTENANCE.md`](FORK-MAINTENANCE.md) for focused Forge checks.
 
 ## License
 
 First-party source is licensed under the [Apache License 2.0](LICENSE).
 Third-party and vendored source remains under its original licenses; see
-[`THIRD-PARTY-NOTICES`](THIRD-PARTY-NOTICES) and [`third_party/NOTICE`](third_party/NOTICE).
+[`THIRD-PARTY-NOTICES`](THIRD-PARTY-NOTICES) and
+[`third_party/NOTICE`](third_party/NOTICE).
