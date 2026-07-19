@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Rebase Forge's integration branch onto upstream without touching published history.
+set -euo pipefail
+
+UPSTREAM_REMOTE="${FORGE_UPSTREAM_REMOTE:-upstream}"
+BRANCH="${FORGE_SOURCE_BRANCH:-dev}"
+UPSTREAM_BRANCH="${FORGE_UPSTREAM_BRANCH:-main}"
+
+cd "$(dirname "$0")/.."
+
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "BLOCKED: working tree is dirty — commit or stash before syncing"
+  git status -sb
+  exit 1
+fi
+if ! git remote get-url "$UPSTREAM_REMOTE" >/dev/null 2>&1; then
+  echo "BLOCKED: upstream remote '$UPSTREAM_REMOTE' is not configured"
+  exit 1
+fi
+
+git checkout "$BRANCH"
+git fetch "$UPSTREAM_REMOTE" --tags "$UPSTREAM_BRANCH"
+echo "==> rebasing $BRANCH onto $UPSTREAM_REMOTE/$UPSTREAM_BRANCH"
+git rebase "$UPSTREAM_REMOTE/$UPSTREAM_BRANCH"
+
+echo "==> synced locally; run focused validation, then scripts/forge-publish main"

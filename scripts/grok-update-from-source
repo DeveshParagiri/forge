@@ -15,7 +15,7 @@ COMPAT_LINKS=(
 )
 
 if [[ ! -d "$REPO/.git" ]]; then
-  echo "BLOCKED: grok-build repo not found at $REPO"
+  echo "BLOCKED: Forge repo not found at $REPO"
   exit 1
 fi
 
@@ -86,6 +86,12 @@ trap 'rm -f "$INSTALL_TMP"' EXIT
 install -m 755 "$BUILT" "$INSTALL_TMP"
 mv -f "$INSTALL_TMP" "$INSTALL_BIN"
 trap - EXIT
+
+if [[ "$(uname -s)" == "Darwin" ]] && command -v codesign >/dev/null 2>&1; then
+  echo "==> ad-hoc signing $INSTALL_BIN"
+  codesign --force --sign - "$INSTALL_BIN"
+  codesign --verify "$INSTALL_BIN"
+fi
 
 for link_path in "${COMPAT_LINKS[@]}"; do
   mkdir -p "$(dirname "$link_path")"

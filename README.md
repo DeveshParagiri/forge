@@ -44,7 +44,7 @@ Or clone first and run the same installer from the checkout:
 
 ```sh
 git clone https://github.com/DeveshParagiri/forge.git
-cd grok-build
+cd forge
 ./scripts/install
 ```
 
@@ -74,7 +74,7 @@ upstream remains an explicit maintainer operation.
 
 ```sh
 git clone https://github.com/DeveshParagiri/forge.git
-cd grok-build
+cd forge
 cargo build -p xai-grok-pager-bin --release
 mkdir -p ~/.grok/bin
 install -m 755 target/release/xai-grok-pager ~/.grok/bin/grok

@@ -1,8 +1,8 @@
 # Forge fork maintenance notes
 
 This repository tracks [xai-org/grok-build](https://github.com/xai-org/grok-build).
-The published, installable Forge branch is `main`; upstream is tracked through
-the `upstream/main` remote-tracking branch.
+The published, installable Forge branch is `main`; integration happens on `dev`;
+upstream is tracked through the `upstream/main` remote-tracking branch.
 
 ## Installed layout
 
@@ -22,12 +22,15 @@ canonical executable.
 ## Branches and remotes
 
 - `main`: published Forge source and the repository default branch.
+- `dev`: integration branch; publish it to `main` only after validation.
 - `refactor/*`: temporary local worktrees only.
 - `upstream/main`: upstream source from `https://github.com/xai-org/grok-build.git`.
 - `origin`: Forge fork.
 
-Do not force-push published Forge history. Rebase `main` onto `upstream/main`
+Do not force-push published Forge history. Rebase `dev` onto `upstream/main`
 only when intentionally updating the fork; the end-user updater never rebases.
+Publish validated commits with `scripts/forge-publish main`, which refuses
+non-fast-forward updates.
 
 ## Extension architecture
 
@@ -135,8 +138,7 @@ running the focused tests. Avoid repeatedly restarting it during compilation.
 ```bash
 git status --short             # must be clean
 git fetch upstream --tags
-git checkout main
-git rebase upstream/main
+scripts/forge-sync-upstream
 ```
 
 When resolving conflicts:
@@ -145,7 +147,13 @@ When resolving conflicts:
 2. Reapply or adapt the small `// Forge:` hooks to the new upstream flow.
 3. Re-check ordering-sensitive behavior rather than moving it mechanically.
 4. Run the focused checks above.
-5. Build and install:
+5. Publish the validated integration commit:
+
+```bash
+scripts/forge-publish main
+```
+
+6. Build and install:
 
 ```bash
 cargo build -p xai-grok-pager-bin --release

@@ -58,7 +58,11 @@ else
   if [ "$SOURCE_DIR" = "$DEFAULT_SOURCE_DIR" ] && [ -z "${GROK_SRC:-}" ]; then
     expected_url="${REPO_URL%.git}"
     actual_url="${origin_url%.git}"
-    if [ "$actual_url" != "$expected_url" ]; then
+    legacy_url="https://github.com/DeveshParagiri/grok-build"
+    if [ "$actual_url" = "$legacy_url" ]; then
+      echo "==> migrating origin from grok-build to Forge"
+      git -C "$SOURCE_DIR" remote set-url origin "$REPO_URL"
+    elif [ "$actual_url" != "$expected_url" ]; then
       echo "BLOCKED: existing checkout at $SOURCE_DIR has an unexpected origin: $origin_url"
       exit 1
     fi

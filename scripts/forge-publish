@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Publish a clean, validated Forge commit without rewriting remote history.
+set -euo pipefail
+
+REMOTE="${FORGE_REMOTE:-origin}"
+SOURCE_BRANCH="${FORGE_SOURCE_BRANCH:-dev}"
+TARGET_BRANCH="${1:-main}"
+RUN_CHECKS="${FORGE_RUN_CHECKS:-1}"
+
+cd "$(dirname "$0")/.."
+
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "BLOCKED: working tree is dirty — commit or stash before publishing"
+  git status -sb
+  exit 1
+fi
+if [[ "$(git branch --show-current)" != "$SOURCE_BRANCH" ]]; then
+  echo "BLOCKED: publish from '$SOURCE_BRANCH' (current: '$(git branch --show-current)')"
+  exit 1
+fi
+if ! git remote get-url "$REMOTE" >/dev/null 2>&1; then
+  echo "BLOCKED: remote '$REMOTE' is not configured"
+  exit 1
+fi
+
+if [[ "$RUN_CHECKS" == "1" ]]; then
+  cargo fmt --all -- --check
+  cargo check -p xai-grok-pager-bin
+  cargo test -p xai-grok-pager forge --lib
+  cargo test -p xai-grok-sampler --test forge_codex_responses
+fi
+
+git fetch "$REMOTE" "$TARGET_BRANCH" 2>/dev/null || true
+if git show-ref --verify --quiet "refs/remotes/$REMOTE/$TARGET_BRANCH" \
+  && ! git merge-base --is-ancestor "$REMOTE/$TARGET_BRANCH" HEAD; then
+  echo "BLOCKED: HEAD is not a fast-forward of $REMOTE/$TARGET_BRANCH"
+  exit 1
+fi
+
+echo "==> publishing $(git rev-parse --short HEAD) to $REMOTE/$TARGET_BRANCH"
+git push "$REMOTE" "HEAD:refs/heads/$TARGET_BRANCH"
