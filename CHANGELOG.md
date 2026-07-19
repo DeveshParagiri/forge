@@ -4,6 +4,39 @@ This changelog tracks Forge releases independently from the synchronized upstrea
 Grok Build version. Forge release tags use `forge-vMAJOR.MINOR.PATCH`; the
 upstream base is recorded in each release entry.
 
+## [0.2.0] - 2026-07-19
+
+**Upstream base:** Grok Build 0.2.106
+
+### Added
+
+- Saved Claude Code and Codex CLI sessions now appear directly in the
+  `/sessions` dashboard when `[sessions].show_external = true`. External rows
+  use the existing compatibility switches for per-harness control, and
+  selecting one imports its context into a fresh Forge session rather than
+  loading a foreign ID through ACP.
+- Prompt shortcuts now use an extensible action registry. `Shift+Tab` cycles
+  supported reasoning-effort levels consistently across color themes, while
+  help and footer hints are derived from the same binding metadata.
+- The existing memory flush and consolidation flow can learn durable model,
+  harness, and orchestration preferences from explicit feedback and clear task
+  outcomes.
+- A scheduled upstream-sync workflow can prepare daily synchronization pull
+  requests without rewriting published Forge history.
+
+### Changed
+
+- External session rows show the harness once on the secondary line (`Claude
+  Code` or `Codex CLI`) and omit duplicate title badges and foreign `HEAD`
+  branch markers.
+- Forge orchestration and shortcut behavior is documented in the embedded user
+  guide, including capability-aware delegation and provider-cost preferences.
+
+### Fixed
+
+- Release publication now preserves downloaded artifacts by checking out the
+  tagged source before the artifact download step.
+
 ## [0.1.0] - 2026-07-19
 
 **Upstream base:** Grok Build 0.2.105
