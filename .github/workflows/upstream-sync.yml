@@ -1,0 +1,107 @@
+name: Daily Upstream Sync
+
+on:
+  schedule:
+    # Avoid the top of the hour, when scheduled Actions are most congested.
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: forge-upstream-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPOSITORY: xai-org/grok-build
+  UPSTREAM_BRANCH: main
+  TARGET_BRANCH: dev
+  SYNC_BRANCH: bot/upstream-sync
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Forge integration branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_BRANCH }}
+          fetch-depth: 0
+
+      - name: Prepare upstream sync branch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "forge-upstream-sync[bot]"
+          git config user.email "forge-upstream-sync[bot]@users.noreply.github.com"
+          git remote add upstream "https://github.com/${UPSTREAM_REPOSITORY}.git"
+          git fetch --no-tags upstream "${UPSTREAM_BRANCH}"
+          git fetch --no-tags origin "${TARGET_BRANCH}"
+          git fetch --no-tags origin \
+            "+refs/heads/${SYNC_BRANCH}:refs/remotes/origin/${SYNC_BRANCH}" || true
+
+          if git merge-base --is-ancestor "upstream/${UPSTREAM_BRANCH}" "origin/${TARGET_BRANCH}"; then
+            echo "${TARGET_BRANCH} already contains upstream/${UPSTREAM_BRANCH}."
+            exit 0
+          fi
+
+          # If the existing bot branch already contains the current target and
+          # upstream tips, keep it stable while its PR awaits review.
+          if git show-ref --verify --quiet "refs/remotes/origin/${SYNC_BRANCH}" \
+            && git merge-base --is-ancestor "origin/${TARGET_BRANCH}" "origin/${SYNC_BRANCH}" \
+            && git merge-base --is-ancestor "upstream/${UPSTREAM_BRANCH}" "origin/${SYNC_BRANCH}"; then
+            git checkout -B "${SYNC_BRANCH}" "origin/${SYNC_BRANCH}"
+            exit 0
+          fi
+
+          git checkout -B "${SYNC_BRANCH}" "origin/${TARGET_BRANCH}"
+          git merge --no-ff \
+            -m "chore: sync upstream Grok Build" \
+            "upstream/${UPSTREAM_BRANCH}"
+          git push --force-with-lease origin "HEAD:refs/heads/${SYNC_BRANCH}"
+
+      - name: Open or refresh sync pull request
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git merge-base --is-ancestor "upstream/${UPSTREAM_BRANCH}" "origin/${TARGET_BRANCH}"; then
+            exit 0
+          fi
+
+          upstream_sha="$(git rev-parse "upstream/${UPSTREAM_BRANCH}")"
+          body_file="$(mktemp)"
+          cat >"${body_file}" <<EOF
+          Daily automated sync of [${UPSTREAM_REPOSITORY}@${upstream_sha:0:12}](https://github.com/${UPSTREAM_REPOSITORY}/commit/${upstream_sha}) into Forge's \
+          [${TARGET_BRANCH}](https://github.com/${GITHUB_REPOSITORY}/tree/${TARGET_BRANCH}) branch.
+
+          This PR is never auto-merged. Review Forge hooks and focused CI before merging.
+          EOF
+
+          existing_pr="$(gh pr list \
+            --repo "${GITHUB_REPOSITORY}" \
+            --state open \
+            --base "${TARGET_BRANCH}" \
+            --head "${SYNC_BRANCH}" \
+            --json number \
+            --jq '.[0].number // empty')"
+
+          if [ -n "${existing_pr}" ]; then
+            gh pr edit "${existing_pr}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "chore: sync upstream Grok Build" \
+              --body-file "${body_file}"
+          else
+            gh pr create \
+              --repo "${GITHUB_REPOSITORY}" \
+              --base "${TARGET_BRANCH}" \
+              --head "${SYNC_BRANCH}" \
+              --title "chore: sync upstream Grok Build" \
+              --body-file "${body_file}"
+          fi
