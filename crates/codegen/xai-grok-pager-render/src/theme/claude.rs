@@ -55,6 +55,9 @@ mod palette {
     pub const USER_MSG_HOVER: Color = rgb(70, 70, 70);
     pub const PROMPT_BORDER: Color = rgb(136, 136, 136);
     pub const PROMPT_BORDER_ACTIVE: Color = rgb(166, 166, 166);
+    // Brand orange — Claude Code `claude` / `briefLabelClaude` / `clawd_body`
+    pub const CLAUDE: Color = rgb(215, 119, 87);
+    pub const CLAUDE_SHIMMER: Color = rgb(245, 149, 117);
 }
 use palette::*;
 
@@ -69,15 +72,17 @@ impl Theme {
             bg_hover: USER_MSG_HOVER,
             bg_terminal: BG,
 
-            accent_user: FG_DARK,
-            accent_assistant: MAGENTA,
-            accent_thinking: MAGENTA,
+            // Prompt › / selection — warm brand, not gray-on-gray
+            accent_user: CLAUDE,
+            // Assistant + thinking + spinner — Claude orange (not Grok magenta)
+            accent_assistant: CLAUDE,
+            accent_thinking: CLAUDE_SHIMMER,
             accent_tool: DARK5,
             accent_system: BLUE,
             accent_error: RED,
             accent_success: GREEN,
-            accent_running: MAGENTA,
-            accent_skill: BLUE,
+            accent_running: CLAUDE,
+            accent_skill: CLAUDE,
 
             text_primary: FG,
             text_secondary: FG_DARK,
@@ -87,23 +92,24 @@ impl Theme {
             gray_bright: DARK5,
 
             command: YELLOW,
-            path: ORANGE,
-            running: CYAN,
+            path: CLAUDE_SHIMMER,
+            running: CLAUDE,
             warning: YELLOW,
 
-            fuzzy_accent: BLUE,
+            fuzzy_accent: CLAUDE,
 
             accent_plan: rgb(255, 219, 141),
-            accent_verify: rgb(187, 154, 247),
+            accent_verify: CLAUDE_SHIMMER,
             accent_feedback: GREEN1,
             accent_remember: Color::Rgb(139, 195, 74),
 
             selection_border: rgb(60, 60, 65),
             prompt_border: PROMPT_BORDER,
-            prompt_border_active: PROMPT_BORDER_ACTIVE,
+            // Focused input frame picks up a warm edge (still readable)
+            prompt_border_active: CLAUDE,
             hover_border: rgb(30, 30, 34),
 
-            accent_model: TEAL,
+            accent_model: CLAUDE,
 
             scrollbar_bg: BG_STORM_DARK,
             scrollbar_fg: BG_HIGHLIGHT,
