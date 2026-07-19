@@ -10,7 +10,7 @@ use xai_grok_workspace::foreign_sessions::{
     EnabledForeignSessionSources, ForeignSessionSummary, ForeignSessionTool,
 };
 
-use crate::views::dashboard::{DashboardRow, DashboardRowId, RowBadge, RowState};
+use crate::views::dashboard::{DashboardRow, DashboardRowId, RowState};
 
 /// In-memory dashboard state for external sessions. This state is deliberately
 /// separate from the `/resume` picker's sequence/coordinator so opening one
@@ -134,11 +134,10 @@ pub(crate) fn append_rows(
                 native_id: entry.native_id.clone(),
             },
             label,
-            subtitle: entry
-                .branch
-                .as_deref()
-                .filter(|branch| !branch.trim().is_empty())
-                .map(sanitize),
+            // The harness is already identified on the second line. Keep the
+            // title clean instead of repeating `[Claude Code]` / `[Codex CLI]`
+            // or showing the foreign repository's `HEAD` branch marker.
+            subtitle: None,
             // Keep opted-in external rows visible on first open. The dashboard
             // collapses `Inactive` by default, which would hide the very rows
             // this explicit Forge setting asks to expose.
@@ -150,11 +149,7 @@ pub(crate) fn append_rows(
             last_change_at: entry.updated_at,
             pinned: false,
             is_active: false,
-            badges: vec![match entry.tool {
-                ForeignSessionTool::Claude => RowBadge::ClaudeCode,
-                ForeignSessionTool::Codex => RowBadge::CodexCli,
-                ForeignSessionTool::Cursor => RowBadge::Cursor,
-            }],
+            badges: Vec::new(),
             context_pct: None,
             indent: 0,
             parent_label: None,
@@ -241,7 +236,8 @@ mod tests {
         );
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].state, RowState::Idle);
-        assert_eq!(rows[0].badges, vec![RowBadge::ClaudeCode]);
+        assert_eq!(rows[0].subtitle, None);
+        assert!(rows[0].badges.is_empty());
         assert_eq!(rows[0].secondary_line.as_deref(), Some("Claude Code"));
         assert!(matches!(
             rows[0].id,

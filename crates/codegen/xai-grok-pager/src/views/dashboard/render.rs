@@ -2295,9 +2295,6 @@ fn render_row(
                 RowBadge::NeedsInput | RowBadge::Worktree | RowBadge::Pinned => continue,
                 RowBadge::Failed => "failed",
                 RowBadge::BgTask => "bg",
-                RowBadge::ClaudeCode => "Claude Code",
-                RowBadge::CodexCli => "Codex CLI",
-                RowBadge::Cursor => "Cursor",
             };
             let chip = format!(" [{label}]");
             let cw = UnicodeWidthStr::width(chip.as_str()) as u16;
@@ -3704,7 +3701,6 @@ fn badge_color(badge: RowBadge, theme: &Theme) -> Color {
         RowBadge::BgTask => theme.command,
         RowBadge::Pinned => theme.accent_running,
         RowBadge::Failed => theme.accent_error,
-        RowBadge::ClaudeCode | RowBadge::CodexCli | RowBadge::Cursor => theme.accent_user,
     }
 }
 

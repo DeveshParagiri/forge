@@ -82,10 +82,6 @@ pub enum RowBadge {
     BgTask,
     Pinned,
     Failed,
-    // Forge: source labels for imported external sessions.
-    ClaudeCode,
-    CodexCli,
-    Cursor,
 }
 impl RowBadge {
     pub fn label(self) -> &'static str {
@@ -95,9 +91,6 @@ impl RowBadge {
             Self::BgTask => "bg",
             Self::Pinned => "pinned",
             Self::Failed => "failed",
-            Self::ClaudeCode => "Claude Code",
-            Self::CodexCli => "Codex CLI",
-            Self::Cursor => "Cursor",
         }
     }
 }
