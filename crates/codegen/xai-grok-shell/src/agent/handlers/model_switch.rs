@@ -22,6 +22,8 @@ pub(crate) async fn apply(
     );
     tracing::debug!("session_session_model::mvp_agent: {:?}", &args);
     let effort_override = parse_reasoning_effort_meta(args.meta.as_ref());
+    // Exaforge: feature-specific request parsing lives in its additive module.
+    let fast_mode_override = crate::agent::exaforge::fast_mode::parse_request(args.meta.as_ref());
     let acp::SetSessionModelRequest {
         session_id,
         model_id,
@@ -33,6 +35,7 @@ pub(crate) async fn apply(
         .ok_or_else(|| acp::Error::invalid_params().data("unknown session id"))?;
     let model = agent.resolve_model_id(&model_id)?;
     let use_concise = model.info().use_concise;
+    let supports_fast_mode = model.info().supports_fast_mode;
     let session_default = handle
         .session_default_agent_profile
         .as_deref()
@@ -114,6 +117,20 @@ pub(crate) async fn apply(
     }
     let mut model_sampling =
         agent.prepare_sampling_config_for_model(&model, handle.origin_client.clone());
+    // Exaforge: preserve or clear feature state through one capability hook.
+    model_sampling.fast_mode = crate::agent::exaforge::fast_mode::resolve_for_switch(
+        &handle.cmd_tx,
+        supports_fast_mode,
+        fast_mode_override,
+    )
+    .await;
+    if fast_mode_override == Some(true) && !supports_fast_mode {
+        tracing::warn!(
+            session_id = %session_id.0,
+            model_id = %model_id.0,
+            "set_session_model: ignoring fast-mode request — model lacks capability"
+        );
+    }
     if let Some(eff) = effort_override {
         if agent
             .models_manager

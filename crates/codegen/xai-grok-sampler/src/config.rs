@@ -72,6 +72,11 @@ pub struct SamplerConfig {
     // Reasoning effort
     pub reasoning_effort: Option<ReasoningEffort>,
 
+    /// Session-scoped fast inference selection, interpreted by a provider
+    /// adapter that explicitly declares support for it.
+    #[serde(default)]
+    pub fast_mode: bool,
+
     // Client identity
     pub origin_client: Option<OriginClientInfo>,
     pub client_identifier: Option<String>,
@@ -146,6 +151,7 @@ impl Default for SamplerConfig {
             stream_tool_calls: false,
             idle_timeout_secs: None,
             reasoning_effort: None,
+            fast_mode: false,
             origin_client: None,
             client_identifier: None,
             deployment_id: None,

@@ -98,6 +98,7 @@ async fn test_e2e_idle_resume_refreshes_model_metadata() {
             let chat_state_handle = xai_chat_state::ChatStateActor::spawn(
                 vec![],
                 xai_grok_sampling_types::SamplingConfig {
+                    fast_mode: None,
                     base_url: mock_url,
                     model: "test-model".to_string(),
                     max_completion_tokens: Some(8192),

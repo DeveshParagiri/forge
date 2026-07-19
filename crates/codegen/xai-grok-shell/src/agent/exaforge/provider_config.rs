@@ -15,6 +15,12 @@ pub struct ProviderConfig {
     pub env_key: Option<EnvKeys>,
     /// Auth pack id: `codex` or `openrouter`.
     pub auth: Option<String>,
+    /// Provider-declared support for Codex-style fast inference requests.
+    ///
+    /// This is deliberately capability metadata, rather than a provider-name
+    /// check, so other providers can opt in with their own compatible adapter.
+    #[serde(default)]
+    pub supports_fast_mode: bool,
     #[serde(default)]
     pub extra_headers: IndexMap<String, String>,
 }
@@ -46,8 +52,13 @@ impl ProviderConfig {
                 entry.env_key = Some(env_key.clone());
             }
         }
+        entry.info.supports_fast_mode |= self.supports_fast_mode;
         if let Some(auth) = self.auth.as_deref() {
             if auth.eq_ignore_ascii_case("codex") {
+                // The Codex OAuth provider profile declares its compatible fast
+                // request capability when constructing catalog metadata. All
+                // downstream eligibility uses that metadata, never this name.
+                entry.info.supports_fast_mode = true;
                 if entry.env_key.is_none() {
                     entry.env_key = Some(EnvKeys::single("CODEX_ACCESS_TOKEN"));
                 }

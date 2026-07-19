@@ -52,6 +52,9 @@ pub struct ModelState {
     pub available: IndexMap<acp::ModelId, acp::ModelInfo>,
     pub current: Option<acp::ModelId>,
     pub reasoning_effort: Option<ReasoningEffort>,
+    /// Session-scoped fast mode. This is reset whenever the active model lacks
+    /// the corresponding ACP capability metadata.
+    pub fast_mode: bool,
     /// External override for the context window size (tokens).
     /// When set, `get_context_window()` returns this instead of
     /// reading from the current model's metadata. Used for subagent
@@ -168,9 +171,12 @@ impl ModelState {
                 .and_then(|id| self.available.get(id))
                 .and_then(|info| parse_reasoning_effort_meta(info.meta.as_ref()));
         }
+        crate::exaforge::fast_mode::reconcile(self);
     }
 
-    /// Set the current model and resolve reasoning effort from catalog meta.
+    /// Set the current model and resolve model-scoped session state from catalog
+    /// metadata. Fast mode persists across compatible model changes and is
+    /// cleared as soon as the new model does not declare the capability.
     pub fn set_current(
         &mut self,
         model_id: acp::ModelId,
@@ -182,6 +188,7 @@ impl ModelState {
                 .get(&model_id)
                 .and_then(|info| parse_reasoning_effort_meta(info.meta.as_ref()))
         });
+        crate::exaforge::fast_mode::reconcile(self);
     }
 
     /// The reasoning-effort menu for the current model. Gate-first: an unset or
@@ -331,6 +338,7 @@ impl From<Option<acp::SessionModelState>> for ModelState {
                     available: models,
                     current: current_model,
                     reasoning_effort,
+                    fast_mode: false,
                     context_window_override: None,
                 }
             })

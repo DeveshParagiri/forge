@@ -1021,6 +1021,7 @@ async fn set_session_model_invalidates_byok_memo_for_same_model_id() {
             // Switch to the same model_id, now a per-model BYOK model on a
             // third-party endpoint.
             let cfg = xai_grok_sampler::SamplerConfig {
+                fast_mode: false,
                 api_key: Some("byok-key".to_string()),
                 base_url: "https://third-party.example/v1".to_string(),
                 model: model.clone(),

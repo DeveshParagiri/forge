@@ -390,6 +390,8 @@ pub enum Action {
         model_id: acp::ModelId,
         effort: Option<ReasoningEffort>,
     },
+    /// Set the capability-gated fast inference state on the active session.
+    SetFastMode(bool),
     /// Cancel the currently running turn.
     CancelTurn,
     /// User confirmed a cancel-turn choice from the panel.
@@ -1521,6 +1523,9 @@ pub enum Effect {
         session_id: acp::SessionId,
         model_id: acp::ModelId,
         effort: Option<ReasoningEffort>,
+        /// `Some` only for `/fast`; ordinary model and effort switches preserve
+        /// the shell's session-scoped state.
+        fast_mode: Option<bool>,
         /// The model that was active before the optimistic UI update
         /// in `set_default_model`. `None` for `Action::SwitchModel`
         /// (no optimistic update). Threaded through to
@@ -2303,6 +2308,7 @@ pub enum TaskResult {
         agent_id: AgentId,
         model_id: acp::ModelId,
         effort: Option<ReasoningEffort>,
+        fast_mode: Option<bool>,
         result: Result<(), SwitchModelError>,
         /// Forwarded from `Effect::SwitchModel.prev_model_id` for
         /// rollback on `IncompatibleAgent`.

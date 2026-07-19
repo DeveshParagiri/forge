@@ -1594,6 +1594,7 @@ mod reasoning_compaction_regression_tests {
     }
     fn test_config(base_url: &str) -> SamplerConfig {
         SamplerConfig {
+            fast_mode: false,
             api_key: Some("test-api-key".to_string()),
             base_url: base_url.to_string(),
             model: "test-model".to_string(),

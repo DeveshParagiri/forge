@@ -4,6 +4,7 @@
 //! files only re-touch thin `// Exaforge:` hooks.
 
 pub(crate) mod effort;
+pub(crate) mod fast_mode;
 pub(crate) mod layout;
 pub(crate) mod model_label;
 pub(crate) mod provider_login;

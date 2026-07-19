@@ -43,6 +43,7 @@ pub(crate) fn dispatch_cycle_effort(app: &mut AppView) -> Vec<Effect> {
         session_id,
         model_id,
         effort: Some(effort),
+        fast_mode: None,
         prev_model_id: None,
     }]
 }

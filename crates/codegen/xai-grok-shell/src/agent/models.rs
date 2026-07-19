@@ -3416,6 +3416,7 @@ mod tests {
             supports_reasoning_effort: false,
             reasoning_efforts: Vec::new(),
             supports_backend_search: false,
+            supports_fast_mode: false,
             compactions_remaining: None,
             compaction_at_tokens: None,
             show_model_fingerprint: false,

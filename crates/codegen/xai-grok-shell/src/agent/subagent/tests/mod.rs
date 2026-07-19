@@ -3250,6 +3250,7 @@ fn record_pre_spawn_failure_clears_stale_pending_entry() {
 fn test_model_entry(model_id: &str) -> crate::agent::config::ModelEntry {
     crate::agent::config::ModelEntry {
         info: crate::agent::config::ModelInfo {
+            supports_fast_mode: false,
             user_selectable: true,
             id: None,
             model: model_id.to_string(),
@@ -3483,6 +3484,7 @@ fn test_sampling_config(model_slug: &str) -> xai_grok_sampling_types::SamplingCo
         extra_headers: Default::default(),
         context_window: NonZeroU64::new(256_000).expect("non-zero context window"),
         reasoning_effort: None,
+        fast_mode: None,
         stream_tool_calls: None,
     }
 }

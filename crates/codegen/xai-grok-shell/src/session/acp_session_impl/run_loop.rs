@@ -392,6 +392,9 @@ pub(super) async fn run_session(
             .replace(None); } } SessionCommand::GetCurrentModel { responds_to } => { let
             model = session.chat_state_handle.get_sampling_config(). await .map(| c | c
             .model).unwrap_or_default(); let _ = responds_to.send(model); }
+            SessionCommand::GetSamplingFastMode { responds_to } => { let enabled = session
+            .chat_state_handle.get_sampling_config(). await .and_then(| c | c.fast_mode)
+            .unwrap_or(false); let _ = responds_to.send(enabled); }
             SessionCommand::GetCurrentPromptMode { responds_to } => { let mode = *
             session.current_prompt_mode.lock(); let _ = responds_to.send(mode); }
             SessionCommand::GetModelMetadata { responds_to } => { let id = session

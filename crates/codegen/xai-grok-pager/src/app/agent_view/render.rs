@@ -740,11 +740,12 @@ impl AgentView {
         let scrollbar_cfg = &appearance.scrollback.scrollbar;
         // Exaforge: keep provider-qualified names in pickers, but omit the
         // provider from the compact prompt footer.
-        let model_id = crate::exaforge::model_label::prompt_footer_model_name(
+        let model_id = crate::exaforge::model_label::primary_model_label(
             self.session
                 .models
                 .current_model_name()
                 .unwrap_or_else(|| "unknown".to_string()),
+            self.session.models.fast_mode,
         );
         let effective_plan = self.plan_mode_pending.unwrap_or(self.plan_mode_active);
         let casual_commenting = self.is_casual_commenting();

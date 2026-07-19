@@ -1609,23 +1609,31 @@ pub(crate) fn execute(
             session_id,
             model_id,
             effort,
+            fast_mode,
             prev_model_id,
         } => {
             let tx = acp_tx.clone();
             tasks
                 .spawn(async move {
-                    let meta = effort
-                        .map(|eff| {
-                            use xai_grok_shell::sampling::types::{
-                                REASONING_EFFORT_META_KEY, reasoning_effort_meta_value,
-                            };
-                            let mut m = acp::Meta::new();
-                            m.insert(
+                    let meta = if effort.is_some() || fast_mode.is_some() {
+                        use xai_grok_shell::sampling::types::{
+                            FAST_MODE_META_KEY, REASONING_EFFORT_META_KEY, fast_mode_meta_value,
+                            reasoning_effort_meta_value,
+                        };
+                        let mut meta = acp::Meta::new();
+                        if let Some(effort) = effort {
+                            meta.insert(
                                 REASONING_EFFORT_META_KEY.to_string(),
-                                reasoning_effort_meta_value(eff),
+                                reasoning_effort_meta_value(effort),
                             );
-                            m
-                        });
+                        }
+                        if let Some(enabled) = fast_mode {
+                            meta.insert(FAST_MODE_META_KEY.to_string(), fast_mode_meta_value(enabled));
+                        }
+                        Some(meta)
+                    } else {
+                        None
+                    };
                     let req = acp::SetSessionModelRequest::new(
                             session_id,
                             model_id.clone(),
@@ -1651,6 +1659,7 @@ pub(crate) fn execute(
                         agent_id,
                         model_id,
                         effort,
+                        fast_mode,
                         result,
                         prev_model_id,
                     }

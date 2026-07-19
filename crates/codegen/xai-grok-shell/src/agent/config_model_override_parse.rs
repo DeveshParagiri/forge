@@ -525,6 +525,7 @@ mod tests {
             supported_in_api: Some(true),
             reasoning_effort: Some(ReasoningEffort::High),
             supports_reasoning_effort: Some(true),
+            supports_fast_mode: Some(true),
             reasoning_efforts: vec![ReasoningEffortOption {
                 id: "deep".to_string(),
                 value: ReasoningEffort::High,

@@ -848,8 +848,13 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
                 session_id,
                 model_id,
                 effort,
+                fast_mode: None,
                 prev_model_id: None,
             }]
+        }
+        // Exaforge: fast-mode behavior is isolated behind one narrow hook.
+        Action::SetFastMode(enabled) => {
+            crate::exaforge::fast_mode::dispatch_set_fast_mode(app, enabled)
         }
         Action::AnnouncementsHide => {
             let shown_key = crate::views::announcements::first_session_announcement(

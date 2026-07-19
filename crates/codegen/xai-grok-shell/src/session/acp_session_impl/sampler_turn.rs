@@ -268,6 +268,7 @@ impl SessionActor {
                 context_window: std::num::NonZeroU64::new(256_000).unwrap(),
                 reasoning_effort: None,
                 stream_tool_calls: None,
+                fast_mode: None,
             });
         let creds = self.chat_state_handle.get_credentials().await;
         let model_facts = self.model_auth_facts(cfg.model.as_str());
@@ -277,6 +278,8 @@ impl SessionActor {
         let use_bearer_resolver = gate.active();
         self.log_auth_gate_unknown("reconstruct_full_config", gate, &cfg.base_url);
         let auth_scheme = model_facts.auth_scheme;
+        // Exaforge: feature state is interpreted by its additive policy module.
+        let fast_mode = crate::agent::exaforge::fast_mode::apply_to_sampler_config(&cfg);
         let mut extra_headers = cfg.extra_headers;
         crate::agent::config::inject_url_derived_headers(
             &mut extra_headers,
@@ -339,6 +342,7 @@ impl SessionActor {
             context_window: cfg.context_window.get(),
             client_version: creds.client_version,
             reasoning_effort: cfg.reasoning_effort,
+            fast_mode,
             force_http1: false,
             max_retries: Some(self.max_retries),
             stream_tool_calls: provider_profile.stream_tool_calls,

@@ -337,6 +337,7 @@ struct ClientDefaults {
     api_backend: ApiBackend,
     auth_scheme: AuthScheme,
     stream_tool_calls: bool,
+    fast_mode: bool,
     doom_loop_recovery: Option<xai_grok_sampling_types::DoomLoopRecoveryPolicy>,
 }
 
@@ -549,6 +550,7 @@ impl SamplingClient {
             api_backend: config.api_backend,
             auth_scheme: config.auth_scheme,
             stream_tool_calls: config.stream_tool_calls,
+            fast_mode: config.fast_mode,
             doom_loop_recovery: config.doom_loop_recovery,
         };
 
@@ -1225,7 +1227,8 @@ impl SamplingClient {
         }
         xai_grok_sampling_types::patch_reasoning_text_types(&mut request_body);
         if !responses_backend.accepts_xai_extensions() {
-            request_body = responses_backend.prepare_request_body(request_body);
+            request_body =
+                responses_backend.prepare_request_body(request_body, self.defaults.fast_mode);
             tracing::info!(
                 target: crate::sampling_log::TARGET,
                 event = "codex_request_sanitized",
@@ -1972,6 +1975,7 @@ mod tests {
             stream_tool_calls: false,
             idle_timeout_secs: None,
             reasoning_effort: None,
+            fast_mode: false,
             origin_client: None,
             client_identifier: None,
             deployment_id: None,

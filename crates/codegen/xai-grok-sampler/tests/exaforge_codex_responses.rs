@@ -65,6 +65,7 @@ fn responses_config(base_url: String) -> SamplerConfig {
         stream_tool_calls: false,
         idle_timeout_secs: Some(30),
         reasoning_effort: None,
+        fast_mode: false,
         origin_client: None,
         client_identifier: None,
         deployment_id: None,

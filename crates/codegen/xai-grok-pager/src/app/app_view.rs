@@ -3938,10 +3938,10 @@ impl AppView {
                         };
                         // Exaforge: same compact footer label as in-session prompt
                         // (model only; provider stays in /model pickers).
-                        let model_name_base =
-                            crate::exaforge::model_label::prompt_footer_model_name(
-                                self.models.current_model_name().unwrap_or_default(),
-                            );
+                        let model_name_base = crate::exaforge::model_label::primary_model_label(
+                            self.models.current_model_name().unwrap_or_default(),
+                            self.models.fast_mode,
+                        );
                         let model_name = match self.models.reasoning_effort {
                             Some(eff) => format!("{model_name_base} ({eff})"),
                             None => model_name_base,

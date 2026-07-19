@@ -30,6 +30,7 @@ pub fn test_sampler_config(
     // Shell `Client` is `xai_grok_sampler::SamplingClient`, which takes a
     // `SamplerConfig` directly. Construct one inline here.
     SamplerConfig {
+        fast_mode: false,
         api_key: Some("test-api-key".to_string()),
         base_url: base_url.to_string(),
         model: "test-model".to_string(),

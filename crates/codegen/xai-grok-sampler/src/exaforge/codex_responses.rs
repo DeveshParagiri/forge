@@ -27,10 +27,10 @@ impl ResponsesBackend {
         matches!(self, Self::Standard)
     }
 
-    pub(crate) fn prepare_request_body(self, body: Value) -> Value {
+    pub(crate) fn prepare_request_body(self, body: Value, fast_mode: bool) -> Value {
         match self {
             Self::Standard => body,
-            Self::Codex => sanitize_body_for_codex_backend(body),
+            Self::Codex => sanitize_body_for_codex_backend(body, fast_mode),
         }
     }
 
@@ -57,7 +57,7 @@ impl ResponsesBackend {
 /// `temperature`, `top_p`, `max_output_tokens`, `truncation`, `background`,
 /// `metadata`, `stream_tool_calls`, and **system messages in `input`**
 /// (use `instructions` instead). Also requires `store: false` and `stream: true`.
-fn sanitize_body_for_codex_backend(mut body: Value) -> Value {
+fn sanitize_body_for_codex_backend(mut body: Value, fast_mode: bool) -> Value {
     // Lift system / developer text out of input → instructions (Pi style).
     let mut instruction_parts: Vec<String> = Vec::new();
     if let Some(existing) = body.get("instructions").and_then(|v| v.as_str())
@@ -118,6 +118,8 @@ fn sanitize_body_for_codex_backend(mut body: Value) -> Value {
 
     out.insert("store".into(), json!(false));
     out.insert("stream".into(), json!(true));
+    // Exaforge: concrete fast-mode wire mapping stays in its feature module.
+    super::fast_mode::apply_codex_request_option(&mut out, fast_mode);
     out.insert("input".into(), Value::Array(filtered_input));
 
     if !instruction_parts.is_empty() {
@@ -242,6 +244,19 @@ mod tests {
     }
 
     #[test]
+    fn fast_mode_adds_codex_priority_service_tier_only_when_enabled() {
+        let body = json!({"model": "gpt-5", "input": []});
+        let enabled = ResponsesBackend::Codex.prepare_request_body(body.clone(), true);
+        assert_eq!(enabled["service_tier"], "priority");
+
+        let disabled = ResponsesBackend::Codex.prepare_request_body(body.clone(), false);
+        assert!(disabled.get("service_tier").is_none());
+
+        let standard = ResponsesBackend::Standard.prepare_request_body(body, true);
+        assert!(standard.get("service_tier").is_none());
+    }
+
+    #[test]
     fn lifts_system_and_strips_forbidden_params() {
         let body = json!({
             "model": "gpt-5.6-sol",
@@ -261,7 +276,7 @@ mod tests {
             "tools": [{"type": "function", "name": "bash", "parameters": {"type": "object"}}],
             "reasoning": {"effort": "medium", "summary": "concise"},
         });
-        let out = ResponsesBackend::Codex.prepare_request_body(body);
+        let out = ResponsesBackend::Codex.prepare_request_body(body, false);
         assert_eq!(out["store"], json!(false));
         assert_eq!(out["stream"], json!(true));
         assert!(out.get("temperature").is_none());
@@ -283,7 +298,7 @@ mod tests {
 
     #[test]
     fn retains_default_instructions_punctuation() {
-        let out = ResponsesBackend::Codex.prepare_request_body(json!({"input": []}));
+        let out = ResponsesBackend::Codex.prepare_request_body(json!({"input": []}), false);
         assert_eq!(out["instructions"], "You are a helpful assistant.");
     }
 

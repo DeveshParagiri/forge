@@ -890,6 +890,12 @@ pub fn parse_remote_model_value(
             .and_then(|v| v.as_array())
             .map(|arr| xai_grok_sampling_types::parse_reasoning_effort_options(arr))
             .unwrap_or_default(),
+        supports_fast_mode: obj
+            .get("supportsFastMode")
+            .or_else(|| obj.get("supports_fast_mode"))
+            .or_else(|| meta.and_then(|m| m.get("supportsFastMode")))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         supports_backend_search: obj
             .get("supportsBackendSearch")
             .or_else(|| obj.get("supports_backend_search"))

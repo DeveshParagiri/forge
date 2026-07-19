@@ -237,6 +237,10 @@ pub enum SessionCommand {
     GetCurrentModel {
         responds_to: oneshot::Sender<String>,
     },
+    /// Read the session-scoped fast-mode state from the live sampling config.
+    GetSamplingFastMode {
+        responds_to: oneshot::Sender<bool>,
+    },
     GetCurrentPromptMode {
         responds_to: oneshot::Sender<PromptMode>,
     },

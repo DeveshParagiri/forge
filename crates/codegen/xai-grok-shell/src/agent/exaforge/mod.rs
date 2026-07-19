@@ -6,6 +6,7 @@
 
 pub mod catalog;
 pub mod credentials;
+pub(crate) mod fast_mode;
 pub mod history;
 pub mod identity;
 pub mod profile;

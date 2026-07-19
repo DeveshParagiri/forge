@@ -851,6 +851,28 @@ pub fn parse_canonical_effort_token(token: &str) -> Option<ReasoningEffort> {
 
 pub const REASONING_EFFORT_META_KEY: &str = "reasoningEffort";
 pub const SUPPORTS_REASONING_EFFORT_META_KEY: &str = "supportsReasoningEffort";
+/// ACP model metadata capability for the optional fast inference request mode.
+pub const SUPPORTS_FAST_MODE_META_KEY: &str = "supportsFastMode";
+pub const FAST_MODE_META_KEY: &str = "fastMode";
+
+/// Read the active model's fast-mode capability from ACP metadata.
+pub fn supports_fast_mode_meta(meta: Option<&serde_json::Map<String, serde_json::Value>>) -> bool {
+    meta.and_then(|m| m.get(SUPPORTS_FAST_MODE_META_KEY))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
+/// Read a client-requested fast-mode state from ACP request metadata.
+pub fn parse_fast_mode_meta(
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Option<bool> {
+    meta.and_then(|m| m.get(FAST_MODE_META_KEY))
+        .and_then(|v| v.as_bool())
+}
+
+pub fn fast_mode_meta_value(enabled: bool) -> serde_json::Value {
+    serde_json::Value::Bool(enabled)
+}
 
 pub fn supports_reasoning_effort_meta(
     meta: Option<&serde_json::Map<String, serde_json::Value>>,
@@ -1052,6 +1074,10 @@ pub struct SamplingConfig {
     /// API request body so the upstream emits per-chunk argument deltas.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_tool_calls: Option<bool>,
+    /// Session-scoped fast inference selection. This is set only after the
+    /// active model's capability metadata admits the mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fast_mode: Option<bool>,
 }
 
 // ============ Responses API wrapper ============
