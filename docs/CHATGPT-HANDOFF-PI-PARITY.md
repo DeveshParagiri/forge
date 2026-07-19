@@ -69,7 +69,7 @@ ln -sfn ~/.grok/bin/grok ~/.local/bin/grok
 2. Touch upstream files only with thin hooks marked `// Personal:` or `/// Personal:`.
 3. Never rewrite stock SpaceXAI welcome `Action::Login` cold-start path.
 4. After rebase: `rg -n 'Personal:' crates` and run `python3 scripts/codex-smoke.py`.
-5. Document every new personal module in `PERSONAL.md`.
+5. Document every new personal module in `FORK-MAINTENANCE.md`.
 
 ### What stock Grok already supports (docs)
 
@@ -243,7 +243,7 @@ Depth is for prioritization; not all are required for Dev’s MVP.
 
 ### 5.1 Config shape (proposal)
 
-Extend `~/.grok/config.toml` (personal; document in `PERSONAL.md`):
+Extend `~/.grok/config.toml` (personal; document in `FORK-MAINTENANCE.md`):
 
 ```toml
 # --- SpaceXAI (subscription OAuth; stock models filtered) ---
@@ -346,7 +346,7 @@ User can expand `catalog.openrouter.include` without code changes.
 5. Config schema for `catalog.spacexai|openai_codex|openrouter`  
 6. Optional slash: `/models enable|disable <id>` writing config  
 7. Live OpenRouter model fetch when key present (cache under `~/.grok/cache/`)  
-8. Document in `PERSONAL.md` + link to stock **11-custom-models.md**
+8. Document in `FORK-MAINTENANCE.md` + link to stock **11-custom-models.md**
 
 ### P2 — Polish
 
@@ -360,7 +360,7 @@ User can expand `catalog.openrouter.include` without code changes.
 
 | Path | Role |
 |------|------|
-| `~/.local/share/grok/source/PERSONAL.md` | Rebase rules + personal architecture |
+| `~/.local/share/grok/source/FORK-MAINTENANCE.md` | Rebase rules + personal architecture |
 | `~/.local/share/grok/source/docs/CHATGPT-HANDOFF-PI-PARITY.md` | **This handoff** |
 | `crates/.../xai-grok-shell/src/agent/provider_auth.rs` | Codex/OpenRouter credentials |
 | `crates/.../xai-grok-shell/src/agent/config.rs` | Provider packs, resolve_credentials |
@@ -382,7 +382,7 @@ User can expand `catalog.openrouter.include` without code changes.
 - [ ] Mid-session switch SpaceXAI ↔ Sol does **not** 400 on encrypted reasoning; prior user/assistant/tool context remains.  
 - [ ] Sol “hi” does not double-print via empty_response retries.  
 - [ ] `python3 scripts/codex-smoke.py` exits 0.  
-- [ ] PERSONAL.md updated for any new files.
+- [ ] FORK-MAINTENANCE.md updated for any new files.
 
 ---
 

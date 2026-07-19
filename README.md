@@ -19,20 +19,11 @@ This is an independent fork, not an official SpaceXAI distribution. The
 | Interface | Claude-inspired theme, reasoning-effort controls, optional shortcut footer, and `Esc` cancellation |
 | Branding | Exaforge welcome screen and build version |
 
-## Extension architecture
+## Architecture
 
-Fork-specific implementation is grouped into additive, per-crate `exaforge/`
-modules:
-
-- `xai-grok-sampler/src/exaforge/` — Codex request policy, Responses API compatibility, and stream recovery.
-- `xai-grok-shell/src/agent/exaforge/` — provider identity, credentials, catalogs, profiles, status, and portable history.
-- `xai-grok-pager/src/exaforge/` — provider login, effort controls, layout policy, welcome branding, and focused UI tests.
-- `xai-grok-pager-render/src/exaforge/` — Claude theme policy and shortcut-footer behavior.
-
-Upstream-owned files retain small `// Exaforge:` integration hooks where
-possible. Ordering-sensitive behavior, including running-turn `Esc`
-cancellation, stays beside the upstream event flow. See [`PERSONAL.md`](PERSONAL.md)
-for maintenance and rebase notes.
+Fork-specific behavior is isolated in per-crate `exaforge/` modules, with
+small integration hooks in upstream code. See
+[`FORK-MAINTENANCE.md`](FORK-MAINTENANCE.md) for implementation and rebase notes.
 
 ## Install or update
 
