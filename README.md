@@ -119,9 +119,10 @@ configuration, and session data remain untouched during every update path.
 ## Releases and versioning
 
 `main` is the rolling stable install channel, while Git commit hashes identify
-an exact source revision. Future Forge releases use independent semantic
-versioning such as `forge-v0.1.0` and `forge-v0.1.1`; the synchronized upstream
-Grok version is recorded separately in release notes and build metadata.
+an exact source revision. Forge releases use independent semantic versioning
+such as `forge-v0.1.0` and `forge-v0.1.1`; the synchronized upstream Grok version
+is recorded separately in release notes and build metadata. See
+[`CHANGELOG.md`](CHANGELOG.md) for Forge's release history.
 
 To install a published version instead of the latest release:
 

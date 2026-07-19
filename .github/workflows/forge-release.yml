@@ -73,13 +73,23 @@ jobs:
           pattern: forge-*
           path: dist
           merge-multiple: true
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
+          notes=".github/release-notes/$TAG.md"
+          if [ -f "$notes" ]; then
+            notes_args=(--notes-file "$notes")
+          else
+            notes_args=(--generate-notes)
+          fi
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
-              --title "Forge ${TAG#forge-v}" --generate-notes
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --latest \
+              --title "Forge ${TAG#forge-v}" "${notes_args[@]}"
           gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --latest
