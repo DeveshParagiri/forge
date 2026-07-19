@@ -1,22 +1,41 @@
-# Forge
+<div align="center">
 
-Forge is an independent, upstream-friendly extension of
+<h1>Forge (<code>grok</code>)</h1>
+
+**Forge** is an independent, upstream-friendly extension of
 [Grok Build](https://github.com/xai-org/grok-build), the terminal coding agent.
-It keeps the native Grok experience while adding more model choices, a simpler
-interface, and first-class multi-agent orchestration across native and external
-coding harnesses.
+It keeps the native Grok workflow while adding provider choice, a simpler
+interface, and first-class orchestration across native and external coding
+harnesses.
+
+[Installing Forge](#quickstart) ·
+[Features](#extended-features) ·
+[Updating](#update) ·
+[Architecture](#architecture) ·
+[Development](#development) ·
+[License](#license)
+
+![Forge TUI](docs/assets/forge-tui.jpg)
+
+**Multi-model and multi-harness orchestration in the native Grok terminal workflow.**
 
 Forge is not an official SpaceXAI distribution. The `main` branch is the stable,
 installable Forge channel; development is integrated on `dev` and periodically
 synchronized with upstream Grok Build.
 
+</div>
+
+---
+
 ## Extended features
 
 | # | Feature | What Forge adds |
 |---:|---|---|
-| 1 | **More models** | Use SpaceXAI, ChatGPT Codex, and OpenRouter in one TUI, with Codex `/fast` and provider-aware `/usage`. |
-| 2 | **Simpler Forge theme** | A cleaner, less distracting interface with compact controls and model information. |
-| 3 | **Multi-model, multi-harness subagents** | Run subagents across different models and harnesses—including native roles, Claude Code, and Codex CLI—to match each task with the best agent and produce better work. |
+| 1 | **Models and providers** | Use SpaceXAI, ChatGPT Codex, and OpenRouter in one TUI, with Codex `/fast` and provider-aware `/usage`. |
+| 2 | **Multi-model, multi-harness subagents** | Delegate across native roles, Claude Code, and Codex CLI, selecting different models and harnesses for implementation, research, and independent review. |
+| 3 | **Unified session browser** | Browse Forge, Claude Code, and Codex sessions together in `/sessions` through one opt-in picker, with each external session labeled by harness. |
+| 4 | **Adaptive model and harness memory** | When memory is enabled, the existing memory flow learns which models, harnesses, and subagent setups work best for the user across different task types, using explicit feedback and clear interaction outcomes. |
+| 5 | **Simpler Forge theme** | A cleaner, less distracting interface with compact controls and model information. |
 
 ## Quickstart
 
@@ -55,8 +74,6 @@ Contributors can explicitly clone and compile the `dev` branch under
 FORGE_INSTALL_MODE=source \
   curl -fsSL https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install | sh
 ```
-
-Source mode is intentionally separate from the fast end-user installation path.
 
 ### Verify
 
