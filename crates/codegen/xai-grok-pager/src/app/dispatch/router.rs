@@ -29,7 +29,7 @@ use super::import_claude::{
 use super::interject::dispatch_interject;
 use super::jump::{dispatch_jump_dismiss, dispatch_jump_picker_select, dispatch_jump_show_picker};
 use super::modes::{
-    dispatch_cycle_mode, dispatch_enter_plan_mode, dispatch_show_plan, dispatch_toggle_yolo,
+    dispatch_cycle_effort, dispatch_enter_plan_mode, dispatch_show_plan, dispatch_toggle_yolo,
     set_permission_mode, set_plan_mode, set_yolo_mode,
 };
 use super::notes::{
@@ -908,7 +908,8 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::ViewCatalogEntry { kind, name } => {
             vec![Effect::FetchCatalogEntry { kind, name }]
         }
-        Action::CycleMode => dispatch_cycle_mode(app),
+        // Personal: Shift+Tab cycles reasoning effort (not permission mode).
+        Action::CycleMode => dispatch_cycle_effort(app),
         Action::ShareSession => dispatch_share_session(app),
         Action::ShowSessionInfo => dispatch_show_session_info(app),
         Action::ShowReleaseNotes { title, content } => {

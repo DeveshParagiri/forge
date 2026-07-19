@@ -471,9 +471,11 @@ pub fn default_actions(mouse_reporting_toggle_enabled: bool) -> Vec<ActionDef> {
             ),
         },
         ActionDef {
+            // Personal: Shift+Tab cycles reasoning effort (not permission mode).
+            // Permission mode still via Ctrl+O / /always-approve / /plan.
             id: ActionId::CycleMode,
-            label: "mode",
-            description: "Cycle mode (Normal / Plan / Always-approve)",
+            label: "effort",
+            description: "Cycle reasoning effort",
             // All Shift+Tab encodings — see `input::key::shift_tab_keys()`.
             default_key: crate::input::key::shift_tab_keys()[0],
             alt_keys: crate::input::key::shift_tab_keys()[1..].to_vec(),
@@ -483,7 +485,10 @@ pub fn default_actions(mouse_reporting_toggle_enabled: bool) -> Vec<ActionDef> {
             hint_key_display: Some("Shift+Tab"),
             requires_confirmation: false,
             long_help: Some(
-                "Steps the session mode: Normal -> Plan -> Always-Approve -> Normal.\nPlan keeps the agent planning first and writes no files; Always-Approve runs every tool call without asking.\nCtrl+O toggles auto-approve directly.",
+                "Steps the active model's reasoning effort through the levels it offers \
+                 (e.g. low → medium → high → xhigh).\nModels that do not support reasoning \
+                 effort show a short notice.\nPermission mode (plan / always-approve) is \
+                 unchanged — use Ctrl+O or /always-approve / /plan.",
             ),
         },
         // ── Panes (agent-level — toggle side panes) ─────────────────

@@ -67,10 +67,11 @@ impl Theme {
     pub const fn groknight() -> Self {
         Self {
             bg_base: BG_STORM,
-            bg_light: BG_HIGHLIGHT,
+            // Claude Code dark `userMessageBackground` — solid chatbox fill.
+            bg_light: rgb(55, 55, 55),
             bg_dark: rgb(28, 28, 28), // lighter than bg_base for visible code blocks
-            bg_highlight: BG_HIGHLIGHT,
-            bg_hover: rgb(44, 44, 44),
+            bg_highlight: rgb(55, 55, 55),
+            bg_hover: rgb(70, 70, 70), // Claude `userMessageBackgroundHover`
             bg_terminal: BG,
 
             accent_user: FG_DARK,
@@ -106,8 +107,9 @@ impl Theme {
             accent_remember: Color::Rgb(139, 195, 74), // #8BC34A — Material Design light green
 
             selection_border: rgb(60, 60, 65),
-            prompt_border: rgb(50, 50, 55), // #323237 — dimmer prompt chrome
-            prompt_border_active: rgb(80, 80, 88), // #505058 — brighter when focused
+            // Claude Code dark `promptBorder` / `promptBorderShimmer`.
+            prompt_border: rgb(136, 136, 136),
+            prompt_border_active: rgb(166, 166, 166),
             hover_border: rgb(30, 30, 34),
 
             accent_model: TEAL,
@@ -122,7 +124,7 @@ impl Theme {
             diff_equal_fg: COMMENT,
             diff_gutter_fg: COMMENT,
 
-            bg_visual: rgb(54, 54, 54),
+            bg_visual: rgb(55, 55, 55),
 
             paste_bg: BG_STORM_DARK,
             paste_fg: FG_DARK,

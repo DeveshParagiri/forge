@@ -524,11 +524,56 @@ pub(super) fn dispatch_toggle_yolo(app: &mut AppView) -> Vec<Effect> {
     set_yolo_mode(app, new)
 }
 
+/// Personal: Shift+Tab cycles reasoning effort on the active model.
+///
+/// Steps through the model's offered effort menu (low → medium → high → …)
+/// via the same `SwitchModel` path as `/effort`. Models without reasoning
+/// effort support get a short toast and no-op.
+pub(super) fn dispatch_cycle_effort(app: &mut AppView) -> Vec<Effect> {
+    let ActiveView::Agent(id) = app.active_view else {
+        return vec![];
+    };
+    let Some(agent) = app.agents.get_mut(&id) else {
+        return vec![];
+    };
+    let Some(model_id) = agent.session.models.current.clone() else {
+        agent.show_toast("No active model — pick one with /model first.");
+        return vec![];
+    };
+    let options = agent.session.models.reasoning_effort_options_for(&model_id);
+    if options.is_empty() {
+        agent.show_toast("This model does not support reasoning effort.");
+        return vec![];
+    }
+    let current = agent.session.models.reasoning_effort;
+    let idx = current
+        .and_then(|c| options.iter().position(|o| o.value == c))
+        .unwrap_or(0);
+    let next = options[(idx + 1) % options.len()].clone();
+    let label = next.id.clone();
+    let effort = next.value;
+    agent.show_mode_switch_banner(&format!("Effort: {label}"));
+    // Mirror Action::SwitchModel: defer until session exists.
+    let Some(session_id) = agent.session.session_id.clone() else {
+        agent.session.deferred_model_switch = Some((model_id, Some(effort)));
+        return vec![];
+    };
+    agent.session.model_switch_pending = true;
+    vec![Effect::SwitchModel {
+        agent_id: id,
+        session_id,
+        model_id,
+        effort: Some(effort),
+        prev_model_id: None,
+    }]
+}
+
 /// Shift+Tab mode cycle from the agent chat view: the shared cycle body plus
 /// plan-nudge acceptance telemetry (the nudge advertises this chord). The
 /// dashboard peek calls [`dispatch_cycle_mode_and_sync`] instead, so a peeked
 /// agent — whose prompt the user is not looking at — never attributes an accept
 /// and never collapses Auto/Always-Approve for the nudge jump.
+#[allow(dead_code)] // kept for dashboard/plan-nudge paths; chat chord remapped to effort
 pub(super) fn dispatch_cycle_mode(app: &mut AppView) -> Vec<Effect> {
     // Capture the pre-cycle nudge visibility + plan state so only a transition
     // into Plan taken while the nudge is on screen attributes as an acceptance;

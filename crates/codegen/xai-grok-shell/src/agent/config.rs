@@ -4297,6 +4297,11 @@ pub struct ResolvedCredentials {
 /// First usable BYOK credential: a non-empty (trimmed) api_key, else the first
 /// set, non-empty env_key value. Single source of truth for has_own_credentials,
 /// resolve_credentials, and the JWT-reload path.
+///
+/// Personal: when `env_key` includes `CODEX_ACCESS_TOKEN` (or
+/// `OPENAI_CODEX_TOKEN`) and the env var is unset, fall back to
+/// `~/.codex/auth.json` ChatGPT OAuth access token so `/model` OpenAI entries
+/// work with an existing Codex login.
 pub(crate) fn first_own_credential(
     api_key: Option<&str>,
     env_key: Option<&EnvKeys>,
@@ -4305,6 +4310,46 @@ pub(crate) fn first_own_credential(
         .filter(|k| !k.trim().is_empty())
         .map(str::to_owned)
         .or_else(|| env_key.and_then(EnvKeys::resolve_value))
+        .or_else(|| {
+            if env_key.is_some_and(env_keys_request_codex_token) {
+                read_codex_access_token()
+            } else {
+                None
+            }
+        })
+}
+
+fn env_keys_request_codex_token(keys: &EnvKeys) -> bool {
+    keys.names().iter().any(|k| {
+        k.eq_ignore_ascii_case("CODEX_ACCESS_TOKEN")
+            || k.eq_ignore_ascii_case("OPENAI_CODEX_TOKEN")
+    })
+}
+
+/// Read `tokens.access_token` from `~/.codex/auth.json` (ChatGPT OAuth login).
+fn read_codex_access_token() -> Option<String> {
+    let path = dirs::home_dir()?.join(".codex/auth.json");
+    let raw = std::fs::read_to_string(path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    v.get("tokens")
+        .and_then(|t| t.get("access_token"))
+        .and_then(|t| t.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+}
+
+/// Read `tokens.account_id` from `~/.codex/auth.json`.
+fn read_codex_account_id() -> Option<String> {
+    let path = dirs::home_dir()?.join(".codex/auth.json");
+    let raw = std::fs::read_to_string(path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    v.get("tokens")
+        .and_then(|t| t.get("account_id"))
+        .and_then(|t| t.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
 }
 /// Resolve credentials for a model.
 /// Priority: model api_key/env_key > session token > XAI_API_KEY.
@@ -4701,6 +4746,17 @@ pub fn inject_url_derived_headers(
         headers
             .entry(crate::http::CLIENT_MODE_HEADER.to_string())
             .or_insert_with(|| crate::http::process_client_mode().to_string());
+    }
+    // Personal: Codex / ChatGPT OAuth backend needs ChatGPT-Account-ID.
+    if base_url.contains("chatgpt.com") || base_url.contains("backend-api/codex") {
+        if let Some(account_id) = read_codex_account_id() {
+            headers
+                .entry("ChatGPT-Account-ID".to_string())
+                .or_insert(account_id);
+        }
+        headers
+            .entry("OpenAI-Beta".to_string())
+            .or_insert_with(|| "responses=experimental".to_string());
     }
     let _ = (alpha_test_key, base_url);
 }

@@ -11,6 +11,9 @@ This tree tracks [xai-org/grok-build](https://github.com/xai-org/grok-build) wit
 ## Patches on `personal`
 
 1. **`[ui] show_shortcuts_bar`** — hide/show the bottom contextual shortcuts bar. Default `true`; set `false` in `~/.grok/config.toml`.
+2. **Claude-like prompt chrome (GrokNight)** — `prompt_border` / user-message fill match Claude Code dark (`rgb(136,136,136)` border, `rgb(55,55,55)` fill).
+3. **Shift+Tab → cycle reasoning effort** (not permission mode). Permission mode still via `Ctrl+O` / `/always-approve` / `/plan`.
+4. **OpenAI via Codex auth** — models with `env_key = "CODEX_ACCESS_TOKEN"` read `~/.codex/auth.json` when the env var is unset; ChatGPT-Account-ID is injected for `chatgpt.com` bases. Configure `[model.*]` entries in `~/.grok/config.toml`.
 
 ## Update + rebuild
 
