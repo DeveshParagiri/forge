@@ -82,6 +82,10 @@ pub enum RowBadge {
     BgTask,
     Pinned,
     Failed,
+    // Forge: source labels for imported external sessions.
+    ClaudeCode,
+    CodexCli,
+    Cursor,
 }
 impl RowBadge {
     pub fn label(self) -> &'static str {
@@ -91,6 +95,9 @@ impl RowBadge {
             Self::BgTask => "bg",
             Self::Pinned => "pinned",
             Self::Failed => "failed",
+            Self::ClaudeCode => "Claude Code",
+            Self::CodexCli => "Codex CLI",
+            Self::Cursor => "Cursor",
         }
     }
 }
@@ -152,10 +159,38 @@ pub fn build_rows_with_roster(
     home: Option<&str>,
     roster: &[RosterEntry],
 ) -> Vec<DashboardRow> {
+    build_rows_with_external(
+        agents,
+        pinned,
+        reorder,
+        active,
+        grouping,
+        filter,
+        home,
+        roster,
+        &[],
+    )
+}
+
+/// Forge hook: build the dashboard's complete native + external row set while
+/// preserving one shared filter/sort order for rendering and navigation.
+#[allow(clippy::too_many_arguments)]
+pub fn build_rows_with_external(
+    agents: &IndexMap<AgentId, AgentView>,
+    pinned: &std::collections::BTreeSet<DashboardRowId>,
+    reorder: &[DashboardRowId],
+    active: Option<AgentId>,
+    grouping: super::state::Grouping,
+    filter: &Filter,
+    home: Option<&str>,
+    roster: &[RosterEntry],
+    external: &[xai_grok_workspace::foreign_sessions::ForeignSessionSummary],
+) -> Vec<DashboardRow> {
     let mut rows = build_local_rows(agents, pinned, active, home, false);
     append_roster_rows(&mut rows, roster, agents, pinned, home);
-    apply_filter(&mut rows, filter, home);
-    sort_rows(&mut rows, grouping, reorder);
+    crate::forge::external_sessions::append_rows(
+        &mut rows, external, filter, grouping, reorder, home,
+    );
     rows
 }
 /// Build the local-agent rows WITHOUT applying filter or sort. Shared by

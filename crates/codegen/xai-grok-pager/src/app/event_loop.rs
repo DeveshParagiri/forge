@@ -1018,6 +1018,10 @@ pub(crate) async fn run(
             cursor: compat.cursor.sessions,
         },
     );
+    // Forge: the dashboard uses the same explicit config opt-in while keeping
+    // its scan lifecycle independent from the `/resume` picker.
+    app.dashboard_external_sessions.enabled =
+        crate::forge::external_sessions::show_external_from_config(effective_config.as_ref());
 
     // Load notification config from [ui.notifications] in config.toml.
     if let Some(ref raw) = effective_config {
@@ -2249,12 +2253,22 @@ pub(crate) async fn run(
                 // idle-session list so the dashboard still shows idle sessions.
                 let dashboard_open = matches!(app.active_view, ActiveView::AgentDashboard);
                 if dashboard_open {
-                    let eff = if leader_status_rx.is_some() {
+                    let mut effects = vec![if leader_status_rx.is_some() {
                         Effect::FetchRoster
                     } else {
                         Effect::FetchDashboardSessions
-                    };
-                    if process_effects(vec![eff], &mut tasks, &mut app, &progress_tx) {
+                    }];
+                    // Forge: keep external dashboard rows fresh on the same poll.
+                    let grok_home = xai_grok_tools::util::grok_home::grok_home();
+                    if let Some(effect) = crate::forge::external_sessions::scan_effect(
+                        &mut app.dashboard_external_sessions,
+                        &app.cwd,
+                        app.foreign_session_compat,
+                        &grok_home,
+                    ) {
+                        effects.push(effect);
+                    }
+                    if process_effects(effects, &mut tasks, &mut app, &progress_tx) {
                         break;
                     }
                     roster_poll_at = Some(Instant::now() + ROSTER_POLL_INTERVAL);

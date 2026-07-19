@@ -727,6 +727,9 @@ pub struct AppView {
     /// [`crate::app::roster::RosterEntry`] (activity `Dormant`) so they reuse
     /// the existing roster-row rendering / attach path. Empty in leader mode.
     pub dashboard_local_sessions: Vec<crate::app::roster::RosterEntry>,
+    /// Forge-owned opt-in external session rows and scan lifecycle.
+    pub(crate) dashboard_external_sessions:
+        crate::forge::external_sessions::DashboardExternalSessions,
     /// Whether the dashboard is currently loading local sessions (non-leader mode).
     pub dashboard_sessions_loading: bool,
     /// Server-authoritative shared prompt queues, keyed by `sessionId`
@@ -1398,6 +1401,7 @@ impl AppView {
             billing_poll_wanted: false,
             leader_roster: Vec::new(),
             dashboard_local_sessions: Vec::new(),
+            dashboard_external_sessions: Default::default(),
             dashboard_sessions_loading: false,
             shared_prompt_queues: std::collections::HashMap::new(),
             optimistic_prompt_echoes: std::collections::HashMap::new(),
@@ -4299,7 +4303,9 @@ impl AppView {
                                 registry,
                                 pending_hint,
                                 dashboard_roster,
-                                self.dashboard_sessions_loading,
+                                &self.dashboard_external_sessions.entries,
+                                self.dashboard_sessions_loading
+                                    || self.dashboard_external_sessions.loading,
                                 dash_upgrade_cta,
                             );
                             let (popup_cursor, popup_post_flush, drawn_popup_agent) =
@@ -5399,6 +5405,7 @@ pub(crate) mod tests {
             billing_poll_wanted: false,
             leader_roster: Vec::new(),
             dashboard_local_sessions: Vec::new(),
+            dashboard_external_sessions: Default::default(),
             dashboard_sessions_loading: false,
             shared_prompt_queues: std::collections::HashMap::new(),
             optimistic_prompt_echoes: std::collections::HashMap::new(),

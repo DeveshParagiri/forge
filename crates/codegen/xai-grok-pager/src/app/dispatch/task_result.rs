@@ -321,6 +321,14 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
         TaskResult::ForeignSessionsScanned { entries, seq } => {
             handle_foreign_sessions_scanned(app, entries, seq)
         }
+        TaskResult::DashboardExternalSessionsScanned { entries, seq } => {
+            crate::forge::external_sessions::apply_scan(
+                &mut app.dashboard_external_sessions,
+                seq,
+                entries,
+            );
+            vec![]
+        }
         TaskResult::ForeignResumeCwdCanonicalized {
             requested_cwd,
             canonical_cwd,

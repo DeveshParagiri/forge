@@ -8,7 +8,7 @@ use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
 
 use super::layout::MIN_DASHBOARD_WIDTH;
-use super::row::{DashboardRow, RowBadge, build_rows_with_roster};
+use super::row::{DashboardRow, RowBadge};
 use super::state::{
     DashboardRowId, DashboardState, Filter, Focusable, Grouping, LocationPickerState, RenameDraft,
     RowState, SectionKey,
@@ -108,6 +108,8 @@ pub fn render_dashboard(
     // Leader-mode session roster (FleetView). Empty in non-leader mode,
     // which naturally gates the appended roster-only rows.
     roster: &[crate::app::roster::RosterEntry],
+    // Forge: saved external sessions discovered for this cwd.
+    external_sessions: &[xai_grok_workspace::foreign_sessions::ForeignSessionSummary],
     // Whether the local on-disk session roster is still being fetched
     // (non-leader mode). When true and there's nothing to show yet, the
     // empty body reads "Loading sessions…" instead of the "no agents
@@ -143,7 +145,7 @@ pub fn render_dashboard(
     // comparators that want to know what view the user came from (None
     // in fresh dashboard renders).
     let active: Option<AgentId> = None;
-    let rows = build_rows_with_roster(
+    let rows = super::row::build_rows_with_external(
         agents,
         &state.pinned,
         &state.reorder,
@@ -152,6 +154,7 @@ pub fn render_dashboard(
         &state.filter,
         home,
         roster,
+        external_sessions,
     );
     state.reanchor_selection(&rows);
 
@@ -2292,6 +2295,9 @@ fn render_row(
                 RowBadge::NeedsInput | RowBadge::Worktree | RowBadge::Pinned => continue,
                 RowBadge::Failed => "failed",
                 RowBadge::BgTask => "bg",
+                RowBadge::ClaudeCode => "Claude Code",
+                RowBadge::CodexCli => "Codex CLI",
+                RowBadge::Cursor => "Cursor",
             };
             let chip = format!(" [{label}]");
             let cw = UnicodeWidthStr::width(chip.as_str()) as u16;
@@ -3082,7 +3088,9 @@ fn peeked_agent_cwd(
     let id = match row {
         super::DashboardRowId::TopLevel(id) => *id,
         super::DashboardRowId::Subagent { parent, .. } => *parent,
-        super::DashboardRowId::Roster { .. } => return None,
+        super::DashboardRowId::Roster { .. } | super::DashboardRowId::External { .. } => {
+            return None;
+        }
     };
     agents.get(&id).map(|a| a.session.cwd.clone())
 }
@@ -3696,6 +3704,7 @@ fn badge_color(badge: RowBadge, theme: &Theme) -> Color {
         RowBadge::BgTask => theme.command,
         RowBadge::Pinned => theme.accent_running,
         RowBadge::Failed => theme.accent_error,
+        RowBadge::ClaudeCode | RowBadge::CodexCli | RowBadge::Cursor => theme.accent_user,
     }
 }
 
@@ -4333,6 +4342,7 @@ mod tests {
             &registry,
             None,
             &roster,
+            &[],
             false,
             None,
         );
@@ -7135,6 +7145,7 @@ mod tests {
             &registry,
             None,
             &[],
+            &[],
             false,
             None,
         );
@@ -7190,6 +7201,7 @@ mod tests {
             &registry,
             None,
             &[],
+            &[],
             false,
             None,
         );
@@ -7211,6 +7223,7 @@ mod tests {
             &mut shown_agents,
             &registry,
             None,
+            &[],
             &[],
             false,
             None,

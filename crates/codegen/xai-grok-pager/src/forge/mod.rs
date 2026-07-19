@@ -4,6 +4,7 @@
 //! files only re-touch thin `// Forge:` hooks.
 
 pub(crate) mod effort;
+pub(crate) mod external_sessions;
 pub(crate) mod fast_mode;
 pub(crate) mod layout;
 pub(crate) mod model_label;

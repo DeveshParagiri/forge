@@ -4,6 +4,37 @@ use super::*;
 use crate::app::dispatch::queue::maybe_drain_queue;
 
 #[test]
+fn external_dashboard_attach_imports_into_fresh_session() {
+    use xai_grok_workspace::foreign_sessions::ForeignSessionTool;
+
+    let mut app = test_app();
+    app.active_view = ActiveView::AgentDashboard;
+    ensure_dashboard_state(&mut app);
+    let effects = dispatch_dashboard_attach(
+        &mut app,
+        crate::views::dashboard::DashboardRowId::External {
+            tool: ForeignSessionTool::Claude,
+            native_id: "claude-native".into(),
+        },
+    );
+
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::CreateSession { .. }))
+    );
+    assert_eq!(app.agents.len(), 1);
+    assert_eq!(
+        app.agents[&AgentId(0)]
+            .session
+            .pending_prompts
+            .front()
+            .map(|prompt| prompt.text.as_str()),
+        Some("/resume-claude claude-native")
+    );
+}
+
+#[test]
 fn voice_final_appends_to_dashboard_dispatch() {
     // On the session-less dashboard, dictation lands in the dispatch input.
     let mut app = test_app_with_agent();
@@ -4117,6 +4148,7 @@ fn dashboard_upgrade_cta_paints_arms_rect_and_ctrl_o_override() {
         &registry,
         None,
         &[],
+        &[],
         false,
         Some(HeaderUpgradeCta {
             label: "Upgrade Account",
@@ -4171,6 +4203,7 @@ fn dashboard_upgrade_cta_paints_arms_rect_and_ctrl_o_override() {
         &registry,
         None,
         &[],
+        &[],
         false,
         Some(HeaderUpgradeCta {
             label: "Upgrade Account",
@@ -4201,6 +4234,7 @@ fn dashboard_upgrade_cta_paints_arms_rect_and_ctrl_o_override() {
         &mut agents,
         &registry,
         None,
+        &[],
         &[],
         false,
         Some(HeaderUpgradeCta {
@@ -4238,6 +4272,7 @@ fn dashboard_upgrade_cta_paints_arms_rect_and_ctrl_o_override() {
         &mut agents,
         &registry,
         None,
+        &[],
         &[],
         false,
         None,
@@ -5556,6 +5591,7 @@ fn dashboard_peek_auto_opens_for_selected_row() {
         &reg,
         None,
         &[],
+        &[],
         false,
         None,
     );
@@ -5574,6 +5610,7 @@ fn dashboard_peek_auto_opens_for_selected_row() {
         &mut app.agents,
         &reg,
         None,
+        &[],
         &[],
         false,
         None,
@@ -5612,6 +5649,7 @@ fn dashboard_peek_box_grows_for_multiline_reply() {
                 &mut app.agents,
                 &reg,
                 None,
+                &[],
                 &[],
                 false,
                 None,

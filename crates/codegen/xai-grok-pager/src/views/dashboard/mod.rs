@@ -37,8 +37,8 @@ pub use render::{
     render_dashboard_session_overlay, render_popup_overlay,
 };
 pub use row::{
-    DashboardRow, RowBadge, build_rows, build_rows_with_roster, classify_subagent,
-    classify_top_level, sort_rows,
+    DashboardRow, RowBadge, build_rows, build_rows_with_external, build_rows_with_roster,
+    classify_subagent, classify_top_level, sort_rows,
 };
 pub use state::{
     DashboardDispatchMode, DashboardRowId, DashboardState, Filter, FilterValue, Focusable,

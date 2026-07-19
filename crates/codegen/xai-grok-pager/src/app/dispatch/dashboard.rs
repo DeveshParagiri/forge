@@ -206,10 +206,22 @@ pub(super) fn dispatch_open_dashboard(app: &mut AppView) -> Vec<Effect> {
     app.active_view = ActiveView::AgentDashboard;
     log_dashboard_opened(app);
     app.dashboard_sessions_loading = true;
-    if app.leader_mode {
-        return vec![Effect::FetchRoster];
+    let mut effects = if app.leader_mode {
+        vec![Effect::FetchRoster]
+    } else {
+        vec![Effect::FetchDashboardSessions]
+    };
+    // Forge: external rows refresh on each deliberate dashboard open.
+    let grok_home = xai_grok_tools::util::grok_home::grok_home();
+    if let Some(effect) = crate::forge::external_sessions::scan_effect(
+        &mut app.dashboard_external_sessions,
+        &app.cwd,
+        app.foreign_session_compat,
+        &grok_home,
+    ) {
+        effects.push(effect);
     }
-    vec![Effect::FetchDashboardSessions]
+    effects
 }
 
 /// Helper: produce a closure that answers "does this DashboardRowId
@@ -229,7 +241,8 @@ fn dashboard_alive_fn(
         // Roster-only rows are not locally hosted; they aren't tracked by
         // `agents` and are never persisted, so treat them as not alive for
         // pinned/reorder GC purposes.
-        crate::views::dashboard::DashboardRowId::Roster { .. } => false,
+        crate::views::dashboard::DashboardRowId::Roster { .. }
+        | crate::views::dashboard::DashboardRowId::External { .. } => false,
     }
 }
 
@@ -430,6 +443,14 @@ pub(super) fn dispatch_dashboard_attach(
             }
             return effects;
         }
+        // Forge: import the foreign transcript into a fresh Forge session;
+        // never send a foreign native ID through ACP `session/load`.
+        DashboardRowId::External { tool, native_id } => {
+            let prompt = crate::forge::external_sessions::resume_prompt(tool, &native_id);
+            let mut effects = dispatch_new_session_inner_with_id(app, None).1;
+            effects.extend(dispatch(Action::SendPrompt(prompt), app));
+            return effects;
+        }
     }
     vec![]
 }
@@ -596,7 +617,7 @@ pub(super) fn dispatch_dashboard_toggle_auto_approve(app: &mut AppView) -> Vec<E
     let agent_id = match selected {
         DashboardRowId::TopLevel(id) => *id,
         DashboardRowId::Subagent { parent, .. } => *parent,
-        DashboardRowId::Roster { .. } => return vec![],
+        DashboardRowId::Roster { .. } | DashboardRowId::External { .. } => return vec![],
     };
     if !app.agents.contains_key(&agent_id) {
         if let Some(d) = app.dashboard.as_mut() {
@@ -1637,7 +1658,7 @@ pub(super) fn dispatch_dashboard_peek_cycle_mode(app: &mut AppView) -> Vec<Effec
             }
             return vec![];
         }
-        DashboardRowId::Roster { .. } => return vec![],
+        DashboardRowId::Roster { .. } | DashboardRowId::External { .. } => return vec![],
     };
     if !app.agents.contains_key(&agent_id) {
         if let Some(d) = app.dashboard.as_mut() {
@@ -1764,6 +1785,16 @@ pub(super) fn dispatch_dashboard_peek_reply(
 
 pub(super) fn dispatch_dashboard_toggle_pin(app: &mut AppView) -> Vec<Effect> {
     if let Some(d) = app.dashboard.as_mut() {
+        if d.selected.as_ref().is_some_and(|id| {
+            matches!(
+                id,
+                crate::views::dashboard::DashboardRowId::Roster { .. }
+                    | crate::views::dashboard::DashboardRowId::External { .. }
+            )
+        }) {
+            d.set_error_toast("External sessions can't be pinned");
+            return vec![];
+        }
         let _ = d.toggle_pin_selected();
     }
     dispatch_dashboard_persist(app)
@@ -1776,11 +1807,18 @@ pub(super) fn dispatch_dashboard_begin_rename(app: &mut AppView) {
     let Some(sel) = d.selected.clone() else {
         return;
     };
-    // Only top-level rows are renameable (subagents are tool-spawned
-    // and have no user-visible name to rename).
-    if sel.is_subagent() {
-        d.set_error_toast("Subagent rows can't be renamed");
-        return;
+    // Only locally-hosted top-level rows are renameable.
+    match sel {
+        crate::views::dashboard::DashboardRowId::TopLevel(_) => {}
+        crate::views::dashboard::DashboardRowId::Subagent { .. } => {
+            d.set_error_toast("Subagent rows can't be renamed");
+            return;
+        }
+        crate::views::dashboard::DashboardRowId::Roster { .. }
+        | crate::views::dashboard::DashboardRowId::External { .. } => {
+            d.set_error_toast("External sessions can't be renamed");
+            return;
+        }
     }
     // The draft starts EMPTY (not prefilled with the current title):
     // renames are almost always full rewrites, so prefilling only costs
@@ -1853,7 +1891,7 @@ fn dashboard_neighbor_row(
     } else {
         &app.dashboard_local_sessions
     };
-    let rows = crate::views::dashboard::build_rows_with_roster(
+    let rows = crate::views::dashboard::build_rows_with_external(
         &app.agents,
         &d.pinned,
         &d.reorder,
@@ -1862,6 +1900,7 @@ fn dashboard_neighbor_row(
         &d.filter,
         home,
         roster,
+        &app.dashboard_external_sessions.entries,
     );
     let focusables = crate::views::dashboard::render::focusables(
         &rows,
@@ -1992,7 +2031,7 @@ pub(super) fn dispatch_dashboard_stop(app: &mut AppView) -> Vec<Effect> {
         }
         // Roster-only rows are hosted elsewhere — this client can't stop
         // them.
-        DashboardRowId::Roster { .. } => vec![],
+        DashboardRowId::Roster { .. } | DashboardRowId::External { .. } => vec![],
     }
 }
 
@@ -2019,7 +2058,7 @@ pub(super) fn dispatch_dashboard_select(app: &mut AppView, next: bool) {
     } else {
         &app.dashboard_local_sessions
     };
-    let rows = crate::views::dashboard::build_rows_with_roster(
+    let rows = crate::views::dashboard::build_rows_with_external(
         &app.agents,
         &d.pinned,
         &d.reorder,
@@ -2028,6 +2067,7 @@ pub(super) fn dispatch_dashboard_select(app: &mut AppView, next: bool) {
         &d.filter,
         home,
         roster,
+        &app.dashboard_external_sessions.entries,
     );
     // Unified, display-order cursor targets: section headers AND visible
     // rows (collapsed sections contribute only their header, so their
@@ -2101,6 +2141,14 @@ pub(super) fn dispatch_dashboard_reorder(app: &mut AppView, up: bool) -> Vec<Eff
     let Some(sel) = d.selected.clone() else {
         return vec![];
     };
+    if matches!(
+        sel,
+        crate::views::dashboard::DashboardRowId::Roster { .. }
+            | crate::views::dashboard::DashboardRowId::External { .. }
+    ) {
+        d.set_error_toast("External sessions can't be reordered");
+        return vec![];
+    }
     // Maintain a stable explicit ordering list. The renderer applies
     // this list as a "float to position" rule inside the row's group.
     let pos = d.reorder.iter().position(|r| *r == sel);
@@ -2166,7 +2214,8 @@ pub(super) fn dispatch_dashboard_permission_select(
     let target_id = match &row {
         crate::views::dashboard::DashboardRowId::TopLevel(id) => *id,
         crate::views::dashboard::DashboardRowId::Subagent { parent, .. } => *parent,
-        crate::views::dashboard::DashboardRowId::Roster { .. } => return vec![],
+        crate::views::dashboard::DashboardRowId::Roster { .. }
+        | crate::views::dashboard::DashboardRowId::External { .. } => return vec![],
     };
     let Some(agent) = app.agents.get_mut(&target_id) else {
         if let Some(d) = app.dashboard.as_mut() {
@@ -2260,7 +2309,8 @@ pub(super) fn dispatch_dashboard_permission_followup(
     let target_id = match &row {
         crate::views::dashboard::DashboardRowId::TopLevel(id) => *id,
         crate::views::dashboard::DashboardRowId::Subagent { parent, .. } => *parent,
-        crate::views::dashboard::DashboardRowId::Roster { .. } => return vec![],
+        crate::views::dashboard::DashboardRowId::Roster { .. }
+        | crate::views::dashboard::DashboardRowId::External { .. } => return vec![],
     };
     let Some(agent) = app.agents.get_mut(&target_id) else {
         if let Some(d) = app.dashboard.as_mut() {
@@ -2329,7 +2379,8 @@ pub(super) fn dispatch_dashboard_question_answer(
     let target_id = match &row {
         crate::views::dashboard::DashboardRowId::TopLevel(id) => *id,
         crate::views::dashboard::DashboardRowId::Subagent { parent, .. } => *parent,
-        crate::views::dashboard::DashboardRowId::Roster { .. } => return vec![],
+        crate::views::dashboard::DashboardRowId::Roster { .. }
+        | crate::views::dashboard::DashboardRowId::External { .. } => return vec![],
     };
     let Some(agent) = app.agents.get_mut(&target_id) else {
         if let Some(d) = app.dashboard.as_mut() {

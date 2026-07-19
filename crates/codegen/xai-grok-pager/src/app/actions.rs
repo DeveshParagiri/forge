@@ -1406,6 +1406,15 @@ pub enum Effect {
         coordinator: crate::app::ForeignScanCoordinator,
         seq: u64,
     },
+    /// Forge: scan external sessions for the `/sessions` dashboard without
+    /// sharing the resume picker's sequence/cancellation state.
+    ScanDashboardExternalSessions {
+        cwd: std::path::PathBuf,
+        sources: xai_grok_workspace::foreign_sessions::EnabledForeignSessionSources,
+        grok_home: std::path::PathBuf,
+        coordinator: crate::app::ForeignScanCoordinator,
+        seq: u64,
+    },
     /// Canonicalize the launch cwd off the event-loop thread before store access.
     CanonicalizeForeignResumeCwd {
         requested_cwd: std::path::PathBuf,
@@ -2180,6 +2189,11 @@ pub enum TaskResult {
     /// A background foreign-session scan completed.
     ForeignSessionsScanned {
         entries: Vec<crate::app::app_view::SessionPickerEntry>,
+        seq: u64,
+    },
+    /// Forge dashboard external-session scan completed.
+    DashboardExternalSessionsScanned {
+        entries: Vec<xai_grok_workspace::foreign_sessions::ForeignSessionSummary>,
         seq: u64,
     },
     /// Launch cwd canonicalization completed before foreign store access.

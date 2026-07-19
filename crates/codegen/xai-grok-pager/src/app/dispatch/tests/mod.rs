@@ -243,6 +243,7 @@ fn test_app() -> AppView {
         billing_poll_wanted: false,
         leader_roster: Vec::new(),
         dashboard_local_sessions: Vec::new(),
+        dashboard_external_sessions: Default::default(),
         dashboard_sessions_loading: false,
         shared_prompt_queues: std::collections::HashMap::new(),
         optimistic_prompt_echoes: std::collections::HashMap::new(),
@@ -893,7 +894,7 @@ fn dashboard_row_order(app: &AppView) -> Vec<crate::views::dashboard::DashboardR
     } else {
         &app.dashboard_local_sessions
     };
-    let rows = crate::views::dashboard::build_rows_with_roster(
+    let rows = crate::views::dashboard::build_rows_with_external(
         &app.agents,
         &d.pinned,
         &d.reorder,
@@ -902,6 +903,7 @@ fn dashboard_row_order(app: &AppView) -> Vec<crate::views::dashboard::DashboardR
         &d.filter,
         home,
         roster,
+        &app.dashboard_external_sessions.entries,
     );
     crate::views::dashboard::render::focusables(
         &rows,

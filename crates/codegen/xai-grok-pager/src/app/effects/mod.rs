@@ -635,6 +635,59 @@ pub(crate) fn execute(
                 });
             coordinator.install_abort_handle(seq, abort_handle);
         }
+        // Forge: dashboard scans use their own result/state lane so opening
+        // `/resume` cannot cancel or consume `/sessions` data (and vice versa).
+        Effect::ScanDashboardExternalSessions {
+            cwd,
+            sources,
+            grok_home,
+            coordinator,
+            seq,
+        } => {
+            if coordinator.latest_seq() != seq {
+                return (false, meta);
+            }
+            let semaphore = coordinator.semaphore();
+            let latest_seq = coordinator.latest_seq_handle();
+            let abort_handle = tasks.spawn(async move {
+                let Ok(permit) = semaphore.acquire_owned().await else {
+                    return TaskResult::DashboardExternalSessionsScanned {
+                        entries: Vec::new(),
+                        seq,
+                    };
+                };
+                if latest_seq.load(std::sync::atomic::Ordering::Acquire) != seq {
+                    return TaskResult::DashboardExternalSessionsScanned {
+                        entries: Vec::new(),
+                        seq,
+                    };
+                }
+                let enabled = crate::app::foreign_sessions::gated_sources_async(
+                    sources,
+                    &grok_home,
+                )
+                .await;
+                if latest_seq.load(std::sync::atomic::Ordering::Acquire) != seq
+                    || !(enabled.claude || enabled.codex)
+                {
+                    return TaskResult::DashboardExternalSessionsScanned {
+                        entries: Vec::new(),
+                        seq,
+                    };
+                }
+                let entries = tokio::task::spawn_blocking(move || {
+                    let _permit = permit;
+                    xai_grok_workspace::foreign_sessions::scan_foreign_sessions(&cwd, enabled)
+                })
+                .await
+                .unwrap_or_else(|error| {
+                    tracing::warn!(%error, "dashboard external session scan task failed");
+                    Vec::new()
+                });
+                TaskResult::DashboardExternalSessionsScanned { entries, seq }
+            });
+            coordinator.install_abort_handle(seq, abort_handle);
+        }
         Effect::CanonicalizeForeignResumeCwd { requested_cwd, launch_token } => {
             tasks
                 .spawn(async move {

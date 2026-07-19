@@ -372,7 +372,7 @@ pub fn compute_peek_fields(
         }
         // Roster-only rows are not locally hosted — there is no local
         // `AgentView` to peek into.
-        DashboardRowId::Roster { .. } => None,
+        DashboardRowId::Roster { .. } | DashboardRowId::External { .. } => None,
     }
 }
 
@@ -440,7 +440,7 @@ pub fn peek_model_and_mode(
             }
             None => default(),
         },
-        DashboardRowId::Roster { .. } => default(),
+        DashboardRowId::Roster { .. } | DashboardRowId::External { .. } => default(),
     }
 }
 

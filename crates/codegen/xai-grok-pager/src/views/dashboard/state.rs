@@ -40,6 +40,13 @@ pub enum DashboardRowId {
     Roster {
         session_id: String,
     },
+    /// A saved session owned by an external coding harness. Selecting it
+    /// imports the transcript into a fresh Forge session via the matching
+    /// resume skill; it is never treated as a native ACP session.
+    External {
+        tool: xai_grok_workspace::foreign_sessions::ForeignSessionTool,
+        native_id: String,
+    },
 }
 
 impl DashboardRowId {
@@ -73,7 +80,7 @@ pub(crate) fn scrollback_mut_for_row<'a>(
             .get_mut(parent)
             .and_then(|p| p.subagent_views.get_mut(child_session_id))
             .map(|c| &mut c.scrollback),
-        DashboardRowId::Roster { .. } => None,
+        DashboardRowId::Roster { .. } | DashboardRowId::External { .. } => None,
     }
 }
 
@@ -89,7 +96,7 @@ pub(crate) fn scrollback_available_for_row(
         } => agents
             .get(parent)
             .is_some_and(|p| p.subagent_views.contains_key(child_session_id)),
-        DashboardRowId::Roster { .. } => false,
+        DashboardRowId::Roster { .. } | DashboardRowId::External { .. } => false,
     }
 }
 
@@ -1288,9 +1295,8 @@ impl SessionIdResolver {
                     child_session_id: child_session_id.clone(),
                 })
             }
-            // Roster-only rows are ephemeral (not locally hosted) and are
-            // never persisted across restarts.
-            DashboardRowId::Roster { .. } => None,
+            // Non-local rows are ephemeral and never persisted across restarts.
+            DashboardRowId::Roster { .. } | DashboardRowId::External { .. } => None,
         }
     }
 }
