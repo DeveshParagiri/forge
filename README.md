@@ -8,9 +8,9 @@ It keeps the native Grok workflow while adding provider choice, a simpler
 interface, and first-class orchestration across native and external coding
 harnesses.
 
-[Installing Forge](#quickstart) ·
+[Install and update](#install-forge) ·
 [Features](#extended-features) ·
-[Updating](#update) ·
+[Requirements](#requirements-and-source-builds) ·
 [Architecture](#architecture) ·
 [Development](#development) ·
 [License](#license)
@@ -27,6 +27,29 @@ synchronized with upstream Grok Build.
 
 ---
 
+## Install Forge
+
+Install the latest checksummed release:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install | sh
+```
+
+Then launch Forge:
+
+```sh
+grok
+```
+
+Update at any time with:
+
+```sh
+grok update
+```
+
+Forge installs to `~/.grok/bin/grok`. Updates preserve configuration,
+authentication, sessions, and memory under `~/.grok/`.
+
 ## Extended features
 
 | # | Feature | What Forge adds |
@@ -36,53 +59,6 @@ synchronized with upstream Grok Build.
 | 3 | **Unified session browser** | Browse Forge, Claude Code, and Codex sessions together in `/sessions` through one opt-in picker, with each external session labeled by harness. |
 | 4 | **Adaptive model and harness memory** | When memory is enabled, the existing memory flow learns which models, harnesses, and subagent setups work best for the user across different task types, using explicit feedback and clear interaction outcomes. |
 | 5 | **Simpler Forge theme** | A cleaner, less distracting interface with compact controls and model information. |
-
-## Quickstart
-
-### Prerequisites
-
-The default installer requires `curl`, `tar`, and either `shasum` or
-`sha256sum`. It downloads a checksummed prebuilt binary, so ordinary users do
-not need Rust, Cargo, Git, `dotslash`, or `protoc`.
-
-Building Forge from source requires Git, [Rust](https://rustup.rs/) and `cargo`,
-plus either [`dotslash`](https://dotslash-cli.com/) or `protoc` on `PATH`. The
-installer checks prerequisites and does not install system packages or alter
-shell configuration.
-
-### Install from GitHub
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install | sh
-```
-
-The installer detects the operating system and architecture, downloads the
-matching artifact from the latest GitHub Release, verifies its SHA-256 checksum,
-and atomically installs it at `~/.grok/bin/grok`. On macOS, it ad-hoc signs the
-installed binary when `codesign` is available. Compatibility links are created
-for common previous install locations.
-
-Configuration, authentication, and sessions under `~/.grok/` are preserved.
-Normal installations do not create or maintain a source checkout.
-
-### Install from source
-
-Contributors can explicitly clone and compile the `dev` branch under
-`~/Projects/forge`:
-
-```sh
-FORGE_INSTALL_MODE=source \
-  curl -fsSL https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install | sh
-```
-
-### Verify
-
-Ensure `~/.grok/bin` is on `PATH`, then run:
-
-```sh
-grok --version
-grok
-```
 
 ## Optional external harnesses
 
@@ -112,26 +88,22 @@ Claude Code and Codex rows are labeled by harness. Selecting one starts a fresh
 Forge session and invokes its existing `/resume-claude` or `/resume-codex`
 context-import flow.
 
-## Update
+## Requirements and source builds
 
-For installations created by the GitHub installer, run:
+The release installer requires `curl`, `tar`, and either `shasum` or
+`sha256sum`. It downloads a prebuilt binary, so ordinary users do not need Rust,
+Cargo, Git, DotSlash, or `protoc`.
 
-```sh
-grok update
-```
-
-A plain `grok update` delegates to the same release installer used by the
-quickstart. The historical direct command remains as a recovery or automation
-alias, but follows the identical binary path:
+Building from source requires Git, [Rust](https://rustup.rs/), `cargo`, and either
+[`dotslash`](https://dotslash-cli.com/) or `protoc` on `PATH`:
 
 ```sh
-~/bin/grok-update-from-source
+FORGE_INSTALL_MODE=source \
+  curl -fsSL https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install | sh
 ```
 
-Both commands download and verify the latest published artifact before replacing
-the binary atomically; they do not fetch, rebase, or compile a source checkout.
-Re-running the GitHub install command is also safe. Authentication,
-configuration, and session data remain untouched during every update path.
+The installer checks prerequisites and does not install system packages or alter
+shell configuration.
 
 ## Releases and versioning
 
