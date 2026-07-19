@@ -69,63 +69,32 @@ future upstream rebases smaller and easier to review.
 
 ## Installing the fork
 
-Build and install the `dev` branch with the included updater:
+Requires Rust (`cargo`) and either `dotslash` or `protoc` on `PATH`.
 
 ```sh
 git clone --branch dev https://github.com/DeveshParagiri/grok-build.git ~/.local/share/grok/source
+mkdir -p ~/bin
 install -m 755 ~/.local/share/grok/source/scripts/grok-update-from-source ~/bin/grok-update-from-source
 ~/bin/grok-update-from-source
 grok --version
 ```
 
-The updater fetches `upstream/main`, rebases `dev`, builds the release binary,
-installs it atomically at `~/.grok/bin/grok`, and refreshes compatibility
-symlinks. Existing `~/.grok` authentication, configuration, and sessions are
-preserved.
-
-## Installing the upstream release
-
-Prebuilt binaries are published for macOS, Linux, and Windows:
-
-```sh
-curl -fsSL https://x.ai/cli/install.sh | bash   # macOS / Linux / Git Bash
-irm https://x.ai/cli/install.ps1 | iex          # Windows PowerShell
-grok --version
-```
-
-See the [changelog](https://x.ai/build/changelog) for the latest fixes,
-features, and improvements in each release.
+The updater rebases `dev` onto `upstream/main`, builds the release binary, and
+installs it at `~/.grok/bin/grok`. It preserves existing authentication,
+configuration, and sessions under `~/.grok/`. Run the same updater command for
+future rebuilds.
 
 ## Building from source
 
-Requirements:
-
-- **Rust** — the toolchain is pinned by [`rust-toolchain.toml`](rust-toolchain.toml);
-  `rustup` installs it automatically on first build.
-- **[DotSlash](https://dotslash-cli.com)** — required so hermetic tools under
-  [`bin/`](bin/) (notably [`bin/protoc`](bin/protoc)) can download and run.
-  Install it and ensure `dotslash` is on your `PATH` **before** building:
-
-  ```sh
-  cargo install dotslash
-  # or: prebuilt packages — https://dotslash-cli.com/docs/installation/
-  /usr/bin/env dotslash --help   # sanity check
-  ```
-
-- **protoc** — proto codegen resolves [`bin/protoc`](bin/protoc) via DotSlash,
-  or falls back to a `protoc` on `PATH` / `$PROTOC`.
-- macOS and Linux are supported build hosts; Windows builds are best-effort
-  and not currently tested from this tree.
-
 ```sh
-cargo run -p xai-grok-pager-bin              # build + launch the TUI
-cargo build -p xai-grok-pager-bin --release  # release binary: target/release/xai-grok-pager
-cargo check -p xai-grok-pager-bin            # fast validation
+cargo build -p xai-grok-pager-bin --release
 ```
 
-The binary artifact is named `xai-grok-pager`; official installs ship it as
-`grok`. On first launch it opens your browser to authenticate — see the
-[authentication guide](crates/codegen/xai-grok-pager/docs/user-guide/02-authentication.md).
+The resulting binary is `target/release/xai-grok-pager`. To install it manually:
+
+```sh
+install -m 755 target/release/xai-grok-pager ~/.grok/bin/grok
+```
 
 ## Documentation
 
