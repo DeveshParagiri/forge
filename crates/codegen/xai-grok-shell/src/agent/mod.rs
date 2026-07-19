@@ -4,6 +4,7 @@ pub mod auth_method;
 pub mod chat_modes;
 pub mod config;
 pub mod config_model_override_parse;
+pub mod exaforge;
 mod ext_parsers;
 pub mod feedback_client;
 pub mod folder_trust;
@@ -11,9 +12,9 @@ pub(crate) mod handlers;
 pub mod init;
 pub mod models;
 pub mod mvp_agent;
-/// Personal: multi-provider auth (Codex / OpenRouter). Safe to drop on upstream rebase.
+/// Compatibility exports for downstream provider-login consumers.
 pub mod provider_auth;
-/// Personal: remove provider-bound reasoning when switching provider families.
+/// Compatibility exports for the history transform.
 pub mod provider_history;
 pub(crate) mod proxy;
 pub mod relay;

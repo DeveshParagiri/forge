@@ -1818,7 +1818,7 @@ impl ModelGlobSet {
             .map_err(|e| vec![e.to_string()])
     }
 
-    fn matches(&self, key: &str, model: &str) -> bool {
+    pub(crate) fn matches(&self, key: &str, model: &str) -> bool {
         self.0.is_match(key) || self.0.is_match(model)
     }
 }
@@ -1864,54 +1864,8 @@ pub fn resolve_model_catalog(
         }
     }
 
-    // Personal: provider-scoped include/exclude rules refine the upstream
-    // global allowlist. Exclude wins, and absent `[catalog.<provider>]`
-    // sections leave that provider untouched.
-    for (provider, rule) in cfg.catalog.configured() {
-        // A configured OpenRouter catalog is useful only with a key. Keep the
-        // entries in the internal catalog for routing/history, but do not show
-        // them in `/model` until auth exists. Other providers keep their
-        // existing login-on-selection behavior.
-        let auth_ready = provider != crate::agent::provider_auth::ProviderId::Openrouter
-            || crate::agent::provider_auth::status_for(provider).is_ready();
-        let (include, exclude) = match (
-            ModelGlobSet::compile(Some(&rule.include)),
-            ModelGlobSet::compile(Some(&rule.exclude)),
-        ) {
-            (Ok(include), Ok(exclude)) => (include, exclude),
-            (include, exclude) => {
-                tracing::error!(
-                    provider = provider.as_str(),
-                    include_error = ?include.err(),
-                    exclude_error = ?exclude.err(),
-                    "invalid provider catalog filter; hiding provider models"
-                );
-                for entry in catalog.values_mut() {
-                    if crate::agent::provider_auth::provider_id_for_base(&entry.info.base_url)
-                        == Some(provider)
-                    {
-                        entry.info.user_selectable = false;
-                    }
-                }
-                continue;
-            }
-        };
-        for (key, entry) in catalog.iter_mut() {
-            if crate::agent::provider_auth::provider_id_for_base(&entry.info.base_url)
-                != Some(provider)
-            {
-                continue;
-            }
-            let included = include
-                .as_ref()
-                .map(|set| set.matches(key, &entry.model))
-                .unwrap_or(true);
-            let excluded = exclude
-                .as_ref()
-                .is_some_and(|set| set.matches(key, &entry.model));
-            entry.info.user_selectable &= included && !excluded && auth_ready;
-        }
-    }
+    // Exaforge: refine the stock allowlist with provider catalog policy.
+    crate::agent::exaforge::catalog::apply_policy(&cfg.catalog, &mut catalog);
 
     if let Ok(Some(hidden)) = ModelGlobSet::compile(cfg.models.hidden_models.as_ref()) {
         for (key, entry) in catalog.iter_mut() {

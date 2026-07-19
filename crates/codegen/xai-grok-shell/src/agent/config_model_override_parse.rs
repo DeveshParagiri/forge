@@ -501,8 +501,7 @@ mod tests {
         ConfigModelOverride {
             model: Some("m".into()),
             base_url: Some("https://example.com".into()),
-            // Personal: [provider.*] pack reference (optional).
-            provider: None,
+            provider: Some("codex".into()),
             name: Some("Model M".into()),
             description: Some("desc".into()),
             api_key: Some("key".into()),

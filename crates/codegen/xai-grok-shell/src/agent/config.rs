@@ -18,6 +18,9 @@ use xai_grok_sampling_types::{
 use xai_grok_tools::types::compat::{
     COMPAT_CELLS, CompatConfig, CompatConfigToml, CompatRemoteKey, CompatSurface, CompatVendor,
 };
+
+pub use crate::agent::exaforge::ProviderConfig;
+
 /// The mode in which the agent is running.
 /// Determines behavior like relay sync enablement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1284,9 +1287,9 @@ pub struct Config {
     /// Models reference them with `provider = "codex"` etc.
     #[serde(skip)]
     pub providers: IndexMap<String, ProviderConfig>,
-    /// Personal provider-scoped include/exclude rules under `[catalog.*]`.
+    /// Exaforge: provider-scoped include/exclude rules under `[catalog.*]`.
     #[serde(default)]
-    pub catalog: crate::agent::provider_auth::ProviderCatalogConfig,
+    pub catalog: crate::agent::exaforge::ProviderCatalogConfig,
     /// Warnings from `[model.*]` parsing; surfaced by `grok inspect`.
     #[serde(skip)]
     pub model_override_warnings: Vec<super::config_model_override_parse::ModelOverrideWarning>,
@@ -1716,7 +1719,7 @@ impl Default for Config {
             auto_mode: AutoModeConfig::default(),
             config_models: IndexMap::new(),
             providers: IndexMap::new(),
-            catalog: crate::agent::provider_auth::ProviderCatalogConfig::default(),
+            catalog: crate::agent::exaforge::ProviderCatalogConfig::default(),
             model_override_warnings: Vec::new(),
             grok_com_config: GrokComConfig::default(),
             shortcuts: None,
@@ -1817,18 +1820,8 @@ impl Config {
                 ));
             }
         }
-        for (provider, rule) in self.catalog.configured() {
-            for (field, list) in [("include", &rule.include), ("exclude", &rule.exclude)] {
-                if let Err(bad) = crate::agent::models::ModelGlobSet::compile(Some(list)) {
-                    return Err(format!(
-                        "catalog.{}.{field} has an invalid pattern: {}. Patterns use * and ? wildcards.",
-                        provider.catalog_key(),
-                        bad.join(", ")
-                    ));
-                }
-            }
-        }
-        Ok(())
+        // Exaforge: validate provider-scoped catalog rules at the stock config seam.
+        crate::agent::exaforge::catalog::validate_filters(&self.catalog)
     }
     /// Build an `AuthManager` with the configured proxy URL applied.
     pub fn create_auth_manager(&self) -> AuthManager {
@@ -1870,7 +1863,8 @@ impl Config {
             warnings: model_override_warnings,
         } = super::config_model_override_parse::parse_model_overrides(raw_config);
         super::config_model_override_parse::log_model_override_warnings(&model_override_warnings);
-        let providers = parse_provider_configs(raw_config);
+        // Exaforge: parse provider packs separately from stock config deserialization.
+        let providers = crate::agent::exaforge::provider_config::parse(raw_config);
         let mut base = toml::Value::try_from(Self::default()).map_err(|e| e.to_string())?;
         if let toml::Value::Table(ref mut t) = base {
             t.remove("model");
@@ -3218,22 +3212,13 @@ pub fn resolve_model_list(
             }
         }
         let mut entry = model_override.apply(key, base, &cfg.endpoints);
-        if let Some(ref pname) = model_override.provider {
-            if let Some(provider) = cfg.providers.get(pname) {
-                provider.apply_to_entry(
-                    &mut entry,
-                    model_override.base_url.is_some(),
-                    model_override.api_backend.is_some(),
-                    model_override.api_key.is_some() || model_override.env_key.is_some(),
-                );
-            } else {
-                tracing::warn!(
-                    model_key = %key,
-                    provider = %pname,
-                    "model references unknown [provider.{pname}]; check config.toml"
-                );
-            }
-        }
+        // Exaforge: apply the optional provider pack after model-local overrides.
+        crate::agent::exaforge::catalog::apply_provider_override(
+            &cfg.providers,
+            model_override,
+            key,
+            &mut entry,
+        );
         tracing::debug!(
             model_key = % key, base_url = % entry.info.base_url, has_api_key = entry
             .api_key.is_some(), env_key = ? entry.env_key, had_base,
@@ -3607,122 +3592,6 @@ pub struct ModelEntryConfig {
 fn is_default_laziness_detector(cfg: &LazinessDetectorPerModelConfig) -> bool {
     cfg == &LazinessDetectorPerModelConfig::default()
 }
-/// Shared endpoint + credential pack for multiple `[model.*]` entries.
-///
-/// ```toml
-/// [provider.codex]
-/// base_url = "https://chatgpt.com/backend-api/codex"
-/// api_backend = "responses"
-/// auth = "codex"   # reads ~/.codex/auth.json
-///
-/// [model."gpt-5.4"]
-/// provider = "codex"
-/// model = "gpt-5.4"
-/// ```
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub struct ProviderConfig {
-    pub name: Option<String>,
-    pub base_url: Option<String>,
-    pub api_backend: Option<ApiBackend>,
-    pub api_key: Option<String>,
-    pub env_key: Option<EnvKeys>,
-    /// Personal auth pack id:
-    /// - `"codex"` → ChatGPT OAuth from `~/.codex/auth.json` (+ CODEX_ACCESS_TOKEN)
-    /// - `"openrouter"` → `OPENROUTER_API_KEY` / `~/.grok/provider_keys.json`
-    pub auth: Option<String>,
-    #[serde(default)]
-    pub extra_headers: IndexMap<String, String>,
-}
-
-impl ProviderConfig {
-    /// Fold provider defaults into a model entry.
-    ///
-    /// Call after `[model.*]` apply. Pass whether the model table set
-    /// `base_url` / `api_backend` / credentials so model-local fields win.
-    pub fn apply_to_entry(
-        &self,
-        entry: &mut ModelEntry,
-        model_set_base_url: bool,
-        model_set_backend: bool,
-        model_set_creds: bool,
-    ) {
-        if !model_set_base_url {
-            if let Some(ref url) = self.base_url {
-                entry.info.base_url = url.clone();
-            }
-        }
-        if !model_set_backend {
-            if let Some(ref backend) = self.api_backend {
-                entry.info.api_backend = backend.clone();
-            }
-        }
-        if !model_set_creds {
-            if let Some(ref k) = self.api_key {
-                entry.api_key = Some(k.clone());
-            }
-            if let Some(ref ek) = self.env_key {
-                entry.env_key = Some(ek.clone());
-            }
-        }
-        // Personal: auth packs for third-party providers.
-        if let Some(auth) = self.auth.as_deref() {
-            if auth.eq_ignore_ascii_case("codex") {
-                if entry.env_key.is_none() {
-                    entry.env_key = Some(EnvKeys::single("CODEX_ACCESS_TOKEN"));
-                }
-                if !model_set_base_url && self.base_url.is_none() {
-                    entry.info.base_url = "https://chatgpt.com/backend-api/codex".to_string();
-                }
-                if !model_set_backend && self.api_backend.is_none() {
-                    entry.info.api_backend = ApiBackend::Responses;
-                }
-            } else if auth.eq_ignore_ascii_case("openrouter") {
-                if entry.env_key.is_none() {
-                    entry.env_key = Some(EnvKeys::single("OPENROUTER_API_KEY"));
-                }
-                if !model_set_base_url && self.base_url.is_none() {
-                    entry.info.base_url = "https://openrouter.ai/api/v1".to_string();
-                }
-                if !model_set_backend && self.api_backend.is_none() {
-                    entry.info.api_backend = ApiBackend::ChatCompletions;
-                }
-            }
-        }
-        for (k, v) in &self.extra_headers {
-            entry
-                .info
-                .extra_headers
-                .entry(k.clone())
-                .or_insert_with(|| v.clone());
-        }
-        entry.info.supported_in_api = true;
-    }
-}
-
-/// Parse `[provider.<name>]` tables from raw config.toml.
-fn parse_provider_configs(raw_config: &toml::Value) -> IndexMap<String, ProviderConfig> {
-    let mut out = IndexMap::new();
-    let Some(section) = raw_config.get("provider").and_then(|v| v.as_table()) else {
-        return out;
-    };
-    for (name, value) in section {
-        match value.clone().try_into::<ProviderConfig>() {
-            Ok(cfg) => {
-                out.insert(name.clone(), cfg);
-            }
-            Err(e) => {
-                tracing::warn!(
-                    provider = %name,
-                    error = %e,
-                    "failed to parse [provider.{name}]; entry skipped"
-                );
-            }
-        }
-    }
-    out
-}
-
 /// A `[model.foo]` entry from config.toml, parsed directly from raw TOML
 /// (bypassing deep merge). Scalar fields are `Option` so absent means "inherit
 /// from defaults/prefetched"; the collection fields (`extra_headers`,
@@ -4454,90 +4323,21 @@ pub struct ResolvedCredentials {
     pub auth_type: xai_chat_state::AuthType,
     pub auth_scheme: AuthScheme,
 }
-/// First usable BYOK credential: a non-empty (trimmed) api_key, else the first
-/// set, non-empty env_key value. Single source of truth for has_own_credentials,
-/// resolve_credentials, and the JWT-reload path.
-///
-/// Personal: when `env_key` includes Codex / OpenRouter tokens and the env
-/// var is unset, fall back to on-disk credential packs (see `provider_auth`).
+/// First usable BYOK credential: a non-empty API key, then an environment
+/// value, then an Exaforge provider credential file fallback.
 pub(crate) fn first_own_credential(
     api_key: Option<&str>,
     env_key: Option<&EnvKeys>,
 ) -> Option<String> {
-    api_key
-        .filter(|k| !k.trim().is_empty())
-        .map(str::to_owned)
-        .or_else(|| env_key.and_then(EnvKeys::resolve_value))
-        .or_else(|| {
-            let names = env_key.map(|k| k.names()).unwrap_or_default();
-            let name_refs: Vec<&str> = names.iter().copied().collect();
-            if crate::agent::provider_auth::env_requests_codex_token(&name_refs) {
-                crate::agent::provider_auth::read_codex_access_token()
-            } else if crate::agent::provider_auth::env_requests_openrouter_token(&name_refs) {
-                crate::agent::provider_auth::read_openrouter_api_key()
-            } else {
-                None
-            }
-        })
+    // Exaforge: provider credential fallback at the stock model credential hook.
+    crate::agent::exaforge::credentials::resolve_own(api_key, env_key)
 }
 
 /// Resolve credentials for a model.
 /// Priority: model api_key/env_key > session token > XAI_API_KEY.
-///
-/// When `env_key` lists multiple names, the first set non-empty value is used.
-///
-/// Personal: never attach Grok session OIDC to third-party bases (Codex /
-/// OpenRouter / OpenAI platform). That was the source of Codex 400s.
 pub fn resolve_credentials(model: &ModelEntry, session_key: Option<&str>) -> ResolvedCredentials {
-    let info = model.info();
-    let (api_key, base_url, auth_type) = if let Some(key) = model.own_credential() {
-        (
-            Some(key),
-            info.base_url.clone(),
-            xai_chat_state::AuthType::ApiKey,
-        )
-    } else if let Some(key) = session_key
-        .filter(|_| !crate::agent::provider_auth::is_third_party_model_base(&info.base_url))
-    {
-        (
-            Some(key.to_owned()),
-            info.base_url.clone(),
-            xai_chat_state::AuthType::SessionToken,
-        )
-    } else if !crate::agent::provider_auth::is_third_party_model_base(&info.base_url)
-        && let Ok(key) = crate::agent::auth_method::read_xai_api_key_env()
-    {
-        let url = model
-            .api_base_url
-            .clone()
-            .unwrap_or_else(|| info.base_url.clone());
-        (Some(key), url, xai_chat_state::AuthType::ApiKey)
-    } else {
-        if let Some(ref env_keys) = model.env_key
-            && !env_keys.is_empty()
-        {
-            tracing::warn!(
-                model = % info.model, env_key = % env_keys,
-                "model has env_key configured but none of the environment variables are set — \
-                 requests will have no API key",
-            );
-        }
-        (
-            None,
-            info.base_url.clone(),
-            xai_chat_state::AuthType::ApiKey,
-        )
-    };
-    let auth_scheme = info.auth_scheme;
-    tracing::debug!(
-        model = % info.model, auth_type = ? auth_type, "resolved credentials"
-    );
-    ResolvedCredentials {
-        api_key,
-        base_url,
-        auth_type,
-        auth_scheme,
-    }
+    // Exaforge: preserve broad third-party session-token exclusion at this hook.
+    crate::agent::exaforge::credentials::resolve(model, session_key)
 }
 /// `disable_api_key_auth` at the credential seam: swap a first-party xAI API
 /// key for the IdP session (absent => request fails => forces login). BYOK
@@ -4884,29 +4684,8 @@ pub fn inject_url_derived_headers(
             .entry(crate::http::CLIENT_MODE_HEADER.to_string())
             .or_insert_with(|| crate::http::process_client_mode().to_string());
     }
-    // Personal: Codex / ChatGPT OAuth backend needs ChatGPT-Account-ID.
-    if base_url.contains("chatgpt.com") || base_url.contains("backend-api/codex") {
-        if let Some(account_id) = crate::agent::provider_auth::read_codex_account_id() {
-            headers
-                .entry("ChatGPT-Account-Id".to_string())
-                .or_insert(account_id);
-        }
-        headers
-            .entry("OpenAI-Beta".to_string())
-            .or_insert_with(|| "responses=experimental".to_string());
-        headers
-            .entry("originator".to_string())
-            .or_insert_with(|| "codex_cli_rs".to_string());
-    }
-    // Personal: OpenRouter recommends optional attribution headers.
-    if base_url.contains("openrouter.ai") {
-        headers
-            .entry("HTTP-Referer".to_string())
-            .or_insert_with(|| "https://github.com/xai-org/grok-build".to_string());
-        headers
-            .entry("X-Title".to_string())
-            .or_insert_with(|| "Grok Build (personal)".to_string());
-    }
+    // Exaforge: provider request headers at the stock URL-derived profile hook.
+    crate::agent::exaforge::profile::apply_headers(headers, base_url);
     let _ = (alpha_test_key, base_url);
 }
 pub fn resolve_model_to_sampling_config(
@@ -5032,11 +4811,11 @@ pub fn to_acp_model_info(
         .map(|(key, model)| {
             let info = model.info();
             let model_id = acp::ModelId::new(Arc::from(key.clone()));
-            // Personal: keep provider identity visible without verbose suffixes.
+            // Exaforge: keep provider identity visible without verbose suffixes.
             let configured_name = info.name.clone().unwrap_or_else(|| info.model.clone());
-            let display_name = crate::agent::provider_auth::provider_id_for_base(&info.base_url)
+            let display_name = crate::agent::exaforge::provider_id_for_base(&info.base_url)
                 .map(|provider| {
-                    crate::agent::provider_auth::display_model_name(provider, &configured_name)
+                    crate::agent::exaforge::display_model_name(provider, &configured_name)
                 })
                 .unwrap_or(configured_name);
             let total_context_tokens = info.context_window.get();
@@ -5050,10 +4829,8 @@ pub fn to_acp_model_info(
                     "agentType".to_string(),
                     serde_json::Value::String(info.agent_type.clone()),
                 );
-                // Personal: provider/auth metadata powers the existing `/model`
-                // picker without introducing a parallel catalog UI.
-                if let Some(provider) =
-                    crate::agent::provider_auth::provider_id_for_base(&info.base_url)
+                // Exaforge: provider/auth metadata powers the existing picker.
+                if let Some(provider) = crate::agent::exaforge::provider_id_for_base(&info.base_url)
                 {
                     map.insert(
                         "provider".to_string(),
@@ -5066,7 +4843,7 @@ pub fn to_acp_model_info(
                     map.insert(
                         "authStatus".to_string(),
                         serde_json::Value::String(
-                            crate::agent::provider_auth::picker_auth_status(provider).to_string(),
+                            crate::agent::exaforge::picker_auth_status(provider).to_string(),
                         ),
                     );
                 }
@@ -7094,11 +6871,15 @@ reasoning_effort = "low"
             "hidden model missing from catalog"
         );
         assert!(
-            available.values().any(|m| m.name == "visible-model"),
+            available
+                .values()
+                .any(|model| model.name == "SpaceX · visible-model"),
             "visible model missing from ACP"
         );
         assert!(
-            !available.values().any(|m| m.name == "hidden-model"),
+            !available
+                .values()
+                .any(|model| model.name == "SpaceX · hidden-model"),
             "hidden model should NOT appear in ACP"
         );
     }
@@ -7235,15 +7016,27 @@ reasoning_effort = "low"
         assert!(catalog.contains_key("oauth-only-model"));
         assert!(catalog.contains_key("public-model"));
         let api_available = available_models(&catalog, false);
-        assert!(!api_available.values().any(|m| m.name == "oauth-only-model"));
-        assert!(api_available.values().any(|m| m.name == "public-model"));
+        assert!(
+            !api_available
+                .values()
+                .any(|model| model.name == "SpaceX · oauth-only-model")
+        );
+        assert!(
+            api_available
+                .values()
+                .any(|model| model.name == "SpaceX · public-model")
+        );
         let oauth_available = available_models(&catalog, true);
         assert!(
             oauth_available
                 .values()
-                .any(|m| m.name == "oauth-only-model")
+                .any(|model| model.name == "SpaceX · oauth-only-model")
         );
-        assert!(oauth_available.values().any(|m| m.name == "public-model"));
+        assert!(
+            oauth_available
+                .values()
+                .any(|model| model.name == "SpaceX · public-model")
+        );
     }
     #[test]
     fn inference_idle_timeout_secs_round_trip() {
@@ -11573,7 +11366,7 @@ mod personal_codex_live_tests {
     use super::*;
     #[test]
     fn live_codex_model_is_byok_when_token_present() {
-        if crate::agent::provider_auth::read_codex_access_token().is_none() {
+        if crate::agent::exaforge::read_codex_access_token().is_none() {
             eprintln!("skip: no codex token");
             return;
         }

@@ -11,13 +11,11 @@ impl SessionActor {
         auto_compact_threshold_percent: u8,
     ) -> Result<acp::ModelId, acp::Error> {
         let model_id = acp::ModelId::new(sampling_config.model.clone());
-        // Personal: Pi-style provider switch semantics. Opaque reasoning is
-        // valid only for the provider/account that minted it, while ordinary
-        // user, assistant, and tool context remains portable.
+        // Exaforge: strip provider-bound reasoning at the model-switch hook.
         let previous_sampling_config = self.chat_state_handle.get_sampling_config().await;
         if let Some(previous_sampling_config) = previous_sampling_config {
             let mut conversation = self.chat_state_handle.get_conversation().await;
-            let stripped = crate::agent::provider_history::strip_for_provider_switch(
+            let stripped = crate::agent::exaforge::history::strip_for_provider_switch(
                 &previous_sampling_config.base_url,
                 &sampling_config.base_url,
                 &mut conversation,
