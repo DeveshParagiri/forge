@@ -52,6 +52,21 @@ for the version of the code present in this tree.
 
 The larger architecture and rebase notes live in [`PERSONAL.md`](PERSONAL.md).
 
+### Rebase-friendly extension layout
+
+Most fork-specific implementation now lives in additive, per-crate `exaforge/`
+modules:
+
+- `xai-grok-sampler/src/exaforge/` — Codex request policy, Responses API compatibility, and stream recovery.
+- `xai-grok-shell/src/agent/exaforge/` — provider identity, credentials, catalogs, profiles, status, and portable history.
+- `xai-grok-pager/src/exaforge/` — provider login, effort controls, layout policy, welcome branding, and focused UI tests.
+- `xai-grok-pager-render/src/exaforge/` — Claude theme policy and shortcut-footer behavior.
+
+Upstream-owned files retain only small `// Exaforge:` integration hooks where
+possible. Ordering-sensitive behavior, such as running-turn `Esc` cancellation,
+stays close to the upstream event flow. This keeps features intact while making
+future upstream rebases smaller and easier to review.
+
 ## Installing the fork
 
 Build and install the `dev` branch with the included updater:
