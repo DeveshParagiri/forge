@@ -127,10 +127,10 @@ pub enum LocalQuestionKind {
         model_id: agent_client_protocol::ModelId,
         effort: Option<xai_grok_shell::sampling::types::ReasoningEffort>,
     },
-    /// Personal: Pi-style `/login` provider picker.
+    /// Exaforge: Pi-style `/login` provider picker.
     /// Option `id`s are `spacexai` | `openai-codex` | `openrouter`.
     ProviderLogin,
-    /// Personal: freeform capture for OpenRouter API key after provider pick.
+    /// Exaforge: freeform capture for OpenRouter API key after provider pick.
     OpenRouterApiKey,
 }
 
@@ -294,10 +294,10 @@ impl QuestionViewState {
         self
     }
 
-    /// Personal: whether this local question is a dedicated text field rather than an
+    /// Exaforge: whether this local question is a dedicated text field rather than an
     /// option list with an optional "Other" row.
     pub fn is_direct_input(&self) -> bool {
-        matches!(self.local_kind, Some(LocalQuestionKind::OpenRouterApiKey))
+        crate::exaforge::provider_login::is_direct_input_kind(self.local_kind.as_ref())
     }
 
     /// Number of items for a given question: options + 1 free-form row

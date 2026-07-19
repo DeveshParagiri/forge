@@ -1,18 +1,14 @@
-//! Personal: Pi-style multi-provider `/login` dispatch.
-//!
-//! Kept in its own file so upstream rebases of `auth.rs` stay clean.
-//! Hooks: `Action::ChooseProviderLogin` / `ProviderLoginSelected` /
-//! `OpenRouterKeySubmitted` in `router.rs`.
+//! Provider `/login` dispatch: picker open, selection, OpenRouter key save.
 
-use super::auth::dispatch_login;
 use crate::app::actions::{Action, Effect};
 use crate::app::app_view::{ActiveView, AppView};
+use crate::app::dispatch::dispatch_login;
 use crate::views::question_view::{LocalQuestionKind, QuestionFocus, QuestionViewState};
 use xai_grok_shell::agent::provider_auth::{self, ProviderId, set_openrouter_api_key, status_for};
 use xai_grok_tools::implementations::grok_build::ask_user_question::{Question, QuestionOption};
 
 /// Open the provider picker (Pi `/login` equivalent).
-pub(super) fn dispatch_choose_provider_login(app: &mut AppView) -> Vec<Effect> {
+pub(crate) fn dispatch_choose_provider_login(app: &mut AppView) -> Vec<Effect> {
     let ActiveView::Agent(id) = app.active_view else {
         // On welcome / no agent: fall back to SpaceXAI login (upstream path).
         return dispatch_login(app);
@@ -68,7 +64,7 @@ pub(super) fn dispatch_choose_provider_login(app: &mut AppView) -> Vec<Effect> {
 }
 
 /// Handle a provider selection from the picker (or `/login <provider>`).
-pub(super) fn dispatch_provider_login_selected(
+pub(crate) fn dispatch_provider_login_selected(
     app: &mut AppView,
     provider_id: String,
 ) -> Vec<Effect> {
@@ -167,7 +163,7 @@ fn open_openrouter_key_question(app: &mut AppView) -> Vec<Effect> {
     vec![]
 }
 
-pub(super) fn dispatch_openrouter_key_submitted(app: &mut AppView, api_key: String) -> Vec<Effect> {
+pub(crate) fn dispatch_openrouter_key_submitted(app: &mut AppView, api_key: String) -> Vec<Effect> {
     let key = api_key.trim();
     if key.is_empty() {
         app.show_toast("Empty API key — cancelled");

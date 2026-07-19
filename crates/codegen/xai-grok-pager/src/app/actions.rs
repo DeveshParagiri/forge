@@ -607,14 +607,14 @@ pub enum Action {
     SwitchAccount,
     /// User pressed login on the welcome screen (SpaceXAI / upstream path).
     Login,
-    /// Personal: open Pi-style multi-provider `/login` picker.
+    /// Exaforge: open Pi-style multi-provider `/login` picker.
     ChooseProviderLogin,
-    /// Personal: user picked a provider in the `/login` picker.
+    /// Exaforge: user picked a provider in the `/login` picker.
     /// `provider_id` is `spacexai` | `openai-codex` | `openrouter`.
     ProviderLoginSelected {
         provider_id: String,
     },
-    /// Personal: user submitted an OpenRouter API key via freeform modal.
+    /// Exaforge: user submitted an OpenRouter API key via freeform modal.
     OpenRouterKeySubmitted {
         api_key: String,
     },

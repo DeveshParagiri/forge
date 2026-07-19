@@ -1065,9 +1065,8 @@ pub(in crate::app::dispatch) fn handle_switch_model_complete(
                 let resolved_effort = agent.session.models.reasoning_effort;
                 let same_model = prev_model.as_ref() == Some(&model_id);
                 let unchanged = same_model && prev_effort == resolved_effort;
-                // Effort-only changes (Shift+Tab / /effort): no scrollback spam.
-                // Full model switches still get a system line.
-                if !unchanged && !same_model {
+                // Exaforge: effort-only lifecycle suppression (no scrollback spam).
+                if crate::exaforge::effort::should_log_model_switch_line(same_model, unchanged) {
                     let msg = if let Some(eff) = resolved_effort {
                         format!("Switched to {display_name} ({eff} effort)")
                     } else {

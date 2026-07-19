@@ -176,7 +176,7 @@ fn build_model_items(models: &ModelState) -> Vec<ArgItem> {
             display,
             match_text: info.name.clone(),
             insert_text,
-            // Personal: provider/auth state is supplied by shell model meta.
+            // Exaforge: provider/auth state is supplied by shell model meta.
             description: model_picker_description(info),
         });
     }

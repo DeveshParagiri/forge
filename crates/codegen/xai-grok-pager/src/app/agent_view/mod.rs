@@ -26,7 +26,7 @@
 //!       on an empty prompt) re-enters this level and runs CancelTurn.
 //!   → 3. Esc policy (try_handle_esc_policy) on Prompt or Scrollback only,
 //!       after overlays/dropdowns/selection returned Changed / stole Esc:
-//!       turn running → CancelTurn (Personal: Esc stops like Ctrl+C)
+//!       turn running → CancelTurn (Exaforge: Esc stops like Ctrl+C)
 //!       turn cancelling → CancelTurn (retry lost ack; Ctrl+C escalates to Quit)
 //!       idle + non-empty prompt, prompt pane only → ArmPending ClearPrompt (2× within 800ms, hint)
 //!       idle + empty + messages, either pane (Normal composer mode, no
@@ -1582,19 +1582,11 @@ fn translate_local_submit(
     if skipped {
         return InputOutcome::Changed;
     }
-    // Personal: OpenRouter key can be submitted from freeform alone.
-    if matches!(kind, LocalQuestionKind::OpenRouterApiKey) {
-        let freeform = qv
-            .per_question_freeform
-            .first()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_default();
-        return if freeform.is_empty() {
-            InputOutcome::Changed
-        } else {
-            InputOutcome::Action(Action::OpenRouterKeySubmitted { api_key: freeform })
-        };
+    // Exaforge: OpenRouter key + provider picker submit translation.
+    if let Some(outcome) =
+        crate::exaforge::provider_login::translate_provider_login_submit(qv, &kind)
+    {
+        return outcome;
     }
     let Some(QuestionSelection::Single(Some(idx))) = qv.selections.first() else {
         return InputOutcome::Changed;
@@ -1660,17 +1652,10 @@ fn translate_local_submit(
                 effort,
             })
         }
-        // Personal: Pi-style provider picker.
-        LocalQuestionKind::ProviderLogin => {
-            let provider_id = qv
-                .questions
-                .first()
-                .and_then(|q| q.options.get(*idx))
-                .and_then(|o| o.id.clone())
-                .unwrap_or_default();
-            InputOutcome::Action(Action::ProviderLoginSelected { provider_id })
+        // Exaforge: handled above via translate_provider_login_submit.
+        LocalQuestionKind::ProviderLogin | LocalQuestionKind::OpenRouterApiKey => {
+            unreachable!("handled above")
         }
-        LocalQuestionKind::OpenRouterApiKey => unreachable!("handled above"),
         LocalQuestionKind::ProjectSelect { .. } => unreachable!(),
     }
 }
@@ -2142,8 +2127,9 @@ fn collect_citation_links(
 /// Shared fixtures for the queue-routing tests here, the queued-prompt
 /// editing tests in `queue_edit.rs`, and the parked-wait tests in
 /// `dispatch/queue.rs` / `acp_handler.rs`.
+// Exaforge tests reuse these fixtures for provider-login interaction coverage.
 #[cfg(test)]
-pub(super) mod test_fixtures {
+pub(crate) mod test_fixtures {
     use super::{AgentPane, AgentView};
     use crate::acp::model_state::ModelState;
     use crate::actions::ActionRegistry;

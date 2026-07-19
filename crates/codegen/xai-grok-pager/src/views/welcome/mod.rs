@@ -21,7 +21,6 @@ use crate::views::prompt_widget::{PromptFlag, PromptInfo, PromptWidget};
 mod hero_box;
 pub(crate) mod logo;
 mod menu;
-mod personal;
 mod prompt;
 mod top_bar;
 
@@ -439,7 +438,8 @@ pub(super) fn render_version_badge(
     match &mode {
         VersionBadgeMode::Full { .. } => {
             spans.push(Span::styled(
-                format!("{}  ", personal::PRODUCT_NAME),
+                // Exaforge: product brand.
+                format!("{}  ", crate::exaforge::welcome::PRODUCT_NAME),
                 Style::default()
                     .fg(theme.text_primary)
                     .add_modifier(Modifier::BOLD),
@@ -462,7 +462,8 @@ pub(super) fn render_version_badge(
         }
         VersionBadgeMode::HeroInline => {
             spans.push(Span::styled(
-                format!("{}  ", personal::PRODUCT_NAME),
+                // Exaforge: product brand.
+                format!("{}  ", crate::exaforge::welcome::PRODUCT_NAME),
                 Style::default()
                     .fg(theme.text_primary)
                     .add_modifier(Modifier::BOLD),
@@ -1677,8 +1678,9 @@ fn render_welcome_done(
     // the logo/centering space for its list. Plain compact mode keeps the
     // normal welcome layout.
     let welcome_compact = show_picker;
-    let announcement = personal::announcement(p.announcement);
-    let changelog_bullets = personal::changelog_bullets(p.changelog_bullets);
+    // Exaforge: welcome announcement/changelog policy.
+    let announcement = crate::exaforge::welcome::announcement(p.announcement);
+    let changelog_bullets = crate::exaforge::welcome::changelog_bullets(p.changelog_bullets);
     let upgrade_cta = announcement.and(p.upgrade_cta);
 
     let cta = p

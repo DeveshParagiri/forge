@@ -11,6 +11,8 @@ mod config_toml_edit;
 pub mod diagnostics;
 pub mod diff;
 pub mod docs;
+// Exaforge: personal UI behavior (provider login, effort, welcome branding).
+pub(crate) mod exaforge;
 pub mod export_cmd;
 pub mod git_info;
 pub mod headless;

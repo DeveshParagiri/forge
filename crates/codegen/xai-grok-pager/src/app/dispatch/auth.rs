@@ -209,7 +209,8 @@ pub(super) fn strip_trailing_auth_error_blocks(agent: &mut AgentView) {
 /// switch to `Welcome` so the flow is actually visible; the prior view is
 /// restored once auth completes or is cancelled. Without this, `/login`
 /// with an external auth provider configured appeared to do nothing.
-pub(super) fn dispatch_login(app: &mut AppView) -> Vec<Effect> {
+// Exaforge: multi-provider `/login` falls back to SpaceXAI via this path.
+pub(crate) fn dispatch_login(app: &mut AppView) -> Vec<Effect> {
     ensure_login_method(app);
     let Some(method_id) = app.login_method_id.clone() else {
         app.auth_state = AuthState::Pending {

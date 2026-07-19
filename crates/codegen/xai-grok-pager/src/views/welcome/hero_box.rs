@@ -33,7 +33,8 @@ use super::{PROMPT_HEIGHT, VERSION_GAP};
 /// Rows the "thanks" subtitle occupies. Hidden when the in-box info slot
 /// (changelog / announcement) is shown, to keep the box compact.
 fn subtitle_rows(info_height: u16) -> u16 {
-    if info_height > 0 || super::personal::SUBTITLE.is_none() {
+    // Subtitle height stays inline (layout-sensitive); brand policy is Exaforge.
+    if info_height > 0 || crate::exaforge::welcome::SUBTITLE.is_none() {
         0
     } else {
         1
@@ -330,9 +331,9 @@ pub(super) fn render_hero_box(
         super::VersionBadgeMode::HeroInline,
     );
 
-    // Subtitle line below the version.
+    // Exaforge: optional subtitle brand line.
     if layout.hero_subtitle.height > 0
-        && let Some(subtitle) = super::personal::SUBTITLE
+        && let Some(subtitle) = crate::exaforge::welcome::SUBTITLE
     {
         let subtitle_style = Style::default().fg(theme.gray);
         buf.set_span(

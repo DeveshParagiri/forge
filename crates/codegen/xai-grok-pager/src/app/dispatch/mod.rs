@@ -25,8 +25,6 @@ mod modes;
 mod notes;
 mod permissions;
 mod prompt;
-/// Personal: Pi-style multi-provider `/login` (Codex / OpenRouter).
-mod provider_login;
 mod queue;
 mod rewind;
 mod router;
@@ -38,6 +36,8 @@ mod transcript;
 mod turn;
 mod voice;
 
+// Exaforge: SpaceXAI login fallback for multi-provider `/login`.
+pub(crate) use auth::dispatch_login;
 pub(crate) use billing::{UPSELL_URL_PAYG, UPSELL_URL_UPGRADE, is_credit_limit_error};
 pub(crate) use modes::{downgrade_displayed_auto_if_gated, effective_auto};
 pub(crate) use notes::{recap_unavailable_toast, scrollback_has_user_messages};

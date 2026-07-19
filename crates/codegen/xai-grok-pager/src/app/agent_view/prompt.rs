@@ -763,9 +763,10 @@ impl AgentView {
         // handling the Esc, a following `d` is the user's text, not a dump.
         self.esc_pressed_at = None;
 
-        // Personal: mid-turn running — Esc cancels generation (same as Ctrl+C on
+        // Exaforge: mid-turn running — Esc cancels generation (same as Ctrl+C on
         // an empty prompt). Overlays / dropdowns / selection still steal Esc first.
         // Unlike Ctrl+C, a non-empty draft does not intercept: Esc always stops.
+        // Ordering-sensitive: kept inline in try_handle_esc_policy.
         if self.session.state.is_turn_running() {
             self.cancel_trigger_hint = Some(crate::app::actions::CancelTrigger::Esc);
             return Some(InputOutcome::Action(Action::CancelTurn));

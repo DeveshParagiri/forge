@@ -32,20 +32,8 @@ use ratatui::widgets::Widget;
 use std::collections::HashSet;
 use std::time::Instant;
 
-/// Return the full overlay canvas, stopping above the shortcuts bar when it
-/// exists. Hidden-shortcuts themes use an empty `Rect`, so deriving the bottom
-/// edge from `shortcuts.y` alone would collapse every modal to zero height.
-fn overlay_area_above_shortcuts(area: Rect, shortcuts: Rect, bottom_inset: u16) -> Rect {
-    let bottom = if shortcuts.height > 0 {
-        shortcuts.y
-    } else {
-        area.bottom()
-    };
-    Rect {
-        height: bottom.saturating_sub(area.y).saturating_sub(bottom_inset),
-        ..area
-    }
-}
+// Exaforge: overlay geometry for hidden-shortcuts themes.
+use crate::exaforge::layout::overlay_area_above_shortcuts;
 
 impl AgentView {
     pub(crate) fn update_scrollback_selection_state(
@@ -2407,7 +2395,7 @@ impl AgentView {
                     },
                     Style::default().bg(row_bg),
                 );
-                // Personal: render provider key entry as one plain input field.
+                // Exaforge: render provider key entry as one plain input field.
                 let direct_input = self
                     .question_view
                     .as_ref()
@@ -2420,13 +2408,18 @@ impl AgentView {
                     .unwrap_or(6) as u16;
                 let prompt_ind = Style::default().fg(theme.accent_user).bg(row_bg);
                 let (text_x, text_w, leading_w) = if direct_input {
+                    let prefix = crate::exaforge::provider_login::direct_input_prefix();
                     buf.set_span_safe(
                         content_x,
                         row_y,
                         &Span::styled(crate::glyphs::prompt_arrow(), prompt_ind),
-                        2,
+                        prefix.leading_w,
                     );
-                    (content_x + 2, content_w.saturating_sub(2), 2)
+                    (
+                        content_x + prefix.leading_w,
+                        content_w.saturating_sub(prefix.leading_w),
+                        prefix.leading_w,
+                    )
                 } else {
                     let num_style = Style::default().fg(theme.accent_user).bg(row_bg);
                     let marker_style = Style::default()
@@ -2584,48 +2577,47 @@ impl AgentView {
                         .bg(footer_bg)
                         .add_modifier(Modifier::BOLD);
                     let mut left_spans: Vec<Span<'_>> = Vec::new();
-                    let provider_picker = matches!(
-                        qv.local_kind,
-                        Some(crate::views::question_view::LocalQuestionKind::ProviderLogin)
-                    );
-                    if qv.is_direct_input() {
-                        left_spans.push(Span::styled("Esc", hint_key));
-                        left_spans.push(Span::styled(" cancel", hint_style));
-                    } else if qv.questions.len() > 1 {
-                        let counter = format!("[{}/{}] ", qv.active_tab + 1, qv.questions.len());
-                        left_spans.push(Span::styled(counter, hint_style));
-                        left_spans.push(Span::styled(" \u{b7} ", hint_style));
-                    }
-                    if !qv.is_direct_input() {
-                        left_spans.push(Span::styled("\u{2191}/\u{2193}", hint_key));
-                        left_spans.push(Span::styled(" navigate", hint_style));
-                        if qv.questions.len() > 1 {
-                            left_spans.push(Span::styled(" \u{b7} ", hint_style));
-                            left_spans.push(Span::styled("\u{2190}/\u{2192}", hint_key));
-                            left_spans.push(Span::styled(" question", hint_style));
-                        }
-                        left_spans.push(Span::styled(" \u{b7} ", hint_style));
-                        if provider_picker {
+                    // Exaforge: provider question footer policy.
+                    use crate::exaforge::provider_login::{FooterLeftPolicy, footer_left_policy};
+                    let footer_policy = footer_left_policy(qv.local_kind.as_ref());
+                    match footer_policy {
+                        FooterLeftPolicy::DirectInput => {
                             left_spans.push(Span::styled("Esc", hint_key));
                             left_spans.push(Span::styled(" cancel", hint_style));
-                        } else {
-                            left_spans.push(Span::styled("y", hint_key));
-                            left_spans.push(Span::styled(" copy", hint_style));
+                        }
+                        FooterLeftPolicy::ProviderPicker | FooterLeftPolicy::Standard => {
+                            if qv.questions.len() > 1 {
+                                let counter =
+                                    format!("[{}/{}] ", qv.active_tab + 1, qv.questions.len());
+                                left_spans.push(Span::styled(counter, hint_style));
+                                left_spans.push(Span::styled(" \u{b7} ", hint_style));
+                            }
+                            left_spans.push(Span::styled("\u{2191}/\u{2193}", hint_key));
+                            left_spans.push(Span::styled(" navigate", hint_style));
+                            if qv.questions.len() > 1 {
+                                left_spans.push(Span::styled(" \u{b7} ", hint_style));
+                                left_spans.push(Span::styled("\u{2190}/\u{2192}", hint_key));
+                                left_spans.push(Span::styled(" question", hint_style));
+                            }
+                            left_spans.push(Span::styled(" \u{b7} ", hint_style));
+                            if matches!(footer_policy, FooterLeftPolicy::ProviderPicker) {
+                                left_spans.push(Span::styled("Esc", hint_key));
+                                left_spans.push(Span::styled(" cancel", hint_style));
+                            } else {
+                                left_spans.push(Span::styled("y", hint_key));
+                                left_spans.push(Span::styled(" copy", hint_style));
+                            }
                         }
                     }
                     let left_line = Line::from(left_spans);
                     let avail_w = footer_w.saturating_sub(3);
                     buf.set_line_safe(content_x, footer_y, &left_line, avail_w);
                     let is_last = qv.active_tab >= qv.questions.len().saturating_sub(1);
-                    let enter_label = if qv.is_direct_input() {
-                        "submit"
-                    } else if qv.is_on_freeform_row() {
-                        "edit"
-                    } else if is_last {
-                        "submit"
-                    } else {
-                        "select"
-                    };
+                    let enter_label = crate::exaforge::provider_login::enter_label(
+                        matches!(footer_policy, FooterLeftPolicy::DirectInput),
+                        qv.is_on_freeform_row(),
+                        is_last,
+                    );
                     let btn_key = "Enter";
                     let btn_bg = theme.bg_base;
                     let bkey_style = Style::default()
@@ -4234,26 +4226,6 @@ impl AgentView {
         (cursor, prompt_post_flush)
     }
 }
-#[cfg(test)]
-mod hidden_shortcuts_overlay_tests {
-    use super::*;
-
-    #[test]
-    fn hidden_shortcuts_use_the_screen_bottom_instead_of_zero() {
-        let area = Rect::new(3, 5, 80, 30);
-        let overlay = overlay_area_above_shortcuts(area, Rect::default(), 1);
-        assert_eq!(overlay, Rect::new(3, 5, 80, 29));
-    }
-
-    #[test]
-    fn visible_shortcuts_still_bound_the_overlay() {
-        let area = Rect::new(3, 5, 80, 30);
-        let shortcuts = Rect::new(3, 32, 80, 1);
-        let overlay = overlay_area_above_shortcuts(area, shortcuts, 1);
-        assert_eq!(overlay, Rect::new(3, 5, 80, 26));
-    }
-}
-
 #[cfg(test)]
 mod selection_state_tests {
     use super::super::test_fixtures::make_agent;
