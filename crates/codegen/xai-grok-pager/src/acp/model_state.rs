@@ -79,6 +79,13 @@ impl ModelState {
         Some(self.current.as_ref()?.0.as_ref())
     }
 
+    /// Stable provider identity advertised in the active model's ACP metadata.
+    pub fn current_provider_id(&self) -> Option<xai_grok_shell::agent::provider_auth::ProviderId> {
+        let meta = self.available.get(self.current.as_ref()?)?.meta.as_ref()?;
+        let provider = meta.get("providerId")?.as_str()?;
+        xai_grok_shell::agent::provider_auth::ProviderId::from_str_id(provider)
+    }
+
     /// Total context window tokens for the current model (if available).
     fn current_context_window_tokens(&self) -> Option<u64> {
         let meta = self.available.get(self.current.as_ref()?)?.meta.as_ref()?;
@@ -356,6 +363,22 @@ mod tests {
     fn test_current_model_name() {
         let state = sample_models();
         assert_eq!(state.current_model_name(), Some("Model A".to_string()));
+    }
+
+    #[test]
+    fn current_provider_comes_from_active_model_metadata() {
+        let mut state = sample_models();
+        let current = state.current.clone().unwrap();
+        state.available.get_mut(&current).unwrap().meta = Some(
+            serde_json::json!({ "providerId": "openai-codex" })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        assert_eq!(
+            state.current_provider_id(),
+            Some(xai_grok_shell::agent::provider_auth::ProviderId::OpenaiCodex)
+        );
     }
 
     #[test]

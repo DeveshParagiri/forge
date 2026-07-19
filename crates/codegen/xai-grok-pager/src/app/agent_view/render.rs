@@ -738,11 +738,14 @@ impl AgentView {
         let appearance = self.scrollback.appearance().clone();
         let layout_cfg = &appearance.scrollback.layout;
         let scrollbar_cfg = &appearance.scrollback.scrollbar;
-        let model_id = self
-            .session
-            .models
-            .current_model_name()
-            .unwrap_or_else(|| "unknown".to_string());
+        // Exaforge: keep provider-qualified names in pickers, but omit the
+        // provider from the compact prompt footer.
+        let model_id = crate::exaforge::model_label::prompt_footer_model_name(
+            self.session
+                .models
+                .current_model_name()
+                .unwrap_or_else(|| "unknown".to_string()),
+        );
         let effective_plan = self.plan_mode_pending.unwrap_or(self.plan_mode_active);
         let casual_commenting = self.is_casual_commenting();
         let prompt_focused = if self.plan_approval_view.is_some() {
@@ -2200,8 +2203,12 @@ impl AgentView {
             .registry()
             .get("usage")
             .is_some();
+        // SpaceXAI billing is cached on the session, but its warning must not
+        // follow the user after switching to another provider's model.
+        let active_provider = self.session.models.current_provider_id();
         let warning = self.credit_balance.as_ref().and_then(|bal| {
-            crate::views::credit_bar::usage_warning_for_session(
+            crate::views::credit_bar::usage_warning_for_provider(
+                active_provider,
                 bal,
                 self.auto_topup.as_ref(),
                 usage_visible,

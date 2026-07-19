@@ -251,6 +251,27 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             }
             vec![]
         }
+        TaskResult::ProviderUsageFetched { agent_id, snapshot } => {
+            if let Some(agent) = app.agents.get_mut(&agent_id) {
+                agent.scrollback.push_block(RenderBlock::system(
+                    crate::views::provider_usage::format_provider_usage(&snapshot),
+                ));
+            }
+            vec![]
+        }
+        TaskResult::ProviderUsageError {
+            agent_id,
+            provider,
+            error,
+        } => {
+            if let Some(agent) = app.agents.get_mut(&agent_id) {
+                agent.scrollback.push_block(RenderBlock::system(format!(
+                    "{} usage unavailable: {error}",
+                    provider.display_name()
+                )));
+            }
+            vec![]
+        }
         TaskResult::AppBillingFetched { balance, autotopup } => {
             app.credit_balance = balance;
             apply_auto_topup(&mut app.auto_topup, &autotopup);

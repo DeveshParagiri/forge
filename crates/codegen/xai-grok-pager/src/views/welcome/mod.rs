@@ -627,6 +627,8 @@ pub struct WelcomeRenderParams<'a> {
     /// Live working directory (tracks `Effect::SetWorkingDir`), used to pin
     /// the current repo's session group to the top of the picker.
     pub cwd: &'a std::path::Path,
+    /// Provider of the model currently selected on the welcome screen.
+    pub active_provider: Option<xai_grok_shell::agent::provider_auth::ProviderId>,
     /// App-level credit balance for showing the usage warning on the welcome screen.
     pub credit_balance: Option<&'a crate::views::credit_bar::CreditBalance>,
     /// Auto top-up rule paired with `credit_balance` for the welcome warning.
@@ -2100,7 +2102,13 @@ fn render_welcome_done(
         }
 
         let warning = p.credit_balance.and_then(|bal| {
-            crate::views::credit_bar::usage_warning(bal, p.auto_topup, p.usage_visible)
+            crate::views::credit_bar::usage_warning_for_provider(
+                p.active_provider,
+                bal,
+                p.auto_topup,
+                p.usage_visible,
+                false,
+            )
         });
         let (usage_warning_text, usage_warning_critical) = match warning {
             Some((text, critical)) => (Some(text), critical),
@@ -2713,6 +2721,7 @@ mod tests {
             session_picker_source_filter: crate::views::session_picker::SourceFilter::All,
             chat_mode: false,
             cwd: std::path::Path::new("/repo"),
+            active_provider: None,
             credit_balance: None,
             auto_topup: None,
             usage_visible: true,

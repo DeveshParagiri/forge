@@ -2001,6 +2001,11 @@ pub enum Effect {
     /// pushing a system message into scrollback (used for automatic refreshes
     /// on session init and after each turn).
     FetchBilling { agent_id: AgentId, silent: bool },
+    /// Fetch account usage directly from a non-SpaceXAI provider backend.
+    FetchProviderUsage {
+        agent_id: AgentId,
+        provider: xai_grok_shell::agent::provider_auth::ProviderId,
+    },
     /// Fetch billing data at the app level (no agent required).
     /// Used on startup to populate the welcome-screen credit warning.
     FetchAppBilling,
@@ -2670,6 +2675,18 @@ pub enum TaskResult {
         subscription_tier: Option<String>,
         /// Auto top-up rule fetch result; `Unchanged` keeps any cached rule.
         autotopup: crate::views::credit_bar::AutoTopupFetch,
+    },
+    /// Provider-specific account usage fetched for an explicit `/usage` request.
+    ProviderUsageFetched {
+        agent_id: AgentId,
+        snapshot: xai_grok_shell::agent::provider_auth::ProviderUsageSnapshot,
+    },
+    /// Provider-specific usage fetch failed. Errors are already sanitized by
+    /// the provider layer and must never include OAuth credentials.
+    ProviderUsageError {
+        agent_id: AgentId,
+        provider: xai_grok_shell::agent::provider_auth::ProviderId,
+        error: String,
     },
     /// App-level billing data (welcome screen).
     AppBillingFetched {

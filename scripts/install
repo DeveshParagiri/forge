@@ -1,0 +1,54 @@
+#!/bin/sh
+# Bootstrap Exaforge from the dev branch, then build and install it.
+set -eu
+
+REPO_URL="${GROK_REPO_URL:-https://github.com/DeveshParagiri/grok-build.git}"
+BRANCH="${GROK_DEV_BRANCH:-dev}"
+SOURCE_DIR="${GROK_SRC:-$HOME/.local/share/grok/source}"
+UPDATER="${GROK_UPDATER:-$HOME/bin/grok-update-from-source}"
+
+if ! command -v git >/dev/null 2>&1; then
+  echo "BLOCKED: git is not installed. Install Git and retry."
+  exit 1
+fi
+
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "BLOCKED: cargo is not installed. Run https://rustup.rs and retry."
+  exit 1
+fi
+
+if ! command -v dotslash >/dev/null 2>&1 && ! command -v protoc >/dev/null 2>&1; then
+  echo "BLOCKED: dotslash or protoc is not installed. Install either one and retry."
+  exit 1
+fi
+
+if [ -e "$SOURCE_DIR" ] && [ ! -d "$SOURCE_DIR/.git" ]; then
+  echo "BLOCKED: $SOURCE_DIR exists but is not a Git checkout."
+  exit 1
+fi
+
+if [ ! -d "$SOURCE_DIR/.git" ]; then
+  echo "==> cloning Exaforge ($BRANCH) into $SOURCE_DIR"
+  mkdir -p "$(dirname "$SOURCE_DIR")"
+  git clone --branch "$BRANCH" --single-branch "$REPO_URL" "$SOURCE_DIR"
+else
+  origin_url="$(git -C "$SOURCE_DIR" remote get-url origin 2>/dev/null || true)"
+  if [ -z "$origin_url" ]; then
+    echo "BLOCKED: existing checkout at $SOURCE_DIR has no origin remote."
+    exit 1
+  fi
+
+  expected_url="${REPO_URL%.git}"
+  actual_url="${origin_url%.git}"
+  if [ "$actual_url" != "$expected_url" ]; then
+    echo "BLOCKED: existing checkout at $SOURCE_DIR has an unexpected origin: $origin_url"
+    exit 1
+  fi
+
+  echo "==> using existing checkout at $SOURCE_DIR"
+fi
+
+mkdir -p "$(dirname "$UPDATER")"
+install -m 755 "$SOURCE_DIR/scripts/grok-update-from-source" "$UPDATER"
+
+exec "$UPDATER"

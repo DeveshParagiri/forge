@@ -32,6 +32,7 @@ pub mod plan_approval_view;
 pub mod progress_bar;
 pub mod prompt_suggestion;
 pub mod prompt_widget;
+pub mod provider_usage;
 pub mod question_view;
 pub mod queue_pane;
 pub mod rewind;

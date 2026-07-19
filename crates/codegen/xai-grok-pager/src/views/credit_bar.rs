@@ -173,6 +173,21 @@ pub fn usage_warning(
 }
 
 /// Like [`usage_warning`], but suppresses output for gateway/chat-kind sessions.
+pub fn usage_warning_for_provider(
+    provider: Option<xai_grok_shell::agent::provider_auth::ProviderId>,
+    balance: &CreditBalance,
+    autotopup: Option<&AutoTopupInfo>,
+    usage_visible: bool,
+    gateway_chat: bool,
+) -> Option<(String, bool)> {
+    use xai_grok_shell::agent::provider_auth::ProviderId;
+
+    if provider != Some(ProviderId::Spacexai) {
+        return None;
+    }
+    usage_warning_for_session(balance, autotopup, usage_visible, gateway_chat)
+}
+
 pub fn usage_warning_for_session(
     balance: &CreditBalance,
     autotopup: Option<&AutoTopupInfo>,
@@ -457,6 +472,25 @@ mod tests {
         assert_eq!(
             usage_warning(&weekly, None, true),
             Some(("Weekly limit left: 8%".to_string(), false))
+        );
+    }
+
+    #[test]
+    fn provider_warning_is_model_specific() {
+        use xai_grok_shell::agent::provider_auth::ProviderId;
+
+        let weekly = bal_period(92.0, "USAGE_PERIOD_TYPE_WEEKLY");
+        assert_eq!(
+            usage_warning_for_provider(Some(ProviderId::Spacexai), &weekly, None, true, false,),
+            Some(("Weekly limit left: 8%".to_string(), false))
+        );
+        assert_eq!(
+            usage_warning_for_provider(Some(ProviderId::OpenaiCodex), &weekly, None, true, false,),
+            None
+        );
+        assert_eq!(
+            usage_warning_for_provider(Some(ProviderId::Openrouter), &weekly, None, true, false,),
+            None
         );
     }
 

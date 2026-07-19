@@ -1,13 +1,12 @@
 # Exaforge (`grok`)
 
-Exaforge is Dev Paragiri's personal extension of SpaceXAI's open-source
-[Grok Build](https://github.com/xai-org/grok-build) terminal coding agent. It
-preserves the upstream Rust CLI, TUI, and ACP runtime while adding
-multi-provider models, provider-safe session switching, and a Claude-inspired
+Exaforge extends the open-source
+[Grok Build](https://github.com/xai-org/grok-build) terminal coding agent with
+multi-provider models, provider-safe session switching, and a streamlined
 interface.
 
-This is an independent fork, not an official SpaceXAI distribution. The
-`dev` branch carries the Exaforge extension layer and tracks upstream `main`.
+This is an independent fork, not an official SpaceXAI distribution. Its `dev`
+branch tracks upstream `main`.
 
 ## Features
 
@@ -25,21 +24,34 @@ Fork-specific behavior is isolated in per-crate `exaforge/` modules, with
 small integration hooks in upstream code. See
 [`FORK-MAINTENANCE.md`](FORK-MAINTENANCE.md) for implementation and rebase notes.
 
-## Install or update
+## Install
 
-Requires Rust (`cargo`) and either `dotslash` or `protoc` on `PATH`.
+Requires [Rust](https://rustup.rs/) (`cargo`) and either `dotslash` or `protoc`
+on `PATH`.
 
 ```sh
-git clone --branch dev https://github.com/DeveshParagiri/grok-build.git ~/.local/share/grok/source
-mkdir -p ~/bin
-install -m 755 ~/.local/share/grok/source/scripts/grok-update-from-source ~/bin/grok-update-from-source
-~/bin/grok-update-from-source
+curl -fsSL https://raw.githubusercontent.com/DeveshParagiri/grok-build/dev/scripts/install | sh
+```
+
+The installer clones the `dev` branch, builds the release binary, and installs
+`grok` at `~/.grok/bin/grok`. It does not replace configuration, authentication,
+or sessions under `~/.grok/`.
+
+Verify the installation:
+
+```sh
 grok --version
 ```
 
-Run `~/bin/grok-update-from-source` again for future updates. It rebases `dev`
-onto `upstream/main`, builds the release binary, installs it at
-`~/.grok/bin/grok`, and preserves data under `~/.grok/`.
+## Update
+
+```sh
+~/bin/grok-update-from-source
+```
+
+The updater fetches the fork and upstream, fast-forwards local `dev`, rebases it
+onto `upstream/main`, rebuilds, and installs the new binary. It stops without
+changing local work when the checkout is dirty or branches have diverged.
 
 ## Build manually
 

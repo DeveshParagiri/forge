@@ -497,6 +497,28 @@ fn show_usage_returns_fetch_billing_effect() {
     );
 }
 
+#[test]
+fn show_usage_routes_codex_by_active_model_provider() {
+    let mut app = test_app_with_agent();
+    let models = &mut app.agents.get_mut(&AgentId(0)).unwrap().session.models;
+    let current = models.current.clone().unwrap();
+    models.available.get_mut(&current).unwrap().meta = Some(
+        serde_json::json!({ "providerId": "openai-codex" })
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+
+    let effects = dispatch(Action::ShowUsage, &mut app);
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::FetchProviderUsage {
+            agent_id: AgentId(0),
+            provider: xai_grok_shell::agent::provider_auth::ProviderId::OpenaiCodex,
+        }]
+    ));
+}
+
 // ── BillingFetched dispatch tests ───────────────────────────────────
 
 #[test]

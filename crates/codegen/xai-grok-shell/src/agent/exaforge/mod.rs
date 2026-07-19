@@ -11,6 +11,7 @@ pub mod identity;
 pub mod profile;
 pub mod provider_config;
 pub mod status;
+pub mod usage;
 
 pub use catalog::{ProviderCatalogConfig, ProviderCatalogRule};
 pub use credentials::{
@@ -27,3 +28,4 @@ pub use status::{
     ProviderAuthStatus, codex_status, login_picker_providers, openrouter_status,
     picker_auth_status, spacexai_status, status_for,
 };
+pub use usage::{ProviderUsageSnapshot, UsageCredits, UsageWindow, fetch_provider_usage};

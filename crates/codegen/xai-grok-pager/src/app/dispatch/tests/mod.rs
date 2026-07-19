@@ -309,7 +309,18 @@ fn make_test_agent_session(app: &AppView, id: AgentId, sid: &str) -> AgentSessio
 pub(super) fn test_app_with_agent() -> AppView {
     let mut app = test_app();
     let id = AgentId(0);
-    let session = make_test_agent_session(&app, id, "test-session");
+    let mut session = make_test_agent_session(&app, id, "test-session");
+    let model_id = acp::ModelId::new("grok-test");
+    session.models.current = Some(model_id.clone());
+    session.models.available.insert(
+        model_id.clone(),
+        acp::ModelInfo::new(model_id, "SpaceX · Grok Test").meta(
+            serde_json::json!({ "providerId": "spacexai" })
+                .as_object()
+                .unwrap()
+                .clone(),
+        ),
+    );
     let mut agent = AgentView::new(session, ScrollbackState::new());
     agent.active_pane = ActivePane::Scrollback;
     app.agents.insert(id, agent);

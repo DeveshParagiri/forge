@@ -260,25 +260,56 @@ pub(super) fn dispatch_show_context_info(app: &mut AppView) -> Vec<Effect> {
 /// just point the user at that URL instead. This is a kill switch for the
 /// personal-team billing path while it is unreliable.
 pub(super) fn dispatch_show_usage(app: &mut AppView) -> Vec<Effect> {
+    use xai_grok_shell::agent::provider_auth::ProviderId;
+
     let ActiveView::Agent(id) = app.active_view else {
         return vec![];
     };
-    if let Some(url) = app.usage_billing_redirect_url.clone() {
+    let Some(provider) = app
+        .agents
+        .get(&id)
+        .and_then(|agent| agent.session.models.current_provider_id())
+    else {
         if let Some(agent) = app.agents.get_mut(&id) {
-            agent.scrollback.push_block(RenderBlock::System(
-                crate::scrollback::blocks::SystemMessageBlock::new(format!(
-                    "Please check your usage on {url}"
-                )),
+            agent.scrollback.push_block(RenderBlock::system(
+                "Usage is unavailable because the active model's provider is unknown.",
             ));
         }
         return vec![];
+    };
+
+    match provider {
+        ProviderId::Spacexai => {
+            if let Some(url) = app.usage_billing_redirect_url.clone() {
+                if let Some(agent) = app.agents.get_mut(&id) {
+                    agent.scrollback.push_block(RenderBlock::System(
+                        crate::scrollback::blocks::SystemMessageBlock::new(format!(
+                            "Please check your usage on {url}"
+                        )),
+                    ));
+                }
+                return vec![];
+            }
+            // Non-silent fetch: the effect also pulls the auto top-up rule so
+            // the summary can include credits and auto top-up.
+            vec![Effect::FetchBilling {
+                agent_id: id,
+                silent: false,
+            }]
+        }
+        ProviderId::OpenaiCodex => vec![Effect::FetchProviderUsage {
+            agent_id: id,
+            provider,
+        }],
+        ProviderId::Openrouter => {
+            if let Some(agent) = app.agents.get_mut(&id) {
+                agent.scrollback.push_block(RenderBlock::system(
+                    "OpenRouter account usage is not available in Exaforge yet.",
+                ));
+            }
+            vec![]
+        }
     }
-    // Non-silent fetch: the effect also pulls the auto top-up rule so the
-    // summary can render usage, prepaid credits, and auto top-up together.
-    vec![Effect::FetchBilling {
-        agent_id: id,
-        silent: false,
-    }]
 }
 
 /// Commit a one-line "update available" notice into the active agent's

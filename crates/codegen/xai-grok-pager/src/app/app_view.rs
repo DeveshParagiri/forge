@@ -3936,7 +3936,12 @@ impl AppView {
                         } else {
                             self.tip.as_deref()
                         };
-                        let model_name_base = self.models.current_model_name().unwrap_or_default();
+                        // Exaforge: same compact footer label as in-session prompt
+                        // (model only; provider stays in /model pickers).
+                        let model_name_base =
+                            crate::exaforge::model_label::prompt_footer_model_name(
+                                self.models.current_model_name().unwrap_or_default(),
+                            );
                         let model_name = match self.models.reasoning_effort {
                             Some(eff) => format!("{model_name_base} ({eff})"),
                             None => model_name_base,
@@ -4000,6 +4005,7 @@ impl AppView {
                             session_picker_grouped: self.session_picker_grouped,
                             session_picker_source_filter: self.session_picker_source_filter,
                             chat_mode: self.chat_mode,
+                            active_provider: self.models.current_provider_id(),
                             credit_balance: self.credit_balance.as_ref(),
                             auto_topup: self.auto_topup.as_ref(),
                             usage_visible: self.usage_visible,

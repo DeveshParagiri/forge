@@ -3967,6 +3967,18 @@ pub(crate) fn execute(
                     }
                 });
         }
+        Effect::FetchProviderUsage { agent_id, provider } => {
+            tasks.spawn(async move {
+                match xai_grok_shell::agent::provider_auth::fetch_provider_usage(provider).await {
+                    Ok(snapshot) => TaskResult::ProviderUsageFetched { agent_id, snapshot },
+                    Err(error) => TaskResult::ProviderUsageError {
+                        agent_id,
+                        provider,
+                        error: sanitize_user_error(&error.to_string()),
+                    },
+                }
+            });
+        }
         Effect::RefreshGate => {
             tasks
                 .spawn(async move {

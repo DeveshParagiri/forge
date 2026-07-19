@@ -5,6 +5,7 @@
 
 pub(crate) mod effort;
 pub(crate) mod layout;
+pub(crate) mod model_label;
 pub(crate) mod provider_login;
 pub(crate) mod welcome;
 
