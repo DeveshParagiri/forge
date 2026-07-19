@@ -138,47 +138,9 @@ pub fn set_show_timeline(enabled: bool) {
 
 // -- Shortcuts bar -------------------------------------------------------------
 
-/// Bottom contextual shortcuts bar default — single-sourced from UiConfig.
-const SHORTCUTS_BAR_DEFAULT: bool = UiConfig::SHOW_SHORTCUTS_BAR_DEFAULT;
-
-thread_local! {
-    /// Explicit override from config.toml or settings (`Some`); when `None`,
-    /// the active theme package may supply a default (Claude → hide footer).
-    static SHORTCUTS_BAR_EXPLICIT: Cell<Option<bool>> = const { Cell::new(None) };
-    static SHORTCUTS_BAR_LOADED: Cell<bool> = const { Cell::new(false) };
-}
-
-/// Resolve `[ui].show_shortcuts_bar`.
-///
-/// Precedence: explicit config / settings → active theme package default
-/// (e.g. Claude hides the bar) → global default (show).
-pub fn load_show_shortcuts_bar() -> bool {
-    SHORTCUTS_BAR_LOADED.with(|loaded| {
-        if !loaded.get() {
-            let explicit = load_optional_bool_from_effective_config("show_shortcuts_bar");
-            SHORTCUTS_BAR_EXPLICIT.with(|c| c.set(explicit));
-            loaded.set(true);
-        }
-    });
-    if let Some(v) = SHORTCUTS_BAR_EXPLICIT.with(|c| c.get()) {
-        return v;
-    }
-    crate::theme::cache::current_kind()
-        .package_show_shortcuts_bar_default()
-        .unwrap_or(SHORTCUTS_BAR_DEFAULT)
-}
-
-fn load_optional_bool_from_effective_config(key: &str) -> Option<bool> {
-    let root = xai_grok_config::load_effective_config_disk_only().ok()?;
-    root.get("ui")
-        .and_then(|ui| ui.get(key))
-        .and_then(|v| v.as_bool())
-}
-
-pub fn set_show_shortcuts_bar(enabled: bool) {
-    SHORTCUTS_BAR_EXPLICIT.with(|c| c.set(Some(enabled)));
-    SHORTCUTS_BAR_LOADED.with(|l| l.set(true));
-}
+// Exaforge: preserve the appearance-cache API while shortcut state and package
+// default resolution live in the dedicated extension module.
+pub use crate::exaforge::shortcuts::{load_show_shortcuts_bar, set_show_shortcuts_bar};
 
 // -- Page-flip on send ---------------------------------------------------------
 
@@ -618,14 +580,8 @@ pub fn prime(ui: &UiConfig) {
     set(ui.compact_mode);
     set_timestamps(ui.show_timestamps.unwrap_or(TIMESTAMPS_DEFAULT));
     set_show_timeline(ui.show_timeline_enabled());
-    // Only pin an explicit value when the user set the key; otherwise leave
-    // package defaults (Claude → hide bar) free to apply.
-    if let Some(v) = ui.show_shortcuts_bar {
-        set_show_shortcuts_bar(v);
-    } else {
-        SHORTCUTS_BAR_EXPLICIT.with(|c| c.set(None));
-        SHORTCUTS_BAR_LOADED.with(|l| l.set(true));
-    }
+    // Exaforge: keep package-aware shortcut priming behind its policy module.
+    crate::exaforge::shortcuts::prime(ui);
     set_page_flip_on_send(ui.page_flip_on_send_enabled());
     set_simple_mode(ui.simple_mode.unwrap_or(SIMPLE_MODE_DEFAULT));
     set_keep_text_selection(text_selection_from_ui(ui));
@@ -738,7 +694,11 @@ mod tests {
         assert_eq!(COMPACT_DEFAULT, ui.compact_mode);
         assert_eq!(TIMESTAMPS_DEFAULT, ui.show_timestamps.unwrap_or(true));
         assert_eq!(TIMELINE_DEFAULT, ui.show_timeline_enabled());
-        assert_eq!(SHORTCUTS_BAR_DEFAULT, ui.show_shortcuts_bar_enabled());
+        // Exaforge: shortcut cache default is owned beside its package policy.
+        assert_eq!(
+            crate::exaforge::shortcuts::shortcuts_bar_default(),
+            ui.show_shortcuts_bar_enabled()
+        );
         assert_eq!(PAGE_FLIP_ON_SEND_DEFAULT, ui.page_flip_on_send_enabled());
         assert_eq!(SIMPLE_MODE_DEFAULT, ui.simple_mode.unwrap_or(true));
         assert_eq!(VIM_MODE_DEFAULT, ui.vim_mode.unwrap_or(false));

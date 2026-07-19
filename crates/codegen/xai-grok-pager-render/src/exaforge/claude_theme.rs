@@ -4,12 +4,12 @@
 //! - `promptBorder` / `promptBorderShimmer` for input frame
 //! - `userMessageBackground` for user-message / elevated fills
 //!
-//! Package behaviors (no shortcuts footer, Shift+Tab → effort) live on
-//! [`super::ThemeKind::Claude`] — not in this palette alone.
+//! Package behaviors (no shortcuts footer, Shift+Tab → effort) live in the
+//! sibling Exaforge policy modules, not in this palette alone.
 
 use ratatui::style::{Color, Modifier};
 
-use super::tokyonight::Theme;
+use crate::theme::Theme;
 
 const fn rgb(r: u8, g: u8, b: u8) -> Color {
     Color::Rgb(r, g, b)

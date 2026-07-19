@@ -11,7 +11,6 @@
 //! highlighting, blending) are also quantized via [`color_support::quantize`].
 
 pub mod cache;
-mod claude;
 pub mod color_support;
 mod grokday;
 mod groknight;
@@ -42,6 +41,7 @@ pub enum ThemeKind {
     /// only the resolved concrete kind lives in the cache.
     /// Excluded from [`ALL`] and [`available()`].
     Auto = 4,
+    // Exaforge: stable theme registration; keep discriminant 6 for cache compatibility.
     /// Claude Code–inspired UI package (personal harness extension):
     /// Claude dark chatbox chrome + package behaviors
     /// ([`Self::package_show_shortcuts_bar_default`],
@@ -137,16 +137,15 @@ impl ThemeKind {
     /// `None` → global client default (show bar).
     #[must_use]
     pub fn package_show_shortcuts_bar_default(self) -> Option<bool> {
-        match self {
-            Self::Claude => Some(false),
-            _ => None,
-        }
+        // Exaforge: keep the stable theme API while package policy lives apart.
+        crate::exaforge::theme_policy::package_show_shortcuts_bar_default(self)
     }
 
     /// When true, Shift+Tab cycles reasoning effort instead of permission mode.
     #[must_use]
     pub fn package_shift_tab_cycles_effort(self) -> bool {
-        matches!(self, Self::Claude)
+        // Exaforge: keep the stable theme API while package policy lives apart.
+        crate::exaforge::theme_policy::package_shift_tab_cycles_effort(self)
     }
 }
 
@@ -303,6 +302,8 @@ impl Theme {
             ThemeKind::GrokDay => Self::grokday(),
             ThemeKind::RosePineMoon => Self::rosepine_moon(),
             ThemeKind::OscuraMidnight => Self::oscura_midnight(),
+            // Exaforge: Claude registration remains coupled to the exhaustive
+            // theme switch while its palette implementation lives separately.
             ThemeKind::Claude => Self::claude(),
             // Auto is resolved to a concrete theme before being stored;
             // if reached, fall back to GrokNight.
@@ -726,6 +727,11 @@ mod tests {
             ThemeKind::GrokNight.package_show_shortcuts_bar_default(),
             None,
         );
+    }
+
+    #[test]
+    fn claude_discriminant_stays_stable() {
+        assert_eq!(ThemeKind::Claude as u8, 6);
     }
 
     #[test]
