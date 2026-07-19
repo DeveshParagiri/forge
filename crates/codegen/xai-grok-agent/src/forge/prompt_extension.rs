@@ -5,16 +5,11 @@ use xai_grok_tools::bridge::ToolBridge;
 use xai_grok_tools::types::tool::ToolKind;
 
 const PRIMARY_EXTENSION: &str = r#"<forge_orchestration>
-Use subagents when independent work benefits from parallelism, specialization, or an isolated context; do not delegate trivial work or duplicate the same investigation.
+Delegate only when parallelism, specialization, isolation, or independent verification outweighs coordination cost. Choose among the targets and model slugs advertised by the task tool based on task fit and required capabilities.
 
-Choose deliberately:
-- Prefer native `general-purpose`, `explore`, and `plan` agents using their inherited/default model, or the subscription-backed `claude-code` and `codex-cli` external harnesses. Pick the role and harness that best fit the work.
-- This is an access and billing preference, not a ranking of subagent roles: `general-purpose`, `explore`, and `plan` remain first-class choices.
-- Treat an explicit `model` override on a native agent as last priority when it selects a separately billed, pay-as-you-go API model. Use one when the user requests it or the task clearly requires it; cost preference must not override an explicit user choice.
-- External harnesses require their CLIs to be installed and authenticated and do not inherit Forge-only hosted tools. Use them for implementation, review, or an independent provider perspective when useful.
-- Mixed-model teams are useful when perspectives differ: parallelize independent tasks or assign implementation and verification to different models/harnesses. Keep one clear owner for synthesis and avoid redundant fan-out.
+Unless the user specifies otherwise, prefer a suitable subscription-backed or included harness over a separately metered API model. This is a cost preference, not a quality ranking: explicit user choices and required capabilities win.
 
-Set `reasoning_effort` proportionally when delegating: `low` for lookup or mechanical checks, `medium` for routine implementation, `high` for difficult debugging/design/review, and `xhigh` only for the hardest ambiguous work. Omit it to use the selected model or harness default. Explicit model choices must use the advertised model slugs; otherwise omit `model`. For external harnesses, omission uses the adapter's provider-native default.
+For complex or high-risk work, use a strong reasoning or implementation model; use faster options for bounded lookup or mechanical work. Mix roles, model families, or harnesses when complementary perspectives help, especially for independent review. Give workers non-overlapping scopes, avoid redundant fan-out, and keep one synthesis owner. Omit `model` to inherit or use the harness default; set `reasoning_effort` only when a deliberate per-task budget helps.
 </forge_orchestration>"#;
 
 const SUBAGENT_EXTENSION: &str = r#"<forge_subagent>
@@ -65,16 +60,17 @@ mod tests {
         append_for_available_tools(&mut prompt, PromptAudience::Primary, true);
 
         assert_eq!(prompt, once);
-        assert!(prompt.contains("`claude-code`"));
-        assert!(prompt.contains("`codex-cli`"));
-        assert!(prompt.contains("Mixed-model teams"));
-        assert!(prompt.contains("subscription-backed"));
-        assert!(prompt.contains("not a ranking of subagent roles"));
-        assert!(prompt.contains("remain first-class choices"));
-        assert!(prompt.contains("pay-as-you-go API model"));
-        assert!(prompt.contains("explicit user choice"));
+        assert!(prompt.contains("targets and model slugs advertised by the task tool"));
+        assert!(prompt.contains("subscription-backed or included harness"));
+        assert!(prompt.contains("separately metered API model"));
+        assert!(prompt.contains("explicit user choices and required capabilities win"));
+        assert!(prompt.contains("model families, or harnesses"));
+        assert!(prompt.contains("independent review"));
+        assert!(prompt.contains("one synthesis owner"));
         assert!(prompt.contains("`reasoning_effort`"));
-        assert!(prompt.contains("`xhigh`"));
+        assert!(PRIMARY_EXTENSION.len() < 1_500);
+        assert!(!prompt.contains("claude-code"));
+        assert!(!prompt.contains("codex-cli"));
         assert!(!prompt.contains("dangerously-skip-permissions"));
     }
 

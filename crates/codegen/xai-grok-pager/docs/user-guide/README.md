@@ -52,3 +52,4 @@ Automate, script, and integrate Grok Build with other systems.
 | 22 | [Permissions and Safety Controls](22-permissions-and-safety.md) | `dontAsk` mode, auto-approved tools, the safe-bash list, and restrictive PreToolUse hooks (such as git/gh-only) |
 | 23 | [Agent Dashboard](23-dashboard.md) | Central overview of local sessions and forks |
 | 24 | [Monitoring Usage (External OpenTelemetry)](24-monitoring-usage.md) | Customer OTEL export |
+| 25 | [Forge-Specific Additions](25-forge-additions.md) | Models, external harnesses, capability-aware orchestration, sessions, updates, and extension architecture |

@@ -156,6 +156,22 @@ pub static USER_GUIDE: &[Doc] = &[
         "Permissions and Safety",
         "Tool approval, sandbox, security"
     ),
+    guide!(
+        "23-dashboard.md",
+        "Agent Dashboard",
+        "Central overview of local sessions and forks"
+    ),
+    guide!(
+        "24-monitoring-usage.md",
+        "Monitoring Usage",
+        "External OpenTelemetry export and privacy controls"
+    ),
+    // Forge: keep fork-specific behavior in the final additive guide.
+    guide!(
+        "25-forge-additions.md",
+        "Forge-Specific Additions",
+        "Models, external harnesses, orchestration, sessions, and updates"
+    ),
 ];
 
 /// Non-user-guide reference docs. Separate from USER_GUIDE because they
