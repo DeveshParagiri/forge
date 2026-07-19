@@ -71,9 +71,9 @@ const THEME_CHOICES: &[EnumChoice] = &[
         description: "Deep dark with warm accents; needs truecolor.",
     },
     EnumChoice {
-        canonical: "claude",
-        display: "Claude",
-        description: "Claude Code–like chatbox; hides shortcuts footer; Shift+Tab cycles effort.",
+        canonical: "exaforge",
+        display: "Exaforge",
+        description: "Exaforge chatbox; hides shortcuts footer; Shift+Tab cycles effort.",
     },
 ];
 
@@ -505,9 +505,9 @@ const CONCRETE_THEME_CHOICES: &[EnumChoice] = &[
         description: "Deep dark with warm accents; needs truecolor.",
     },
     EnumChoice {
-        canonical: "claude",
-        display: "Claude",
-        description: "Claude Code–like chatbox package.",
+        canonical: "exaforge",
+        display: "Exaforge",
+        description: "Exaforge chatbox package.",
     },
 ];
 

@@ -81,10 +81,10 @@ Provider login implementation: `src/exaforge/provider_login/`.
 ### Pager render
 
 - `appearance/cache.rs`: public shortcut-state facade and priming hook.
-- `theme/mod.rs`: stable Claude registration and policy delegation.
+- `theme/mod.rs`: stable Exaforge registration and policy delegation.
 - `theme/cache.rs` and `syntax.rs`: cache/syntax exhaustive-match hooks.
 
-Claude palette implementation: `src/exaforge/claude_theme.rs`.
+Exaforge palette implementation: `src/exaforge/exaforge_theme.rs`.
 
 ## Preserved behavior
 
@@ -99,7 +99,7 @@ Claude palette implementation: `src/exaforge/claude_theme.rs`.
 - Unknown additive Responses events and liveness events are tolerated.
 - Streamed text/function calls are recovered when terminal Responses output is
   incomplete.
-- Claude theme Shift+Tab cycles reasoning effort; other themes retain stock
+- Exaforge theme Shift+Tab cycles reasoning effort; other themes retain stock
   permission-mode cycling.
 - Running-turn `Esc` cancels generation like `Ctrl+C` after overlays and
   selections receive their normal priority.

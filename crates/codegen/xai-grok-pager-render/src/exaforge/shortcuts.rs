@@ -9,7 +9,7 @@ const SHORTCUTS_BAR_DEFAULT: bool = UiConfig::SHOW_SHORTCUTS_BAR_DEFAULT;
 
 thread_local! {
     /// Explicit override from config.toml or settings (`Some`); when `None`,
-    /// the active theme package may supply a default (Claude → hide footer).
+    /// the active theme package may supply a default (Exaforge → hide footer).
     static SHORTCUTS_BAR_EXPLICIT: Cell<Option<bool>> = const { Cell::new(None) };
     static SHORTCUTS_BAR_LOADED: Cell<bool> = const { Cell::new(false) };
 }
@@ -17,7 +17,7 @@ thread_local! {
 /// Resolve `[ui].show_shortcuts_bar`.
 ///
 /// Precedence: explicit config / settings → active theme package default
-/// (Claude hides the bar) → global default (show).
+/// (Exaforge hides the bar) → global default (show).
 pub fn load_show_shortcuts_bar() -> bool {
     SHORTCUTS_BAR_LOADED.with(|loaded| {
         if !loaded.get() {
@@ -74,7 +74,7 @@ mod tests {
             .unwrap_or_else(|error| error.into_inner());
         theme::cache::reset_for_test();
 
-        theme::cache::set(ThemeKind::Claude);
+        theme::cache::set(ThemeKind::Exaforge);
         prime(&UiConfig::default());
         assert!(!load_show_shortcuts_bar());
         set_show_shortcuts_bar(true);

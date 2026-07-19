@@ -48,8 +48,8 @@ fn theme_kind_from_u8(byte: u8) -> ThemeKind {
         x if x == ThemeKind::RosePineMoon as u8 => ThemeKind::RosePineMoon,
         x if x == ThemeKind::OscuraMidnight as u8 => ThemeKind::OscuraMidnight,
         x if x == ThemeKind::Auto as u8 => ThemeKind::Auto,
-        // Exaforge: Claude's stable discriminant remains registered in the cache decoder.
-        x if x == ThemeKind::Claude as u8 => ThemeKind::Claude,
+        // Exaforge: keep the stable discriminant registered in the cache decoder.
+        x if x == ThemeKind::Exaforge as u8 => ThemeKind::Exaforge,
         _ => ThemeKind::GrokNight,
     }
 }

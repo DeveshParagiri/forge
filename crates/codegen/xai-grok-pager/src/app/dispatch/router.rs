@@ -908,7 +908,7 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::ViewCatalogEntry { kind, name } => {
             vec![Effect::FetchCatalogEntry { kind, name }]
         }
-        // Exaforge: Claude UI package Shift+Tab cycles effort; other themes keep mode cycle.
+        // Exaforge theme package: Shift+Tab cycles effort; other themes keep mode cycle.
         Action::CycleMode => {
             if crate::theme::Theme::current_kind().package_shift_tab_cycles_effort() {
                 crate::exaforge::effort::dispatch_cycle_effort(app)

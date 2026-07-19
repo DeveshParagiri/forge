@@ -69,8 +69,8 @@ pub fn get_syntect() -> &'static Syntect {
         ThemeKind::GrokNight
         | ThemeKind::RosePineMoon
         | ThemeKind::OscuraMidnight
-        // Exaforge: Claude intentionally shares GrokNight syntax highlighting.
-        | ThemeKind::Claude
+        // Exaforge intentionally shares GrokNight syntax highlighting.
+        | ThemeKind::Exaforge
         | ThemeKind::Auto => SYNTECT_GROKNIGHT
             .get_or_init(|| Syntect::new(include_bytes!("../assets/grok-night.tmTheme"))),
         ThemeKind::TokyoNight => SYNTECT_TOKYONIGHT

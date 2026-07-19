@@ -7,7 +7,7 @@ use crate::theme::ThemeKind;
 #[must_use]
 pub(crate) const fn package_show_shortcuts_bar_default(kind: ThemeKind) -> Option<bool> {
     match kind {
-        ThemeKind::Claude => Some(false),
+        ThemeKind::Exaforge => Some(false),
         _ => None,
     }
 }
@@ -15,7 +15,7 @@ pub(crate) const fn package_show_shortcuts_bar_default(kind: ThemeKind) -> Optio
 /// Whether Shift+Tab cycles reasoning effort instead of permission mode.
 #[must_use]
 pub(crate) const fn package_shift_tab_cycles_effort(kind: ThemeKind) -> bool {
-    matches!(kind, ThemeKind::Claude)
+    matches!(kind, ThemeKind::Exaforge)
 }
 
 #[cfg(test)]
@@ -23,12 +23,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn claude_package_policy_is_opted_in_only_for_claude() {
+    fn exaforge_package_policy_is_opted_in_only_for_exaforge() {
         assert_eq!(
-            package_show_shortcuts_bar_default(ThemeKind::Claude),
+            package_show_shortcuts_bar_default(ThemeKind::Exaforge),
             Some(false)
         );
-        assert!(package_shift_tab_cycles_effort(ThemeKind::Claude));
+        assert!(package_shift_tab_cycles_effort(ThemeKind::Exaforge));
 
         for kind in [
             ThemeKind::GrokNight,

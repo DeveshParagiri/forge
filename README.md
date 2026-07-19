@@ -16,7 +16,7 @@ This is an independent fork, not an official SpaceXAI distribution. The
 | Authentication | Interactive `/login` setup for SpaceXAI, ChatGPT Codex, and OpenRouter |
 | Models | Provider-aware catalog with configurable include/exclude patterns |
 | Sessions | Safe model switching across provider families |
-| Interface | Claude-inspired theme, reasoning-effort controls, optional shortcut footer, and `Esc` cancellation |
+| Interface | Exaforge theme, reasoning-effort controls, optional shortcut footer, and `Esc` cancellation |
 | Branding | Exaforge welcome screen and build version |
 
 ## Architecture
