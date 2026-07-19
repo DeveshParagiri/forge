@@ -5,8 +5,9 @@ Exaforge extends the open-source
 multi-provider models, provider-safe session switching, and a streamlined
 interface.
 
-This is an independent fork, not an official SpaceXAI distribution. Its `dev`
-branch tracks upstream `main`.
+This is an independent fork, not an official SpaceXAI distribution. Its
+`main` branch contains the installable Exaforge source and tracks upstream
+`main`.
 
 ## Features
 
@@ -29,13 +30,24 @@ small integration hooks in upstream code. See
 Requires [Rust](https://rustup.rs/) (`cargo`) and either `dotslash` or `protoc`
 on `PATH`.
 
+Install directly from GitHub:
+
 ```sh
-curl -fsSL https://raw.githubusercontent.com/DeveshParagiri/grok-build/dev/scripts/install | sh
+curl -fsSL https://raw.githubusercontent.com/DeveshParagiri/grok-build/main/scripts/install | sh
 ```
 
-The installer clones the `dev` branch, builds the release binary, and installs
-`grok` at `~/.grok/bin/grok`. It does not replace configuration, authentication,
-or sessions under `~/.grok/`.
+Or clone first and run the same installer from the checkout:
+
+```sh
+git clone https://github.com/DeveshParagiri/grok-build.git
+cd grok-build
+./scripts/install
+```
+
+The curl pathway clones `main` into `~/.local/share/grok/source`; the checkout
+pathway builds the checkout you invoked it from. Both install `grok` at
+`~/.grok/bin/grok`. They do not replace configuration, authentication, or
+sessions under `~/.grok/`.
 
 Verify the installation:
 
@@ -49,14 +61,18 @@ grok --version
 ~/bin/grok-update-from-source
 ```
 
-The updater fetches the fork and upstream, fast-forwards local `dev`, rebases it
-onto `upstream/main`, rebuilds, and installs the new binary. It stops without
-changing local work when the checkout is dirty or branches have diverged.
+The updater fetches the published `main` branch, fast-forwards the local
+checkout, rebuilds, and installs the new binary. It stops without changing
+local work when the checkout is dirty or branches have diverged. Rebasing onto
+upstream remains an explicit maintainer operation.
 
 ## Build manually
 
 ```sh
+git clone https://github.com/DeveshParagiri/grok-build.git
+cd grok-build
 cargo build -p xai-grok-pager-bin --release
+mkdir -p ~/.grok/bin
 install -m 755 target/release/xai-grok-pager ~/.grok/bin/grok
 ```
 

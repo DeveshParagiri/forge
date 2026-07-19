@@ -1,7 +1,8 @@
 # Exaforge fork maintenance notes
 
 This repository tracks [xai-org/grok-build](https://github.com/xai-org/grok-build).
-The upstream-clean mirror is `main`; Exaforge is maintained on `dev`.
+The published, installable Exaforge branch is `main`; upstream is tracked through
+the `upstream/main` remote-tracking branch.
 
 ## Installed layout
 
@@ -20,14 +21,13 @@ canonical executable.
 
 ## Branches and remotes
 
-- `main`: clean upstream mirror; do not add Exaforge commits.
-- `dev`: published Exaforge branch.
+- `main`: published Exaforge source and the repository default branch.
 - `refactor/*`: temporary local worktrees only.
-- `upstream`: `https://github.com/xai-org/grok-build.git`.
+- `upstream/main`: upstream source from `https://github.com/xai-org/grok-build.git`.
 - `origin`: Exaforge fork.
 
-Do not force-push published Exaforge history. Rebase `dev` onto `upstream/main`
-only when intentionally updating the fork.
+Do not force-push published Exaforge history. Rebase `main` onto `upstream/main`
+only when intentionally updating the fork; the end-user updater never rebases.
 
 ## Extension architecture
 
@@ -126,7 +126,7 @@ running the focused tests. Avoid repeatedly restarting it during compilation.
 ```bash
 git status --short             # must be clean
 git fetch upstream --tags
-git checkout dev
+git checkout main
 git rebase upstream/main
 ```
 

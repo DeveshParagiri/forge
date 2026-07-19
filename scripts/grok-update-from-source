@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# Fetch upstream grok-build, rebase the dev extensions, rebuild, and install.
+# Fast-forward Exaforge from its published branch, rebuild, and install.
 set -euo pipefail
 
 REPO="${GROK_SRC:-$HOME/.local/share/grok/source}"
-REMOTE="${GROK_UPSTREAM_REMOTE:-upstream}"
 FORK_REMOTE="${GROK_FORK_REMOTE:-origin}"
-BRANCH="${GROK_DEV_BRANCH:-${GROK_PERSONAL_BRANCH:-dev}}"
+BRANCH="${GROK_BRANCH:-${GROK_DEV_BRANCH:-${GROK_PERSONAL_BRANCH:-main}}}"
 INSTALL_BIN="${GROK_INSTALL_BIN:-$HOME/.grok/bin/grok}"
 BACKUP_DIR="${GROK_STOCK_BACKUP_DIR:-$HOME/.grok/stock-backup}"
 COMPAT_LINKS=(
@@ -22,17 +21,8 @@ fi
 
 cd "$REPO"
 
-if ! git remote get-url "$REMOTE" >/dev/null 2>&1; then
-  if [[ "$REMOTE" == "upstream" ]]; then
-    git remote add upstream https://github.com/xai-org/grok-build.git
-  else
-    echo "BLOCKED: remote '$REMOTE' is not configured in $REPO"
-    exit 1
-  fi
-fi
-
-if ! git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
-  echo "BLOCKED: branch '$BRANCH' missing in $REPO"
+if ! git remote get-url "$FORK_REMOTE" >/dev/null 2>&1; then
+  echo "BLOCKED: remote '$FORK_REMOTE' is not configured in $REPO"
   exit 1
 fi
 
@@ -42,31 +32,20 @@ if [[ -n "$(git status --porcelain)" ]]; then
   exit 1
 fi
 
-echo "==> fetching $REMOTE"
-git fetch "$REMOTE" --tags
+echo "==> fetching $FORK_REMOTE/$BRANCH"
+git fetch "$FORK_REMOTE" "$BRANCH"
 
-if git remote get-url "$FORK_REMOTE" >/dev/null 2>&1; then
-  echo "==> fetching $FORK_REMOTE"
-  git fetch "$FORK_REMOTE" "$BRANCH"
+if git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
+  echo "==> checking out $BRANCH"
+  git checkout "$BRANCH"
+else
+  echo "==> creating local $BRANCH from $FORK_REMOTE/$BRANCH"
+  git checkout --track -b "$BRANCH" "$FORK_REMOTE/$BRANCH"
 fi
 
-echo "==> checking out $BRANCH"
-git checkout "$BRANCH"
-
-if git rev-parse --verify "$FORK_REMOTE/$BRANCH" >/dev/null 2>&1; then
-  echo "==> fast-forwarding from $FORK_REMOTE/$BRANCH"
-  if ! git merge --ff-only "$FORK_REMOTE/$BRANCH"; then
-    echo "BLOCKED: local '$BRANCH' has diverged from $FORK_REMOTE/$BRANCH"
-    exit 1
-  fi
-fi
-
-echo "==> rebasing onto $REMOTE/main"
-if ! git rebase "$REMOTE/main"; then
-  echo ""
-  echo "BLOCKED: rebase conflicts. Fix in $REPO, then:"
-  echo "  git add -A && git rebase --continue"
-  echo "  $0"
+echo "==> fast-forwarding from $FORK_REMOTE/$BRANCH"
+if ! git merge --ff-only "$FORK_REMOTE/$BRANCH"; then
+  echo "BLOCKED: local '$BRANCH' has diverged from $FORK_REMOTE/$BRANCH"
   exit 1
 fi
 
