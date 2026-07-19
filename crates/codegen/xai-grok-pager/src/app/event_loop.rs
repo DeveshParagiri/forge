@@ -1009,12 +1009,15 @@ pub(crate) async fn run(
         effective_config.as_ref().ok_or(()),
         remote_settings.as_ref(),
     );
-    app.foreign_session_compat =
+    // Forge: external harness sessions are opt-in under `[sessions]`.
+    app.foreign_session_compat = crate::forge::sessions::enabled_sources(
+        effective_config.as_ref(),
         xai_grok_workspace::foreign_sessions::EnabledForeignSessionSources {
             claude: compat.claude.sessions,
             codex: compat.codex.sessions,
             cursor: compat.cursor.sessions,
-        };
+        },
+    );
 
     // Load notification config from [ui.notifications] in config.toml.
     if let Some(ref raw) = effective_config {

@@ -83,6 +83,18 @@ the official [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and
 [Codex CLI](https://github.com/openai/codex) instructions for installation and
 subscription authentication.
 
+External harness sessions are hidden from `/sessions` by default. Enable them
+in `~/.grok/config.toml`:
+
+```toml
+[sessions]
+show_external = true
+```
+
+Claude Code and Codex rows are labeled by harness. Selecting one starts a fresh
+Forge session and invokes its existing `/resume-claude` or `/resume-codex`
+context-import flow.
+
 ## Update
 
 For installations created by the GitHub installer, run:

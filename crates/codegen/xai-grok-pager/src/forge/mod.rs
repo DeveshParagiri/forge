@@ -9,6 +9,7 @@ pub(crate) mod layout;
 pub(crate) mod model_label;
 pub(crate) mod provider_login;
 pub(crate) mod provider_usage;
+pub(crate) mod sessions;
 pub(crate) mod welcome;
 
 #[cfg(test)]

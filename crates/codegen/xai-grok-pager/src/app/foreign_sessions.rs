@@ -327,9 +327,8 @@ pub(crate) fn badge_for_picker_source(source: &str) -> &'static str {
     if source == "conversation" {
         "chat"
     } else {
-        ForeignPickerSource::from_picker_source(source)
-            .map(ForeignPickerSource::picker_source)
-            .unwrap_or("")
+        // Forge: show the external harness name, not its internal source key.
+        crate::forge::sessions::harness_badge(source).unwrap_or("")
     }
 }
 

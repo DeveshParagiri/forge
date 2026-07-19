@@ -1382,7 +1382,7 @@ mod tests {
 
         let built = build_session_entry_data(&[entry], &[0], &state, 80);
 
-        assert_eq!(built[0].badge, "codex");
+        assert_eq!(built[0].badge, "Codex");
         assert!(!built[0].collapsible);
         assert!(!built[0].is_expanded);
         assert!(built[0].field_data.is_empty());

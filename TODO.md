@@ -20,7 +20,6 @@ All work below must follow these constraints:
 | ID | Requirement | Priority |
 |---|---|---|
 | FR-2 | Product README and extensibility documentation | P1 |
-| FR-3 | Cross-harness session browsing and resume | P0 |
 | FR-5 | Reliable, extensible external subagent harnesses | P0 |
 | FR-6 | Prompt and navigate subagents | P1 |
 | FR-7 | Complete extension context in harness prompts | P0 |
@@ -52,31 +51,23 @@ The main README must cover:
 - A contributor can identify the intended extension points without reverse-engineering provider-specific branches.
 - Examples and paths match current behavior.
 
-## FR-3: Cross-harness `/sessions` browsing and resume
+## FR-3: Opt-in external sessions in `/sessions` — completed
 
-### Goal
+### Behavior
 
-Make `/sessions` a unified browser for native Forge sessions and supported external coding-agent sessions, including Claude Code and Codex.
-
-### Requirements
-
-- Session discovery uses a `SessionSource` adapter interface so new sources can be added independently.
-- Initial sources include Forge, Claude Code, and Codex where installed and locally accessible.
-- The session list visibly identifies its source with a badge, icon, color, or label.
-- Users can show or hide each source independently; filter preferences persist locally.
-- The list supports source, project/path, recency, and text filtering where metadata permits.
-- Selecting an external session gathers the relevant context and resumes it through the matching harness.
-- Context gathering preserves the useful conversation state, working directory, model/harness identity, and available continuation identifier without blindly copying secrets or irrelevant raw logs.
-- Missing, corrupt, incompatible, or concurrently active sessions fail safely with an actionable message.
-- Imported external sessions remain distinguishable from native sessions after resume.
+- `/sessions` shows native Forge sessions by default.
+- Setting `[sessions].show_external = true` adds locally available Claude Code and Codex sessions.
+- External rows display their harness name (`Claude Code` or `Codex`).
+- Selecting an external row starts a fresh Forge session and invokes the matching `/resume-claude` or `/resume-codex` skill with its native session ID.
+- Forge owns only the opt-in and labeling policy under the pager crate's `forge/` module; existing upstream discovery, normalization, picker, and resume dispatch remain reused through narrow hooks.
+- Missing skills or inaccessible session stores fail soft through the existing foreign-session gates.
 
 ### Acceptance criteria
 
-- `/sessions` lists native, Claude Code, and Codex sessions with unambiguous source highlighting.
-- Users can hide and restore each source.
-- Clicking/selecting a Claude Code or Codex session resumes it with enough context to continue meaningfully.
-- Adding another source requires a new adapter and registration, not edits throughout the session UI.
-- Fixtures test discovery, metadata normalization, filtering, context extraction, resume, and malformed data.
+- External sessions are absent unless the Forge flag is enabled.
+- Enabling the flag preserves the existing per-harness compatibility settings and only scans locally supported sources.
+- Claude Code and Codex entries have unambiguous harness labels.
+- Selecting either source follows the existing `/resume-*` import flow.
 
 ## FR-5: Reliable and extensible external subagent harnesses
 
