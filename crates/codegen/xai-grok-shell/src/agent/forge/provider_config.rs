@@ -59,7 +59,7 @@ impl ProviderConfig {
                 // request capability when constructing catalog metadata. All
                 // downstream eligibility uses that metadata, never this name.
                 entry.info.supports_fast_mode = true;
-                if entry.env_key.is_none() {
+                if !model_set_creds && entry.env_key.is_none() {
                     entry.env_key = Some(EnvKeys::single("CODEX_ACCESS_TOKEN"));
                 }
                 if !model_set_base_url && self.base_url.is_none() {
@@ -69,7 +69,7 @@ impl ProviderConfig {
                     entry.info.api_backend = ApiBackend::Responses;
                 }
             } else if auth.eq_ignore_ascii_case("openrouter") {
-                if entry.env_key.is_none() {
+                if !model_set_creds && entry.env_key.is_none() {
                     entry.env_key = Some(EnvKeys::single("OPENROUTER_API_KEY"));
                 }
                 if !model_set_base_url && self.base_url.is_none() {
