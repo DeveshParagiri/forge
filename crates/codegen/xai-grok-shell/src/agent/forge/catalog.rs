@@ -75,11 +75,17 @@ pub(crate) fn apply_provider_override(
         return;
     };
     if let Some(provider) = providers.get(provider_name) {
+        // An explicit `auth_provider` owns this model's credential: the pack must
+        // not inject static/inferred keys over it, or `own_credential()` would
+        // shadow the helper (see `ModelEntry::effective_auth_provider`).
+        let creds_governed = model_override.api_key.is_some()
+            || model_override.env_key.is_some()
+            || model_override.auth_provider.is_some();
         provider.apply_to_entry(
             entry,
             model_override.base_url.is_some(),
             model_override.api_backend.is_some(),
-            model_override.api_key.is_some() || model_override.env_key.is_some(),
+            creds_governed,
         );
     } else {
         tracing::warn!(
@@ -135,5 +141,66 @@ pub(crate) fn apply_policy(
                 .is_some_and(|set| set.matches(key, &entry.model));
             entry.info.user_selectable &= included && !excluded && auth_ready;
         }
+    }
+}
+
+#[cfg(test)]
+mod provider_override_tests {
+    use super::*;
+    use crate::agent::config::{EndpointsConfig, EnvKeys};
+    use crate::agent::forge::provider_config::ProviderConfig;
+
+    fn pack() -> IndexMap<String, ProviderConfig> {
+        let mut providers = IndexMap::new();
+        providers.insert(
+            "custom".to_string(),
+            ProviderConfig {
+                base_url: Some("https://vendor.example/v1".to_string()),
+                api_key: Some("pack-static-key".to_string()),
+                env_key: Some(EnvKeys::single("PACK_ENV_KEY")),
+                supports_fast_mode: true,
+                ..ProviderConfig::default()
+            },
+        );
+        providers
+    }
+
+    /// A model that declares an explicit `auth_provider` must keep the helper
+    /// in charge of credentials: the pack contributes endpoint/backend/Fast
+    /// capability but never injects static/inferred keys that would let
+    /// `own_credential()` shadow the provider.
+    #[test]
+    fn explicit_auth_provider_blocks_pack_credential_injection() {
+        let providers = pack();
+        let model_override = ConfigModelOverride {
+            provider: Some("custom".to_string()),
+            auth_provider: Some("mint-helper".to_string()),
+            ..ConfigModelOverride::default()
+        };
+        let mut entry = ModelEntry::fallback("m", &EndpointsConfig::default());
+        apply_provider_override(&providers, &model_override, "m", &mut entry);
+
+        // Credentials stay ungoverned by the pack.
+        assert_eq!(entry.api_key, None, "pack must not inject a static key");
+        assert_eq!(entry.env_key, None, "pack must not inject an env key");
+        // Non-credential capability still flows through.
+        assert_eq!(entry.info.base_url, "https://vendor.example/v1");
+        assert!(entry.info.supports_fast_mode, "Fast capability preserved");
+    }
+
+    /// Without an `auth_provider` (and no model-local key), the pack still
+    /// supplies its own static/inferred credentials as before.
+    #[test]
+    fn pack_injects_credentials_without_auth_provider() {
+        let providers = pack();
+        let model_override = ConfigModelOverride {
+            provider: Some("custom".to_string()),
+            ..ConfigModelOverride::default()
+        };
+        let mut entry = ModelEntry::fallback("m", &EndpointsConfig::default());
+        apply_provider_override(&providers, &model_override, "m", &mut entry);
+
+        assert_eq!(entry.api_key.as_deref(), Some("pack-static-key"));
+        assert!(entry.info.supports_fast_mode);
     }
 }
