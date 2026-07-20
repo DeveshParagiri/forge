@@ -1662,31 +1662,22 @@ pub(crate) fn execute(
             session_id,
             model_id,
             effort,
-            fast_mode,
             prev_model_id,
         } => {
             let tx = acp_tx.clone();
             tasks
                 .spawn(async move {
-                    let meta = if effort.is_some() || fast_mode.is_some() {
+                    let meta = effort.map(|effort| {
                         use xai_grok_shell::sampling::types::{
-                            FAST_MODE_META_KEY, REASONING_EFFORT_META_KEY, fast_mode_meta_value,
-                            reasoning_effort_meta_value,
+                            REASONING_EFFORT_META_KEY, reasoning_effort_meta_value,
                         };
                         let mut meta = acp::Meta::new();
-                        if let Some(effort) = effort {
-                            meta.insert(
-                                REASONING_EFFORT_META_KEY.to_string(),
-                                reasoning_effort_meta_value(effort),
-                            );
-                        }
-                        if let Some(enabled) = fast_mode {
-                            meta.insert(FAST_MODE_META_KEY.to_string(), fast_mode_meta_value(enabled));
-                        }
-                        Some(meta)
-                    } else {
-                        None
-                    };
+                        meta.insert(
+                            REASONING_EFFORT_META_KEY.to_string(),
+                            reasoning_effort_meta_value(effort),
+                        );
+                        meta
+                    });
                     let req = acp::SetSessionModelRequest::new(
                             session_id,
                             model_id.clone(),
@@ -1712,11 +1703,39 @@ pub(crate) fn execute(
                         agent_id,
                         model_id,
                         effort,
-                        fast_mode,
                         result,
                         prev_model_id,
                     }
                 });
+        }
+        Effect::SetFastMode {
+            agent_id,
+            session_id,
+            enabled,
+        } => {
+            let tx = acp_tx.clone();
+            tasks.spawn(async move {
+                let params = serde_json::json!({
+                    "sessionId": session_id.0.as_ref(),
+                    "enabled": enabled,
+                });
+                let req = acp::ExtRequest::new(
+                    "x.ai/session/fast_mode",
+                    serde_json::value::to_raw_value(&params)
+                        .expect("serialize fast mode params")
+                        .into(),
+                );
+                let result = acp_send(req, &tx)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| sanitize_user_error(&e.to_string()));
+                TaskResult::SetFastModeComplete {
+                    agent_id,
+                    session_id,
+                    enabled,
+                    result,
+                }
+            });
         }
         Effect::ProbeClipboardAttachment { ctx, change_count } => {
             tasks

@@ -642,7 +642,6 @@ fn switch_model_complete_success_updates_model_and_pushes_message() {
             agent_id: id,
             model_id: model_id.clone(),
             effort: None,
-            fast_mode: None,
             result: Ok(()),
             prev_model_id: None,
         }),
@@ -667,6 +666,26 @@ fn switch_model_complete_success_updates_model_and_pushes_message() {
 }
 
 #[test]
+fn fast_mode_complete_updates_only_fast_state() {
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    let model_before = app.agents[&id].session.models.current.clone();
+    let effects = dispatch(
+        Action::TaskComplete(TaskResult::SetFastModeComplete {
+            agent_id: id,
+            session_id: app.agents[&id].session.session_id.clone().unwrap(),
+            enabled: true,
+            result: Ok(()),
+        }),
+        &mut app,
+    );
+
+    assert!(effects.is_empty());
+    assert!(app.agents[&id].session.models.fast_mode);
+    assert_eq!(app.agents[&id].session.models.current, model_before);
+}
+
+#[test]
 fn switch_model_complete_skips_message_and_persist_when_unchanged() {
     let mut app = test_app_with_agent();
     let id = AgentId(0);
@@ -687,7 +706,6 @@ fn switch_model_complete_skips_message_and_persist_when_unchanged() {
             agent_id: id,
             model_id: model_id.clone(),
             effort: None,
-            fast_mode: None,
             result: Ok(()),
             prev_model_id: None,
         }),
@@ -742,7 +760,6 @@ fn switch_model_complete_persists_resolved_effort_from_catalog_meta() {
             agent_id: id,
             model_id: model_id.clone(),
             effort: None, // user typed `/model Blackbox 4.7` with no effort
-            fast_mode: None,
             result: Ok(()),
             prev_model_id: None,
         }),
@@ -809,7 +826,6 @@ fn switch_to_non_reasoning_model_clears_persisted_effort() {
             agent_id: id,
             model_id: model_id.clone(),
             effort: None,
-            fast_mode: None,
             result: Ok(()),
             prev_model_id: None,
         }),
@@ -854,7 +870,6 @@ fn switch_model_complete_failure_pushes_error_and_clears_pending() {
             agent_id: id,
             model_id,
             effort: None,
-            fast_mode: None,
             result: Err(SwitchModelError::Other("model not found".into())),
             prev_model_id: None,
         }),
@@ -895,7 +910,6 @@ fn switch_model_incompatible_agent_shows_question_modal() {
             agent_id: id,
             model_id,
             effort: None,
-            fast_mode: None,
             result: Err(SwitchModelError::IncompatibleAgent {
                 error: err,
                 prev_model_id: None,
@@ -959,7 +973,6 @@ fn incompatible_agent_rollback_restores_previous_model() {
             agent_id: id,
             model_id: new_model,
             effort: None,
-            fast_mode: None,
             result: Err(SwitchModelError::IncompatibleAgent {
                 error: err,
                 prev_model_id: Some(prev_model.clone()),
@@ -1006,7 +1019,6 @@ fn incompatible_agent_closes_active_modal() {
             agent_id: id,
             model_id,
             effort: None,
-            fast_mode: None,
             result: Err(SwitchModelError::IncompatibleAgent {
                 error: err,
                 prev_model_id: None,
@@ -1056,7 +1068,6 @@ fn same_agent_type_switch_no_modal() {
             agent_id: id,
             model_id: model_b.clone(),
             effort: None,
-            fast_mode: None,
             result: Ok(()),
             prev_model_id: None,
         }),
@@ -1100,7 +1111,6 @@ fn switch_model_pending_lifecycle() {
             agent_id: id,
             model_id,
             effort: None,
-            fast_mode: None,
             result: Ok(()),
             prev_model_id: None,
         }),

@@ -692,6 +692,54 @@ fn switch_model_dispatch_produces_effect_and_sets_pending() {
     assert!(app.agents[&id].session.state.is_idle());
 }
 #[test]
+fn fast_mode_during_model_switch_uses_session_only_effect() {
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    let old_model = app.agents[&id].session.models.current.clone().unwrap();
+    let new_model = acp::ModelId::new("codex-new");
+    app.agents
+        .get_mut(&id)
+        .unwrap()
+        .session
+        .models
+        .available
+        .insert(
+            new_model.clone(),
+            acp::ModelInfo::new(new_model.clone(), "Codex New".to_string()).meta(
+                serde_json::json!({ "supportsFastMode": true })
+                    .as_object()
+                    .cloned(),
+            ),
+        );
+
+    let switch_effects = dispatch(
+        Action::SwitchModel {
+            model_id: new_model,
+            effort: None,
+        },
+        &mut app,
+    );
+    assert_eq!(switch_effects.len(), 1);
+    assert_eq!(app.agents[&id].session.models.current, Some(old_model));
+
+    let fast_effects = dispatch(Action::SetFastMode(true), &mut app);
+    assert!(matches!(
+        fast_effects.as_slice(),
+        [Effect::SetFastMode {
+            agent_id,
+            enabled: true,
+            ..
+        }] if *agent_id == id
+    ));
+    assert!(
+        fast_effects
+            .iter()
+            .all(|effect| !matches!(effect, Effect::SwitchModel { .. })),
+        "Fast Mode must never carry the stale pager model into a model-switch RPC"
+    );
+}
+
+#[test]
 fn switch_model_allowed_when_agent_chat_kind() {
     let mut app = test_app_with_agent();
     let id = AgentId(0);

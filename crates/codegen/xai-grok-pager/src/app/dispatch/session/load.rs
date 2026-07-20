@@ -981,7 +981,6 @@ pub(in crate::app::dispatch) fn handle_session_loaded(
                 session_id: hydrate_sid.clone(),
                 model_id,
                 effort,
-                fast_mode: None,
                 prev_model_id: None,
             });
         }

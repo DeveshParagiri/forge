@@ -488,18 +488,15 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             agent_id,
             model_id,
             effort,
-            fast_mode,
             result,
             prev_model_id,
-        } => handle_switch_model_complete(
-            app,
+        } => handle_switch_model_complete(app, agent_id, model_id, effort, result, prev_model_id),
+        TaskResult::SetFastModeComplete {
             agent_id,
-            model_id,
-            effort,
-            fast_mode,
+            session_id,
+            enabled,
             result,
-            prev_model_id,
-        ),
+        } => crate::forge::fast_mode::handle_complete(app, agent_id, session_id, enabled, result),
         TaskResult::BgTaskKilled {
             session_id,
             task_id,

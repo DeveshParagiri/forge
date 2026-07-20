@@ -848,7 +848,6 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
                 session_id,
                 model_id,
                 effort,
-                fast_mode: None,
                 prev_model_id: None,
             }]
         }

@@ -389,6 +389,9 @@ pub(super) async fn run_session(
             SessionCommand::GetSamplingFastMode { responds_to } => { let enabled = session
             .chat_state_handle.get_sampling_config(). await .and_then(| c | c.fast_mode)
             .unwrap_or(false); let _ = responds_to.send(enabled); }
+            SessionCommand::SetSamplingFastMode { enabled, responds_to } => { let result =
+            session.handle_set_sampling_fast_mode(enabled).await; let _ = responds_to
+            .send(result); }
             SessionCommand::GetCurrentPromptMode { responds_to } => { let mode = *
             session.current_prompt_mode.lock(); let _ = responds_to.send(mode); }
             SessionCommand::GetModelMetadata { responds_to } => { let id = session

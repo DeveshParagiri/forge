@@ -321,7 +321,6 @@ fn model_switch_pending_resets_correctly_across_success_and_failure() {
             agent_id: id,
             model_id: model_a,
             effort: None,
-            fast_mode: None,
             result: Ok(()),
             prev_model_id: None,
         }),
@@ -341,7 +340,6 @@ fn model_switch_pending_resets_correctly_across_success_and_failure() {
             agent_id: id,
             model_id: model_b,
             effort: None,
-            fast_mode: None,
             result: Err(SwitchModelError::Other("network error".into())),
             prev_model_id: None,
         }),
@@ -1035,6 +1033,52 @@ fn set_default_model_resolves_known_name() {
     assert!(matches!(& effects[1], Effect::SwitchModel { model_id : mid, .. } if mid == & id));
     assert_eq!(app.agents[&agent_id].session.models.current, Some(id));
 }
+
+/// Real model-picker path regression: the optimistic default-model update and
+/// an immediately following `/fast` must produce two independent requests.
+/// The Fast request must never carry either the old or new model id.
+#[test]
+fn set_default_model_then_fast_uses_model_independent_effect() {
+    use agent_client_protocol as acp;
+    let mut app = test_app_with_agent();
+    let agent_id = AgentId(0);
+    let new_id = acp::ModelId::new("codex-new");
+    let info = acp::ModelInfo::new(new_id.clone(), "Codex New".to_string()).meta(
+        serde_json::json!({ "supportsFastMode": true })
+            .as_object()
+            .cloned(),
+    );
+    app.agents
+        .get_mut(&agent_id)
+        .unwrap()
+        .session
+        .models
+        .available
+        .insert(new_id.clone(), info);
+
+    let model_effects = dispatch(Action::SetDefaultModel(new_id.clone()), &mut app);
+    assert!(model_effects.iter().any(|effect| matches!(
+        effect,
+        Effect::SwitchModel { model_id, .. } if model_id == &new_id
+    )));
+    assert_eq!(app.agents[&agent_id].session.models.current, Some(new_id));
+
+    let fast_effects = dispatch(Action::SetFastMode(true), &mut app);
+    assert!(matches!(
+        fast_effects.as_slice(),
+        [Effect::SetFastMode {
+            agent_id: effect_agent,
+            enabled: true,
+            ..
+        }] if *effect_agent == agent_id
+    ));
+    assert!(
+        fast_effects
+            .iter()
+            .all(|effect| !matches!(effect, Effect::SwitchModel { .. }))
+    );
+}
+
 /// Re-dispatching the same model
 /// id is idempotent — no PersistSetting, no SwitchModel, no
 /// reasoning_effort reset.

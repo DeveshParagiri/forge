@@ -2089,7 +2089,6 @@ fn switch_model_holds_prompt_until_complete() {
             agent_id: id,
             model_id,
             effort: None,
-            fast_mode: None,
             result: Ok(()),
             prev_model_id: None,
         }),

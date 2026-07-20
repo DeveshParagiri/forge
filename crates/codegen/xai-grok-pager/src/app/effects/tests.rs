@@ -1,5 +1,7 @@
 #![cfg_attr(rustfmt, rustfmt::skip)]
 use super::*;
+#[path = "tests/fast_mode.rs"]
+mod fast_mode;
 use xai_grok_shell::extensions::billing::{BillingConfig, Cent, UsagePeriod};
 /// The invalid-params server detail survives `attach_prompt_usage`
 /// wrapping `error.data` as `{message, promptUsage}`.

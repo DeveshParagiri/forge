@@ -27,16 +27,6 @@ pub(crate) fn reconcile(models: &mut ModelState) {
     }
 }
 
-/// Apply a confirmed fast-mode state change to pager session state.
-pub(crate) fn set_enabled(models: &mut ModelState, enabled: bool) -> Result<(), &'static str> {
-    if !is_supported(models) {
-        models.fast_mode = false;
-        return Err("current model does not support fast mode");
-    }
-    models.fast_mode = enabled;
-    Ok(())
-}
-
 /// Decorate the canonical primary model label when fast mode is active.
 pub(crate) fn decorate_model_label(label: String, enabled: bool) -> String {
     if enabled {
@@ -54,30 +44,51 @@ pub(crate) fn dispatch_set_fast_mode(app: &mut AppView, enabled: bool) -> Vec<Ef
     let Some(agent) = app.agents.get_mut(&id) else {
         return vec![];
     };
-    if !is_supported(&agent.session.models) {
-        agent.scrollback.push_block(RenderBlock::system(
-            "Current model does not support fast mode",
-        ));
-        return vec![];
-    }
     let Some(session_id) = agent.session.session_id.clone() else {
         agent
             .scrollback
             .push_block(RenderBlock::system("Fast mode requires an active session"));
         return vec![];
     };
-    let Some(model_id) = agent.session.models.current.clone() else {
-        return vec![];
-    };
-    agent.session.model_switch_pending = true;
-    vec![Effect::SwitchModel {
+    // Capability is deliberately not checked against the pager mirror here.
+    // That mirror may lag a model switch; the shell validates the request
+    // against the authoritative live sampling model under the session lock.
+    vec![Effect::SetFastMode {
         agent_id: id,
         session_id,
-        model_id,
-        effort: None,
-        fast_mode: Some(enabled),
-        prev_model_id: None,
+        enabled,
     }]
+}
+
+/// Apply the authoritative result of the session-only Fast Mode mutation.
+pub(crate) fn handle_complete(
+    app: &mut AppView,
+    agent_id: crate::app::agent::AgentId,
+    session_id: agent_client_protocol::SessionId,
+    enabled: bool,
+    result: Result<(), String>,
+) -> Vec<Effect> {
+    let Some(agent) = app.agents.get_mut(&agent_id) else {
+        return vec![];
+    };
+    if agent.session.session_id.as_ref() != Some(&session_id) {
+        return vec![];
+    }
+    match result {
+        Ok(()) => {
+            agent.session.models.fast_mode = enabled;
+            agent.scrollback.push_block(RenderBlock::system(format!(
+                "Fast mode {}",
+                if enabled { "enabled" } else { "disabled" }
+            )));
+        }
+        Err(message) => {
+            agent.scrollback.push_block(RenderBlock::system(format!(
+                "Couldn't set fast mode: {message}"
+            )));
+        }
+    }
+    vec![]
 }
 
 /// Toggle fast inference for the active model/session.
@@ -108,9 +119,9 @@ impl SlashCommand for FastCommand {
         if !args.trim().is_empty() {
             return CommandResult::Error("Usage: /fast".into());
         }
-        if !is_supported(ctx.models) {
-            return CommandResult::Error("Current model does not support fast mode".into());
-        }
+        // Dispatch even if the mirrored model still looks unsupported. A model
+        // switch can already be in flight; the shell checks the authoritative
+        // live model before changing Fast Mode.
         CommandResult::Action(Action::SetFastMode(!ctx.models.fast_mode))
     }
 }
@@ -175,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_model_is_hidden_rejected_and_clears_state() {
+    fn unsupported_mirror_is_hidden_but_dispatches_for_authoritative_validation() {
         let command = FastCommand;
         let mut models = state(false, true);
         reconcile(&mut models);
@@ -190,7 +201,7 @@ mod tests {
         let mut exec_ctx = exec_ctx(&models);
         assert!(matches!(
             command.run(&mut exec_ctx, ""),
-            CommandResult::Error(message) if message.contains("does not support fast mode")
+            CommandResult::Action(Action::SetFastMode(true))
         ));
     }
 

@@ -868,7 +868,6 @@ pub(in crate::app::dispatch) fn handle_session_created(
                 session_id: session_id_clone.clone(),
                 model_id,
                 effort,
-                fast_mode: None,
                 prev_model_id: None,
             });
         }
@@ -964,7 +963,6 @@ pub(in crate::app::dispatch) fn handle_worktree_session_created(
                 session_id: session_id_clone.clone(),
                 model_id,
                 effort,
-                fast_mode: None,
                 prev_model_id: None,
             });
         }
@@ -1046,7 +1044,6 @@ pub(in crate::app::dispatch) fn handle_switch_model_complete(
     agent_id: AgentId,
     model_id: acp::ModelId,
     effort: Option<ReasoningEffort>,
-    fast_mode: Option<bool>,
     result: Result<(), SwitchModelError>,
     prev_model_id: Option<acp::ModelId>,
 ) -> Vec<Effect> {
@@ -1065,21 +1062,11 @@ pub(in crate::app::dispatch) fn handle_switch_model_complete(
                 let prev_model = agent.session.models.current.clone();
                 let prev_effort = agent.session.models.reasoning_effort;
                 agent.session.models.set_current(model_id.clone(), effort);
-                if let Some(enabled) = fast_mode {
-                    let _ =
-                        crate::forge::fast_mode::set_enabled(&mut agent.session.models, enabled);
-                }
                 let resolved_effort = agent.session.models.reasoning_effort;
                 let same_model = prev_model.as_ref() == Some(&model_id);
                 let unchanged = same_model && prev_effort == resolved_effort;
-                if let Some(enabled) = fast_mode {
-                    agent.scrollback.push_block(RenderBlock::system(format!(
-                        "Fast mode {}",
-                        if enabled { "enabled" } else { "disabled" }
-                    )));
                 // Forge: effort-only lifecycle suppression (no scrollback spam).
-                } else if crate::forge::effort::should_log_model_switch_line(same_model, unchanged)
-                {
+                if crate::forge::effort::should_log_model_switch_line(same_model, unchanged) {
                     let msg = if let Some(eff) = resolved_effort {
                         format!("Switched to {display_name} ({eff} effort)")
                     } else {

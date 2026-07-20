@@ -1010,7 +1010,6 @@ pub(in crate::app::dispatch) fn apply_setting_rollback(
                                 session_id: sid,
                                 model_id: id,
                                 effort: None,
-                                fast_mode: None,
                                 prev_model_id: None,
                             });
                         }

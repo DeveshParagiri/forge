@@ -3178,6 +3178,9 @@ impl acp::Agent for MvpAgent {
             | "x.ai/sessions/list" => {
                 crate::agent::handlers::session::handle(self, &args).await
             }
+            crate::agent::forge::fast_mode::EXT_METHOD => {
+                crate::agent::forge::fast_mode::handle(self, &args).await
+            }
             "x.ai/workspaces/list" => {
                 crate::agent::handlers::workspaces::handle(self, &args).await
             }

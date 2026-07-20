@@ -22,17 +22,23 @@ pub(crate) async fn apply(
     );
     tracing::debug!("session_session_model::mvp_agent: {:?}", &args);
     let effort_override = parse_reasoning_effort_meta(args.meta.as_ref());
-    // Forge: feature-specific request parsing lives in its additive module.
-    let fast_mode_override = crate::agent::forge::fast_mode::parse_request(args.meta.as_ref());
     let acp::SetSessionModelRequest {
         session_id,
         model_id,
         ..
     } = args;
+    // Resolve an in-flight session/load before taking the mutation lock. The
+    // load path can call back into this function to restore its model, so the
+    // opposite order would make both operations wait until the load timeout.
     let handle = agent
         .session_handle_waiting_for_load(&session_id)
         .await
         .ok_or_else(|| acp::Error::invalid_params().data("unknown session id"))?;
+    // User model switches and session-only Fast Mode mutations share this lock.
+    // Internal startup/restore callers also pass through here, establishing one
+    // ordering rule for every model mutation after the session is available.
+    let dispatch_lock = agent.dispatch_lock(&session_id);
+    let _dispatch_guard = dispatch_lock.lock().await;
     let model = agent.resolve_model_id(&model_id)?;
     let use_concise = model.info().use_concise;
     let supports_fast_mode = model.info().supports_fast_mode;
@@ -118,19 +124,9 @@ pub(crate) async fn apply(
     let mut model_sampling =
         agent.prepare_sampling_config_for_model(&model, handle.origin_client.clone());
     // Forge: preserve or clear feature state through one capability hook.
-    model_sampling.fast_mode = crate::agent::forge::fast_mode::resolve_for_switch(
-        &handle.cmd_tx,
-        supports_fast_mode,
-        fast_mode_override,
-    )
-    .await;
-    if fast_mode_override == Some(true) && !supports_fast_mode {
-        tracing::warn!(
-            session_id = %session_id.0,
-            model_id = %model_id.0,
-            "set_session_model: ignoring fast-mode request — model lacks capability"
-        );
-    }
+    model_sampling.fast_mode =
+        crate::agent::forge::fast_mode::resolve_for_switch(&handle.cmd_tx, supports_fast_mode)
+            .await;
     if let Some(eff) = effort_override {
         if agent
             .models_manager

@@ -49,7 +49,7 @@ impl MvpAgent {
     }
     /// Get-or-create the per-session dispatch lock (see
     /// [`Self::dispatch_locks`]). Cheap clone of the shared `Rc`.
-    pub(super) fn dispatch_lock(&self, id: &acp::SessionId) -> std::rc::Rc<tokio::sync::Mutex<()>> {
+    pub(crate) fn dispatch_lock(&self, id: &acp::SessionId) -> std::rc::Rc<tokio::sync::Mutex<()>> {
         self.dispatch_locks
             .borrow_mut()
             .entry(id.clone())

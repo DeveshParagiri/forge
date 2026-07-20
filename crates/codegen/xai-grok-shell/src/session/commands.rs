@@ -241,6 +241,14 @@ pub enum SessionCommand {
     GetSamplingFastMode {
         responds_to: oneshot::Sender<bool>,
     },
+    /// Update only the session-scoped fast-mode state. Model identity and every
+    /// other sampling field remain unchanged.
+    SetSamplingFastMode {
+        enabled: bool,
+        /// Returns the authoritative live sampling-model string that was
+        /// capability-checked while applying the change.
+        responds_to: oneshot::Sender<Result<String, acp::Error>>,
+    },
     GetCurrentPromptMode {
         responds_to: oneshot::Sender<PromptMode>,
     },
