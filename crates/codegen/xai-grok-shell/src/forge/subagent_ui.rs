@@ -205,6 +205,7 @@ impl ExternalSubagentUi {
                 role: Some(display_name.to_owned()),
                 model,
                 resumed_from,
+                workflow_run_id: None,
             },
             true,
         );

@@ -4,15 +4,17 @@ use chrono::{DateTime, Local, Utc};
 use xai_grok_shell::agent::provider_auth::{ProviderId, ProviderUsageSnapshot};
 
 use crate::app::actions::Effect;
-use crate::app::app_view::{ActiveView, AppView};
+use crate::app::app_view::AppView;
 use crate::scrollback::block::RenderBlock;
 
-/// Plan `/usage` for the active provider, keeping provider branching out of
-/// upstream dispatch code.
-pub(crate) fn dispatch(app: &mut AppView) -> Vec<Effect> {
-    let ActiveView::Agent(id) = app.active_view else {
-        return vec![];
-    };
+/// Plan the provider-account follow-up after upstream session token/cost usage.
+///
+/// Keeping this branch in Forge lets every provider share upstream's session
+/// usage block while still using its own account/quota surface afterward.
+pub(crate) fn account_follow_up(
+    app: &mut AppView,
+    id: crate::app::agent::AgentId,
+) -> Vec<Effect> {
     let Some(provider) = app
         .agents
         .get(&id)
@@ -21,13 +23,16 @@ pub(crate) fn dispatch(app: &mut AppView) -> Vec<Effect> {
         push_system(
             app,
             id,
-            "Usage is unavailable because the active model's provider is unknown.",
+            "Account usage is unavailable because the active model's provider is unknown.",
         );
         return vec![];
     };
 
     match provider {
         ProviderId::Spacexai => {
+            if !app.usage_visible {
+                return vec![];
+            }
             if let Some(url) = app.usage_billing_redirect_url.clone() {
                 push_system(app, id, &format!("Please check your usage on {url}"));
                 return vec![];

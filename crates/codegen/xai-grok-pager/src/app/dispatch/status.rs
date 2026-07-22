@@ -1,5 +1,7 @@
 //! Session status, sharing, privacy, usage, and info dispatchers.
 
+use agent_client_protocol as acp;
+
 use super::ctx::get_active_agent;
 use super::settings::ui::refresh_open_settings_modals;
 use crate::app::actions::Effect;
@@ -253,15 +255,69 @@ pub(super) fn dispatch_show_context_info(app: &mut AppView) -> Vec<Effect> {
     }]
 }
 
-/// Show credit usage: fetch billing data and display inline.
-///
-/// When the remote settings `grok_build_usage_redirect_url` flag is set (delivered via
-/// RemoteSettings, targeted at personal-team users), skip the backend fetch and
-/// just point the user at that URL instead. This is a kill switch for the
-/// personal-team billing path while it is unreliable.
+/// `/usage` — session token/cost, then consumer credits when visible.
+/// Credits are chained after the session block so layout stays ordered.
 pub(super) fn dispatch_show_usage(app: &mut AppView) -> Vec<Effect> {
-    // Forge: provider-specific usage policy lives outside upstream dispatch.
-    crate::forge::provider_usage::dispatch(app)
+    let ActiveView::Agent(id) = app.active_view else {
+        return vec![];
+    };
+    let session_id = {
+        let Some(agent) = app.agents.get_mut(&id) else {
+            return vec![];
+        };
+        agent.session.session_id.clone()
+    };
+    match session_id {
+        Some(session_id) => vec![Effect::FetchSessionUsage {
+            agent_id: id,
+            session_id,
+        }],
+        None => {
+            if let Some(agent) = app.agents.get_mut(&id) {
+                agent.scrollback.push_block(RenderBlock::system(
+                    "Session usage is unavailable until the session starts.".to_string(),
+                ));
+            }
+            crate::forge::provider_usage::account_follow_up(app, id)
+        }
+    }
+}
+
+/// Commit a session-usage block if still on `session_id`, then show the active
+/// provider's account/credit surface.
+pub(super) fn commit_session_usage_block(
+    app: &mut AppView,
+    agent_id: AgentId,
+    session_id: &acp::SessionId,
+    text: String,
+) -> Vec<Effect> {
+    let Some(agent) = app.agents.get_mut(&agent_id) else {
+        return vec![];
+    };
+    if agent.session.session_id.as_ref() != Some(session_id) {
+        return vec![];
+    }
+    agent.scrollback.push_block(RenderBlock::system(text));
+    crate::forge::provider_usage::account_follow_up(app, agent_id)
+}
+
+/// `/usage manage` — open consumer billing. No-op when the surface is hidden.
+pub(super) fn dispatch_manage_billing(app: &mut AppView) -> Vec<Effect> {
+    let is_spacexai = match app.active_view {
+        ActiveView::Agent(id) => app
+            .agents
+            .get(&id)
+            .and_then(|agent| agent.session.models.current_provider_id())
+            == Some(xai_grok_shell::agent::provider_auth::ProviderId::Spacexai),
+        _ => false,
+    };
+    if !app.usage_visible || !is_spacexai {
+        return vec![];
+    }
+    super::router::dispatch(
+        crate::app::actions::Action::OpenUrl("https://grok.com/?_s=usage".to_string()),
+        app,
+    )
 }
 
 /// Commit a one-line "update available" notice into the active agent's

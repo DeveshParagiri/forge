@@ -11,8 +11,9 @@ mod config_toml_edit;
 pub mod diagnostics;
 pub mod diff;
 pub mod docs;
-// Forge: fork UI behavior (provider login, effort, welcome branding).
+pub mod doctor_cmd;
 pub mod export_cmd;
+// Forge: fork UI behavior (provider login, effort, welcome branding).
 pub(crate) mod forge;
 pub mod git_info;
 pub mod headless;

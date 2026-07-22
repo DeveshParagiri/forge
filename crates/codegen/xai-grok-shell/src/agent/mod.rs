@@ -10,6 +10,7 @@ pub mod folder_trust;
 pub mod forge;
 pub(crate) mod handlers;
 pub mod init;
+pub mod model_providers;
 pub mod models;
 pub mod mvp_agent;
 /// Compatibility exports for downstream provider-login consumers.
