@@ -84,13 +84,17 @@ pub(crate) fn handle_ask_user_question(
                 LocalQuestionKind::FreeUsageUpsell { .. } => "SuperGrok upsell",
                 LocalQuestionKind::AgentTypeMismatch { .. } => "model switch",
                 LocalQuestionKind::ProjectSelect { .. } => "project select",
-                // Forge
+                // Forge provider-login questions coexist with upstream diagnostics.
                 LocalQuestionKind::ProviderLogin => "/login providers",
                 LocalQuestionKind::OpenRouterApiKey => "/login openrouter",
+                LocalQuestionKind::DoctorFix { .. } => "/doctor fix",
             };
-            agent.scrollback.push_block(RenderBlock::system(format!(
-                "{cmd} cancelled by model question"
-            )));
+            let message = if matches!(kind, LocalQuestionKind::DoctorFix { .. }) {
+                "/doctor fix was cancelled because another question opened.".to_owned()
+            } else {
+                format!("{cmd} cancelled because another question opened.")
+            };
+            agent.scrollback.push_block(RenderBlock::system(message));
         }
     }
 

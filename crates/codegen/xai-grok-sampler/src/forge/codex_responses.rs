@@ -1,3 +1,4 @@
+use reqwest::header::HeaderMap;
 use serde_json::{Map, Value, json};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,6 +22,25 @@ impl ResponsesBackend {
 
     pub(crate) fn uses_grok_headers(self) -> bool {
         matches!(self, Self::Standard)
+    }
+
+    /// Strip xAI/Grok transport metadata from requests sent to a third-party
+    /// Responses backend. Authentication, content negotiation, tracing, and
+    /// explicit provider headers remain intact; only the fork's private
+    /// `x-grok-*` namespace and xAI proxy marker are removed.
+    pub(crate) fn prepare_request_headers(self, mut headers: HeaderMap) -> HeaderMap {
+        if matches!(self, Self::Codex) {
+            let private_headers: Vec<_> = headers
+                .keys()
+                .filter(|name| name.as_str().starts_with("x-grok-"))
+                .cloned()
+                .collect();
+            for name in private_headers {
+                headers.remove(name);
+            }
+            headers.remove("x-xai-token-auth");
+        }
+        headers
     }
 
     pub(crate) fn supports_doom_loop_check(self) -> bool {
@@ -240,6 +260,32 @@ mod tests {
         assert_eq!(
             ResponsesBackend::detect("https://api.x.ai/v1"),
             ResponsesBackend::Standard
+        );
+    }
+
+    #[test]
+    fn codex_header_boundary_strips_only_xai_private_metadata() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer provider-token".parse().unwrap());
+        headers.insert("user-agent", "forge-test".parse().unwrap());
+        headers.insert("traceparent", "00-test-trace".parse().unwrap());
+        headers.insert("x-provider-feature", "enabled".parse().unwrap());
+        headers.insert("x-grok-client-identifier", "forge".parse().unwrap());
+        headers.insert("x-grok-conv-id", "conversation".parse().unwrap());
+        headers.insert("x-xai-token-auth", "xai-grok-cli".parse().unwrap());
+
+        let codex = ResponsesBackend::Codex.prepare_request_headers(headers.clone());
+        assert!(codex.contains_key("authorization"));
+        assert!(codex.contains_key("user-agent"));
+        assert!(codex.contains_key("traceparent"));
+        assert!(codex.contains_key("x-provider-feature"));
+        assert!(!codex.contains_key("x-grok-client-identifier"));
+        assert!(!codex.contains_key("x-grok-conv-id"));
+        assert!(!codex.contains_key("x-xai-token-auth"));
+
+        assert_eq!(
+            ResponsesBackend::Standard.prepare_request_headers(headers.clone()),
+            headers,
         );
     }
 

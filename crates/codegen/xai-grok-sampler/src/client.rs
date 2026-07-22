@@ -570,8 +570,9 @@ impl SamplingClient {
         self.defaults.api_backend.clone()
     }
 
-    /// POST with default headers. Overrides auth from resolver if wired.
-    fn post(&self, url: impl reqwest::IntoUrl) -> reqwest::RequestBuilder {
+    /// Resolve the headers shared by all request shapes, including live auth
+    /// and tracing injection. Backend-specific filtering happens afterward.
+    fn request_headers(&self) -> HeaderMap {
         let mut headers = self.default_headers.clone();
         if let Some(resolver) = &self.bearer_resolver
             && let Some(fresh) = resolver.current_bearer()
@@ -617,7 +618,23 @@ impl SamplingClient {
         if let Some(injector) = &self.header_injector {
             injector.inject(&mut headers);
         }
-        self.http.post(url).headers(headers)
+        headers
+    }
+
+    /// POST with default headers. Overrides auth from resolver if wired.
+    fn post(&self, url: impl reqwest::IntoUrl) -> reqwest::RequestBuilder {
+        self.http.post(url).headers(self.request_headers())
+    }
+
+    /// POST to a Responses endpoint after applying its backend-specific
+    /// transport boundary. In particular, ChatGPT Codex keeps provider auth
+    /// and ordinary headers while dropping xAI/Grok-private metadata.
+    fn post_responses(
+        &self,
+        backend: crate::forge::codex_responses::ResponsesBackend,
+    ) -> reqwest::RequestBuilder {
+        let headers = backend.prepare_request_headers(self.request_headers());
+        self.http.post(self.endpoint("responses")).headers(headers)
     }
 
     /// Bearer prefix for 401 attribution. Prefers live resolver, falls back to default_headers.
@@ -1065,6 +1082,17 @@ impl SamplingClient {
         // forwarded by the sampler. Drop it before we send.
         request.trace.take();
 
+        // ChatGPT Codex's Responses transport is streaming-only. Fail before
+        // building or sending a non-streaming request rather than leaking
+        // xAI-specific body fields or transport metadata to that backend.
+        let responses_backend =
+            crate::forge::codex_responses::ResponsesBackend::detect(&self.base_url);
+        if !responses_backend.accepts_xai_extensions() {
+            return Err(SamplingError::InvalidConfiguration(
+                "ChatGPT Codex Responses requests must use the streaming API",
+            ));
+        }
+
         tracing::debug!("create_response: {:?}", &request);
         tracing::debug!("endpoint: {:?}", self.endpoint("responses"));
 
@@ -1088,7 +1116,7 @@ impl SamplingClient {
         // old raw_output machinery.
         xai_grok_sampling_types::patch_reasoning_text_types(&mut request_body);
         let http_request = grok_headers
-            .apply(self.post(self.endpoint("responses")))
+            .apply(self.post_responses(responses_backend))
             .json(&request_body);
 
         let response = http_request.send().await.map_err(|e| {
@@ -1204,7 +1232,7 @@ impl SamplingClient {
             deployment_id: request.x_grok_deployment_id.as_deref(),
             user_id: request.x_grok_user_id.as_deref(),
         };
-        let extra_raw_tools = std::mem::take(&mut request.extra_raw_tools);
+        let extra_tool_entries = std::mem::take(&mut request.extra_tool_entries);
         let mut request_body = serde_json::to_value(&request.inner).map_err(|e| {
             tracing::error!("Failed to serialize responses request: {}", e);
             SamplingError::Serialization(e)
@@ -1218,11 +1246,11 @@ impl SamplingClient {
         }
         // Inject xAI-specific tools (e.g., x_search) that can't be expressed
         // via async_openai's rs::Tool enum.
-        if !extra_raw_tools.is_empty() && responses_backend.accepts_xai_extensions() {
+        if !extra_tool_entries.is_empty() && responses_backend.accepts_xai_extensions() {
             if let Some(tools) = request_body.get_mut("tools").and_then(|v| v.as_array_mut()) {
-                tools.extend(extra_raw_tools);
+                tools.extend(extra_tool_entries);
             } else {
-                request_body["tools"] = serde_json::Value::Array(extra_raw_tools);
+                request_body["tools"] = serde_json::Value::Array(extra_tool_entries);
             }
         }
         xai_grok_sampling_types::patch_reasoning_text_types(&mut request_body);
@@ -1254,13 +1282,14 @@ impl SamplingClient {
         } else {
             None
         };
-        // Forge: backend policy keeps Codex requests free of x-grok-* headers.
+        // Forge: backend policy keeps Codex requests free of x-grok-* headers,
+        // including defaults and values added by the tracing injector.
         let mut http_request = if !responses_backend.uses_grok_headers() {
-            self.post(self.endpoint("responses"))
+            self.post_responses(responses_backend)
                 .header(ACCEPT, HeaderValue::from_static("text/event-stream"))
         } else {
             grok_headers
-                .apply(self.post(self.endpoint("responses")))
+                .apply(self.post_responses(responses_backend))
                 .header(ACCEPT, HeaderValue::from_static("text/event-stream"))
         };
         if doom_loop.is_some() {
@@ -1793,7 +1822,7 @@ impl SamplingClient {
 
         // Collect xAI-specific tools that can't be expressed via rs::Tool
         // (e.g., x_search). These are injected as raw JSON after serialization.
-        let extra_tools = xai_grok_sampling_types::extra_raw_tools(&request.hosted_tools);
+        let extra_tools = xai_grok_sampling_types::extra_tool_entries(&request.hosted_tools);
 
         let responses_request: rs::CreateResponse = (&request).into();
 
@@ -1803,7 +1832,7 @@ impl SamplingClient {
         wrapper.x_grok_session_id = x_grok_session_id;
         wrapper.x_grok_turn_idx = x_grok_turn_idx;
         wrapper.x_grok_agent_id = x_grok_agent_id;
-        wrapper.extra_raw_tools = extra_tools;
+        wrapper.extra_tool_entries = extra_tools;
 
         if let Some(trace) = trace {
             wrapper.trace = Some(trace);
@@ -2210,6 +2239,73 @@ mod tests {
             req.headers().contains_key("traceparent"),
             "HeaderInjector should inject traceparent into post() requests"
         );
+    }
+
+    #[test]
+    fn codex_responses_post_strips_xai_headers_after_injection() {
+        #[derive(Debug)]
+        struct TestInjector;
+        impl crate::config::HeaderInjector for TestInjector {
+            fn inject(&self, headers: &mut HeaderMap) {
+                headers.insert(
+                    HeaderName::from_static("traceparent"),
+                    HeaderValue::from_static("00-test-trace-id-00"),
+                );
+                headers.insert(
+                    HeaderName::from_static("x-grok-injected"),
+                    HeaderValue::from_static("must-not-leak"),
+                );
+            }
+        }
+
+        let mut config = minimal_config();
+        config.base_url = "https://chatgpt.com/backend-api/codex".to_string();
+        config.client_version = Some("0.2.110".to_string());
+        config.deployment_id = Some("deployment".to_string());
+        config.user_id = Some("user".to_string());
+        config.client_identifier = Some("forge".to_string());
+        config
+            .extra_headers
+            .insert("x-XAI-token-auth".to_string(), "xai-grok-cli".to_string());
+        config
+            .extra_headers
+            .insert("x-provider-feature".to_string(), "enabled".to_string());
+        config.header_injector = Some(std::sync::Arc::new(TestInjector));
+
+        let client = SamplingClient::new(config).expect("build");
+        let backend = crate::forge::codex_responses::ResponsesBackend::Codex;
+        let request = client
+            .post_responses(backend)
+            .build()
+            .expect("build request");
+        let headers = request.headers();
+
+        assert!(headers.contains_key(AUTHORIZATION));
+        assert!(headers.contains_key(USER_AGENT));
+        assert!(headers.contains_key("traceparent"));
+        assert!(headers.contains_key("x-provider-feature"));
+        assert!(!headers.contains_key("x-xai-token-auth"));
+        assert!(
+            headers
+                .keys()
+                .all(|name| !name.as_str().starts_with("x-grok-")),
+            "Codex Responses request leaked x-grok headers: {headers:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn codex_non_streaming_responses_fail_before_network_io() {
+        let mut config = minimal_config();
+        config.base_url = "https://chatgpt.com/backend-api/codex".to_string();
+        config.api_backend = ApiBackend::Responses;
+        let client = SamplingClient::new(config).expect("build");
+
+        let error = client
+            .conversation_responses(ConversationRequest::default())
+            .await
+            .expect_err("Codex Responses is streaming-only");
+        assert!(matches!(error, SamplingError::InvalidConfiguration(_)));
+        assert!(error.to_string().contains("must use the streaming API"));
     }
 
     #[test]

@@ -132,6 +132,10 @@ pub enum LocalQuestionKind {
     ProviderLogin,
     /// Forge: freeform capture for OpenRouter API key after provider pick.
     OpenRouterApiKey,
+    DoctorFix {
+        target: crate::app::actions::DoctorFixTarget,
+        plan: Box<crate::diagnostics::FixPlan>,
+    },
 }
 
 // ── State ──────────────────────────────────────────────────────────────

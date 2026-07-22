@@ -38,9 +38,7 @@ fn draw_frame(agent: &mut AgentView) -> Buffer {
         &bundle,
         false,
         &mut Vec::new(),
-        false,
-        false,
-        None,
+        crate::app::agent_view::AppRenderParams::default(),
     );
     buf
 }
