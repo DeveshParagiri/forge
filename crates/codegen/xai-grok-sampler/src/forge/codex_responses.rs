@@ -69,6 +69,24 @@ impl ResponsesBackend {
     }
 }
 
+/// OpenAI / ChatGPT Responses rejects item `id` / `call_id` strings longer
+/// than this (error: `Invalid 'input[N].id': string too long`).
+const RESPONSES_ITEM_ID_MAX_LEN: usize = 64;
+
+/// Hosted / server-side tool item types that Grok may have persisted from an
+/// xAI Responses turn. Codex cannot execute or round-trip these; replaying
+/// them also ships xAI-generated ids that routinely exceed the 64-char limit
+/// (e.g. `ws_<uuid>_call-<uuid>-N` at 83+ chars).
+const HOSTED_TOOL_CALL_TYPES: &[&str] = &[
+    "web_search_call",
+    "code_interpreter_call",
+    "custom_tool_call",
+    "file_search_call",
+    "image_generation_call",
+    "computer_call",
+    "computer_call_output",
+];
+
 /// Reshape a Responses API JSON body for ChatGPT Codex
 /// (`chatgpt.com/backend-api/codex/responses`), matching Pi's
 /// `openai-codex-responses` contract.
@@ -77,6 +95,12 @@ impl ResponsesBackend {
 /// `temperature`, `top_p`, `max_output_tokens`, `truncation`, `background`,
 /// `metadata`, `stream_tool_calls`, and **system messages in `input`**
 /// (use `instructions` instead). Also requires `store: false` and `stream: true`.
+///
+/// Additionally, when a session previously used xAI-hosted tools (web search
+/// etc.), those `web_search_call` input items carry ids longer than 64 chars
+/// and/or tool types Codex does not accept. We flatten them to synthetic
+/// assistant text — the same strategy chat-completions uses for
+/// `BackendToolCall` — and clamp any remaining `id` / `call_id` fields.
 fn sanitize_body_for_codex_backend(mut body: Value, fast_mode: bool) -> Value {
     // Lift system / developer text out of input → instructions (Pi style).
     let mut instruction_parts: Vec<String> = Vec::new();
@@ -102,8 +126,16 @@ fn sanitize_body_for_codex_backend(mut body: Value, fast_mode: bool) -> Value {
                 }
                 continue;
             }
-            // Drop empty items
-            filtered_input.push(item.clone());
+
+            let item_type = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            if HOSTED_TOOL_CALL_TYPES.contains(&item_type) {
+                // Preserve search/context continuity without shipping illegal
+                // ids or tool types Codex cannot round-trip.
+                filtered_input.push(hosted_tool_call_to_assistant_message(item));
+                continue;
+            }
+
+            filtered_input.push(clamp_responses_item_ids(item.clone()));
         }
     }
 
@@ -220,6 +252,90 @@ fn sanitize_body_for_codex_backend(mut body: Value, fast_mode: bool) -> Value {
     }
 
     Value::Object(out)
+}
+
+/// Clamp Responses item `id` / `call_id` fields to the API max length.
+/// Uses a stable suffix truncation so paired call/result ids remain equal
+/// when both sides are clamped the same way.
+fn clamp_responses_id(id: &str) -> String {
+    if id.len() <= RESPONSES_ITEM_ID_MAX_LEN {
+        return id.to_string();
+    }
+    id[id.len() - RESPONSES_ITEM_ID_MAX_LEN..].to_string()
+}
+
+fn clamp_responses_item_ids(mut item: Value) -> Value {
+    if let Value::Object(obj) = &mut item {
+        for key in ["id", "call_id"] {
+            if let Some(Value::String(s)) = obj.get(key)
+                && s.len() > RESPONSES_ITEM_ID_MAX_LEN
+            {
+                let clamped = clamp_responses_id(s);
+                obj.insert(key.to_string(), Value::String(clamped));
+            }
+        }
+    }
+    item
+}
+
+/// Flatten a Grok-hosted tool call into an assistant EasyMessage so Codex
+/// still sees what happened without receiving illegal item types/ids.
+fn hosted_tool_call_to_assistant_message(item: &Value) -> Value {
+    let summary = summarize_hosted_tool_call(item);
+    json!({
+        "role": "assistant",
+        "content": summary,
+    })
+}
+
+fn summarize_hosted_tool_call(item: &Value) -> String {
+    let item_type = item.get("type").and_then(|t| t.as_str()).unwrap_or("tool");
+    match item_type {
+        "web_search_call" => {
+            let action = item.get("action");
+            let action_type = action
+                .and_then(|a| a.get("type"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("search");
+            let query = action
+                .and_then(|a| a.get("query"))
+                .and_then(|q| q.as_str())
+                .unwrap_or("?");
+            let url = action
+                .and_then(|a| a.get("url"))
+                .and_then(|u| u.as_str())
+                .unwrap_or("?");
+            match action_type {
+                "open_page" | "open" => format!("[backend web_search] open: {url}"),
+                "find" | "find_in_page" => {
+                    let pattern = action
+                        .and_then(|a| a.get("pattern"))
+                        .and_then(|p| p.as_str())
+                        .unwrap_or("?");
+                    format!("[backend web_search] find \"{pattern}\" in {url}")
+                }
+                _ => format!("[backend web_search] search: {query}"),
+            }
+        }
+        "code_interpreter_call" => {
+            let code = item.get("code").and_then(|c| c.as_str()).unwrap_or("");
+            let preview = if code.len() > 100 {
+                format!("{}...", &code[..100])
+            } else {
+                code.to_string()
+            };
+            format!("[backend code_interpreter] {preview}")
+        }
+        "custom_tool_call" => {
+            let name = item
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("custom");
+            let input = item.get("input").and_then(|i| i.as_str()).unwrap_or("");
+            format!("[backend {name}] {input}")
+        }
+        other => format!("[backend {other}]"),
+    }
 }
 
 fn extract_input_item_text(item: &Value) -> Option<String> {
@@ -365,5 +481,117 @@ mod tests {
                 .augment_error_message("Bad Request (400)".to_string(), b"Unsupported parameter"),
             "Bad Request (400)"
         );
+    }
+
+    #[test]
+    fn flattens_long_id_web_search_calls_to_assistant_text() {
+        // Real xAI web_search id shape from multi-model sessions (len 83).
+        let long_id =
+            "ws_fa360a91-a3af-9c3d-8e87-af63bef7cd19_call-a13bddef-5064-43a6-894f-30ae6ce39ff3-3";
+        assert_eq!(long_id.len(), 83);
+        assert!(long_id.len() > RESPONSES_ITEM_ID_MAX_LEN);
+
+        let body = json!({
+            "model": "gpt-5.6-sol",
+            "input": [
+                {"role": "user", "content": "find the olive food app"},
+                {
+                    "type": "web_search_call",
+                    "id": long_id,
+                    "status": "completed",
+                    "action": {
+                        "type": "search",
+                        "query": "Olive food app App Store",
+                        "sources": []
+                    }
+                },
+                {"role": "assistant", "content": "It's a barcode scanner."},
+            ],
+        });
+
+        let out = ResponsesBackend::Codex.prepare_request_body(body, false);
+        let input = out["input"].as_array().expect("input array");
+        assert_eq!(input.len(), 3, "web_search should become a text item, not drop");
+
+        // No raw hosted tool types remain.
+        for item in input {
+            let t = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            assert_ne!(t, "web_search_call");
+            if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+                assert!(
+                    id.len() <= RESPONSES_ITEM_ID_MAX_LEN,
+                    "id still too long: {id} (len {})",
+                    id.len()
+                );
+            }
+            if let Some(id) = item.get("call_id").and_then(|v| v.as_str()) {
+                assert!(
+                    id.len() <= RESPONSES_ITEM_ID_MAX_LEN,
+                    "call_id still too long: {id} (len {})",
+                    id.len()
+                );
+            }
+        }
+
+        let flattened = &input[1];
+        assert_eq!(flattened["role"], "assistant");
+        let content = flattened["content"].as_str().expect("assistant text content");
+        assert!(
+            content.contains("[backend web_search]"),
+            "expected summary, got {content}"
+        );
+        assert!(
+            content.contains("Olive food app App Store"),
+            "query should survive in summary: {content}"
+        );
+        // Critical: the illegal long id must not appear anywhere in input.
+        let serialized = serde_json::to_string(&out["input"]).unwrap();
+        assert!(
+            !serialized.contains(long_id),
+            "long web_search id leaked into Codex input"
+        );
+    }
+
+    #[test]
+    fn clamps_oversized_function_call_ids() {
+        let long_call_id = "c".repeat(80);
+        let body = json!({
+            "input": [
+                {
+                    "type": "function_call",
+                    "call_id": long_call_id,
+                    "name": "bash",
+                    "arguments": "{}"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": long_call_id,
+                    "output": "ok"
+                }
+            ]
+        });
+        let out = ResponsesBackend::Codex.prepare_request_body(body, false);
+        let input = out["input"].as_array().unwrap();
+        let call_id = input[0]["call_id"].as_str().unwrap();
+        let out_id = input[1]["call_id"].as_str().unwrap();
+        assert_eq!(call_id.len(), RESPONSES_ITEM_ID_MAX_LEN);
+        assert_eq!(call_id, out_id, "paired call ids must clamp identically");
+    }
+
+    #[test]
+    fn standard_backend_leaves_web_search_items_untouched() {
+        let long_id =
+            "ws_fa360a91-a3af-9c3d-8e87-af63bef7cd19_call-a13bddef-5064-43a6-894f-30ae6ce39ff3-3";
+        let body = json!({
+            "input": [{
+                "type": "web_search_call",
+                "id": long_id,
+                "status": "completed",
+                "action": {"type": "search", "query": "q", "sources": []}
+            }]
+        });
+        let out = ResponsesBackend::Standard.prepare_request_body(body, false);
+        assert_eq!(out["input"][0]["type"], "web_search_call");
+        assert_eq!(out["input"][0]["id"], long_id);
     }
 }
