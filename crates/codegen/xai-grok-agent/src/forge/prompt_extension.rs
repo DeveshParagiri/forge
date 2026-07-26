@@ -1,7 +1,7 @@
 //! Concise Forge orchestration guidance appended after upstream prompts.
 
 use crate::prompt::context::PromptAudience;
-use xai_grok_tools::bridge::ToolBridge;
+use xai_grok_tools::types::template_renderer::TemplateRenderer;
 use xai_grok_tools::types::tool::ToolKind;
 
 const PRIMARY_EXTENSION: &str = r#"<forge_orchestration>
@@ -16,12 +16,8 @@ const SUBAGENT_EXTENSION: &str = r#"<forge_subagent>
 You are one worker in a potentially mixed-model, mixed-harness workflow. Complete only the assigned scope, preserve project instructions, and return concrete findings, edits, tests, and unresolved risks so the parent can synthesize reliably. Do not broaden the task or repeat work assigned elsewhere.
 </forge_subagent>"#;
 
-pub(crate) async fn append(
-    prompt: &mut String,
-    audience: PromptAudience,
-    tool_bridge: &ToolBridge,
-) {
-    let has_task_tool = tool_bridge.tool_for_kind(ToolKind::Task).await.is_some();
+pub(crate) fn append(prompt: &mut String, audience: PromptAudience, renderer: &TemplateRenderer) {
+    let has_task_tool = renderer.tool_for_kind(ToolKind::Task).is_some();
     append_for_available_tools(prompt, audience, has_task_tool);
 }
 

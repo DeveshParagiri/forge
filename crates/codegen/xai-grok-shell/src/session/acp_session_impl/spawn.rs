@@ -30,6 +30,111 @@ fn drop_cli_catchall_allows(
     }
     (kept, dropped)
 }
+/// Build the per-session current-thread tokio runtime.
+///
+/// Construction acquires fds (epoll/kqueue, waker) and fails with
+/// `EMFILE`/`EAGAIN` under resource pressure. Extracted so the containment
+/// contract — exhaustion returns `Err`, never aborts — is testable
+/// (`runtime_containment_tests`).
+pub(crate) fn build_session_runtime() -> std::io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+}
+/// Building the session runtime under fd exhaustion must return `Err`, never
+/// panic (under `panic=abort` a panic kills every live session).
+///
+/// The rlimit is lowered only in a re-exec'd child (the `xai-gix-status`
+/// pattern), so parallel tests are unaffected; stdout markers distinguish
+/// skip (unenforceable environment) from pass/fail.
+#[cfg(all(test, unix))]
+mod runtime_containment_tests {
+    use super::build_session_runtime;
+    /// Env marker dispatching the re-exec'd test binary into child logic.
+    const CHILD_ENV: &str = "XAI_GROK_SHELL_RUNTIME_CONTAINMENT_CHILD";
+    const PASS_MARK: &str = "runtime-build-contained:";
+    const SKIP_MARK: &str = "skip-child:";
+    /// Child: lower RLIMIT_NOFILE, fill the fd table, assert `Err`.
+    fn run_child() -> ! {
+        let mut lim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) } != 0 {
+            println!("{SKIP_MARK} getrlimit failed");
+            std::process::exit(0);
+        }
+        lim.rlim_cur = 64.min(lim.rlim_max);
+        if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &lim) } != 0 {
+            println!("{SKIP_MARK} setrlimit failed");
+            std::process::exit(0);
+        }
+        let mut held = Vec::new();
+        loop {
+            let fd = unsafe { libc::dup(0) };
+            if fd < 0 {
+                break;
+            }
+            held.push(fd);
+            if held.len() > 4096 {
+                println!("{SKIP_MARK} fd limit not enforced");
+                std::process::exit(0);
+            }
+        }
+        match build_session_runtime() {
+            Err(e) => {
+                println!("{PASS_MARK} {e}");
+                std::process::exit(0);
+            }
+            Ok(_) => {
+                println!("{SKIP_MARK} runtime built despite full fd table");
+                std::process::exit(0);
+            }
+        }
+    }
+    /// Doubles as the child entry point when `CHILD_ENV` is set.
+    #[test]
+    fn child_entry_runtime_build_under_fd_exhaustion() {
+        if std::env::var_os(CHILD_ENV).is_some() {
+            run_child();
+        }
+    }
+    #[test]
+    fn runtime_build_failure_is_contained() {
+        let filter = module_path!()
+            .split_once("::")
+            .map(|(_, rest)| rest)
+            .unwrap_or_default();
+        let exe = std::env::current_exe().expect("current_exe");
+        let mut cmd = std::process::Command::new(exe);
+        cmd.arg("--exact")
+            .arg(format!(
+                "{filter}::child_entry_runtime_build_under_fd_exhaustion"
+            ))
+            .arg("--nocapture")
+            .arg("--test-threads=1")
+            .env(CHILD_ENV, "1")
+            .stdin(std::process::Stdio::null());
+        xai_tty_utils::detach_std_command(&mut cmd);
+        let out = cmd.output().expect("spawn child test process");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            out.status.success() && !stderr.contains("panicked at"),
+            "child aborted/panicked instead of containing the failure \
+             (status: {:?})\nstdout:\n{stdout}\nstderr:\n{stderr}",
+            out.status
+        );
+        if stdout.contains(SKIP_MARK) {
+            eprintln!("skipped: {stdout}");
+            return;
+        }
+        assert!(
+            stdout.contains(PASS_MARK),
+            "no pass/skip marker (filter matched nothing?)\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        );
+    }
+}
 #[cfg(test)]
 mod cli_catchall_drop_tests {
     use super::drop_cli_catchall_allows;
@@ -419,6 +524,8 @@ pub(crate) async fn spawn_session_actor(
         top_p: sampling_config.top_p,
         api_backend: sampling_config.api_backend.clone(),
         extra_headers: sampling_config.extra_headers.clone(),
+        query_params: sampling_config.query_params.clone(),
+        env_http_headers: sampling_config.env_http_headers.clone(),
         context_window: context_window_override.unwrap_or(baseline_context_window),
         reasoning_effort: sampling_config.reasoning_effort,
         stream_tool_calls: Some(sampling_config.stream_tool_calls),
@@ -549,19 +656,6 @@ pub(crate) async fn spawn_session_actor(
         },
     );
     let tool_context_for_handle = tool_context.clone();
-    let resolve_search_shadows = || {
-        let user_cfg = crate::config::load_effective_config().ok();
-        let requirements = crate::config::load_merged_requirements();
-        let (find_bfs, grep_ugrep) = crate::util::config::resolve_search_tools_enabled(
-            requirements.as_ref(),
-            user_cfg.as_ref(),
-            None,
-        );
-        xai_grok_tools::computer::local::SearchShadowConfig {
-            find_bfs,
-            grep_ugrep,
-        }
-    };
     let cursor_harness = false;
     let terminal_backend_kind = select_terminal_backend_kind(
         startup_hints.is_subagent,
@@ -570,6 +664,25 @@ pub(crate) async fn spawn_session_actor(
         tool_context.gateway.is_some(),
         cursor_harness,
     );
+    let effective_cfg = matches!(
+        terminal_backend_kind,
+        TerminalBackendKind::LocalPersistent | TerminalBackendKind::LocalNonPersistent
+    )
+    .then(crate::config::load_effective_config)
+    .and_then(Result::ok);
+    let resolve_search_shadows = || {
+        let requirements = crate::config::load_merged_requirements();
+        let (find_bfs, grep_ugrep) = crate::util::config::resolve_search_tools_enabled(
+            requirements.as_ref(),
+            effective_cfg.as_ref(),
+            None,
+        );
+        xai_grok_tools::computer::local::SearchShadowConfig {
+            find_bfs,
+            grep_ugrep,
+        }
+    };
+    let resolve_policy = || crate::util::config::resolve_shell_env_policy(effective_cfg.as_ref());
     let terminal_backend: std::sync::Arc<dyn xai_grok_tools::computer::types::TerminalBackend> =
         match terminal_backend_kind {
             TerminalBackendKind::ReuseParent => parent_terminal_backend
@@ -581,9 +694,12 @@ pub(crate) async fn spawn_session_actor(
                 ))
                     as std::sync::Arc<dyn xai_grok_tools::computer::types::TerminalBackend>
             }
-            TerminalBackendKind::LocalPersistent => std::sync::Arc::new(
-                LocalTerminalBackend::new_local_with_persistent_shell(resolve_search_shadows()),
-            ),
+            TerminalBackendKind::LocalPersistent => {
+                std::sync::Arc::new(LocalTerminalBackend::new_local_with_persistent_shell(
+                    resolve_search_shadows(),
+                    resolve_policy(),
+                ))
+            }
             TerminalBackendKind::LocalNonPersistent => {
                 let login_shell_capture = crate::util::config::resolve_login_shell_capture(
                     remote_settings.as_ref().and_then(|r| r.login_shell_capture),
@@ -591,6 +707,7 @@ pub(crate) async fn spawn_session_actor(
                 std::sync::Arc::new(LocalTerminalBackend::new_local_with_login_shell_capture(
                     resolve_search_shadows(),
                     login_shell_capture,
+                    resolve_policy(),
                 ))
             }
         };
@@ -894,6 +1011,7 @@ pub(crate) async fn spawn_session_actor(
         user_question_tx: user_question_tx.clone(),
         subagent_depth: tool_context.subagent_depth,
         session_id_str: session_info.id.0.to_string(),
+        blocking_wait_depth: tool_context.blocking_wait_depth.clone(),
         respect_gitignore,
         path_not_found_hints,
         scheduler_background_loops: crate::util::config::resolve_scheduler_background_loops(
@@ -2178,10 +2296,17 @@ pub(crate) async fn spawn_session_on_thread(
                 };
                 (initial_last_compaction, initial_prompt_texts)
             };
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("session runtime");
+            let rt = match build_session_runtime() {
+                Ok(rt) => rt,
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        "failed to build session runtime (resource exhaustion?)"
+                    );
+                    let _ = init_tx.send(Err(xai_grok_agent::AgentBuildError::RuntimeBuild(e)));
+                    return;
+                }
+            };
             let local = tokio::task::LocalSet::new();
             local.block_on(&rt, async move {
                 let _trace_span = parent_traceparent.as_ref().map(|tp| {
@@ -2314,15 +2439,28 @@ pub(crate) async fn spawn_session_on_thread(
                 }));
                 let _ = session_done_rx.await;
             });
-        })
-        .expect("spawn session thread");
+        });
+    let join_handle = match join_handle {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                "failed to spawn session thread (thread/PID limit or memory pressure?)"
+            );
+            return Err(
+                acp::Error::internal_error().data(format!("failed to spawn session thread: {e}"))
+            );
+        }
+    };
     let init = init_rx
         .await
         .map_err(|_| {
             tracing::error!("Session thread panicked during initialization");
             acp::Error::internal_error().data("session thread panicked during initialization")
         })?
-        .map_err(|e| acp::Error::internal_error().data(format!("agent building failed: {e}")))?;
+        .map_err(|e| {
+            acp::Error::internal_error().data(format!("session initialization failed: {e}"))
+        })?;
     Ok((
         init.handle,
         init.permission_events_rx,

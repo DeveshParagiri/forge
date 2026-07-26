@@ -125,6 +125,7 @@ pub(crate) struct AgentRebuildSpec {
     pub user_question_tx: UnboundedSender<UserQuestionRequest>,
     pub subagent_depth: u32,
     pub session_id_str: String,
+    pub blocking_wait_depth: Arc<crate::tools::tool_context::BlockingWaitState>,
     pub respect_gitignore: bool,
     pub path_not_found_hints: bool,
     pub scheduler_background_loops: bool,
@@ -222,6 +223,7 @@ impl AgentRebuildSpec {
             user_question_tx,
             subagent_depth,
             session_id_str,
+            blocking_wait_depth,
             respect_gitignore,
             path_not_found_hints,
             scheduler_background_loops,
@@ -332,9 +334,12 @@ impl AgentRebuildSpec {
             };
             let native_backend: Arc<
                 dyn xai_grok_tools::implementations::grok_build::task::backend::SubagentBackend,
-            > = Arc::new(ChannelBackend::new(event_tx.clone()));
-            // Forge: preserve native coordinator behavior while routing the
-            // explicit claude-code/codex-cli types to headless CLI adapters.
+            > = Arc::new(ChannelBackend::for_session(
+                event_tx.clone(),
+                session_id_str.clone(),
+            ));
+            // Forge: preserve the session-bound native coordinator while
+            // routing explicit claude-code/codex-cli types to CLI adapters.
             let backend = SubagentBackendResource(Arc::new(
                 crate::forge::external_subagents::CompositeSubagentBackend::new(
                     native_backend,
@@ -353,6 +358,12 @@ impl AgentRebuildSpec {
             agent
                 .tool_bridge()
                 .update_resource(SubagentEventSender(event_tx))
+                .await;
+            agent
+                .tool_bridge()
+                .update_resource(crate::tools::tool_context::subagent_foreground_wait(
+                    Arc::clone(blocking_wait_depth),
+                ))
                 .await;
             if let Some(buffer) = monitor_event_buffer.clone() {
                 agent.tool_bridge().update_resource(buffer).await;
@@ -444,6 +455,7 @@ pub(crate) fn test_rebuild_spec_default() -> Arc<AgentRebuildSpec> {
         user_question_tx: uq_tx,
         subagent_depth: 0,
         session_id_str: "test-session".to_string(),
+        blocking_wait_depth: Arc::new(crate::tools::tool_context::BlockingWaitState::new()),
         respect_gitignore: false,
         scheduler_background_loops: true,
         path_not_found_hints: false,

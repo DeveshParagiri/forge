@@ -412,6 +412,29 @@ where
         },
     }
 }
+/// Nested `slash_command_tags` map: present-but-malformed → `None` (warn) so one
+/// bad value cannot fail the whole [`RemoteSettings`] parse.
+fn deserialize_tolerant_slash_command_tags<'de, D>(
+    deserializer: D,
+) -> Result<Option<std::collections::BTreeMap<String, String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    match value {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(v) => match serde_json::from_value::<std::collections::BTreeMap<String, String>>(v) {
+            Ok(m) => Ok(Some(m)),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "ignoring malformed remote slash_command_tags; falling through to local/none"
+                );
+                Ok(None)
+            }
+        },
+    }
+}
 /// Remote settings fetched from cli-chat-proxy `GET /v1/settings`.
 ///
 /// All fields are `Option` with `#[serde(default)]` so that:
@@ -688,6 +711,9 @@ pub struct RemoteSettings {
     /// Tighten-only, like `external_otel_disabled`.
     #[serde(default)]
     pub external_otel_content_gates_locked: Option<bool>,
+    /// `Some(false)` disarms managed-config signature verification (remote kill-switch).
+    #[serde(default)]
+    pub managed_config_signature_verification: Option<bool>,
     #[serde(default)]
     pub telemetry_enabled: Option<bool>,
     /// Telemetry mode override (string): `"session-metrics"`, `"full"`, `"off"`.
@@ -715,6 +741,12 @@ pub struct RemoteSettings {
     /// `None` or `[]` = no tips shown.
     #[serde(default)]
     pub tips: Option<Vec<String>>,
+    /// Free-form per-command tags (e.g. `new`, `beta`) rendered as a bracketed
+    /// label in the slash dropdown, keyed by canonical command name. Present-but-
+    /// malformed → `None` (does not fail the whole parse); local
+    /// `[slash_command_tags]` overrides per key. See `resolve_slash_command_tags`.
+    #[serde(default, deserialize_with = "deserialize_tolerant_slash_command_tags")]
+    pub slash_command_tags: Option<std::collections::BTreeMap<String, String>>,
     /// When present, controls the non-Git-repo warning at session start.
     /// Controlled via remote settings (`non_git_warning` in `grok_build_settings`).
     /// Takes precedence over `[features] non_git_warning` in config.toml:
@@ -790,6 +822,9 @@ pub struct RemoteSettings {
     /// (`grok-imagine-image-quality`). Absent/empty → default model.
     #[serde(default)]
     pub image_gen_model_override: Option<String>,
+    /// Optional Imagine model override for `image_edit`. Absent/empty → default.
+    #[serde(default)]
+    pub image_edit_model_override: Option<String>,
     /// Video tools / `/imagine-video`. `None` → env / `[features]` / default on.
     #[serde(default)]
     pub video_gen_enabled: Option<bool>,

@@ -277,6 +277,7 @@ async fn tasks_snapshot(toolset: &FinalizedToolset) -> TasksSnapshotResponse {
                         TaskKind::Monitor => "monitor".to_owned(),
                     },
                     started_at: DateTime::<Utc>::from(t.start_time).to_rfc3339(),
+                    description: t.description,
                 }
             })
             .collect(),
@@ -525,10 +526,27 @@ impl WorkspaceRpcHandler {
                 let cwd = self.workspace.root_cwd()?;
                 let mut results = Vec::new();
                 for ref_path in &refs {
-                    let full_path = if std::path::Path::new(ref_path).is_absolute() {
+                    let requested_path = if std::path::Path::new(ref_path).is_absolute() {
                         std::path::PathBuf::from(ref_path)
                     } else {
                         cwd.join(ref_path)
+                    };
+                    let full_path = match self
+                        .workspace
+                        .confine_to_workspace_root(&requested_path)
+                        .await
+                    {
+                        Ok((confined, _)) => confined,
+                        Err(e) => {
+                            results.push(serde_json::json!({
+                                "path": requested_path.to_string_lossy(),
+                                "ref": ref_path,
+                                "exists": false,
+                                "content": Value::Null,
+                                "error": e.to_string(),
+                            }));
+                            continue;
+                        }
                     };
                     let exists = full_path.exists();
                     let content = if exists {
@@ -599,6 +617,9 @@ impl WorkspaceRpcHandler {
                     true,
                 );
                 Ok(Value::Array(plugins))
+            }
+            <ExportGithubReq as WorkspaceRpc>::METHOD => {
+                dispatch_op::<ExportGithubReq>(params, &self.workspace, None).await
             }
             <HookRegistryReq as WorkspaceRpc>::METHOD => {
                 dispatch_op::<HookRegistryReq>(params, &self.workspace, None).await
@@ -1168,7 +1189,9 @@ impl ToolServerHandler for WorkspaceRpcHandler {
 mod tests {
     use super::*;
     use crate::capability::CapabilityMode;
-    use crate::handle::tests::{background_capable_cfg, make_handle, start_background_sleep};
+    use crate::handle::tests::{
+        background_capable_cfg, make_confining_handle, make_handle, start_background_sleep,
+    };
     use xai_grok_tools::implementations::grok_build::scheduler::types::{
         ScheduledTask, SchedulerState,
     };
@@ -1441,6 +1464,11 @@ mod tests {
         assert_eq!(task.task_id, bg.task_id);
         assert_eq!(task.kind, "bash");
         assert!(
+            task.description.is_none(),
+            "start_background_sleep does not set description: {:?}",
+            task.description
+        );
+        assert!(
             DateTime::parse_from_rfc3339(&task.started_at).is_ok(),
             "started_at must be RFC3339: {}",
             task.started_at
@@ -1450,6 +1478,24 @@ mod tests {
             "no scheduler resource in this toolset: {:?}",
             snap.scheduled_tasks
         );
+        {
+            use crate::handle::tests::terminal_run_request;
+            let mut req = terminal_run_request("sleep 30", out_dir.path(), "snap-desc-task");
+            req.description = Some("build frontend".into());
+            let desc_bg = session
+                .terminal_backend()
+                .run_background(req)
+                .await
+                .expect("start described background task");
+            let snap = snapshot(&handler).await;
+            let described = snap
+                .background_tasks
+                .iter()
+                .find(|t| t.task_id == desc_bg.task_id)
+                .expect("described task in snapshot");
+            assert_eq!(described.description.as_deref(), Some("build frontend"));
+            session.terminal_backend().kill_task(&desc_bg.task_id).await;
+        }
         session.terminal_backend().kill_task(&bg.task_id).await;
         let snap = snapshot(&handler).await;
         assert!(
@@ -2474,6 +2520,34 @@ mod tests {
         );
     }
     #[tokio::test]
+    async fn dispatch_resolve_file_references_rejects_outside_root_when_confined() {
+        let handle = make_confining_handle();
+        let handler = WorkspaceRpcHandler::new(handle);
+        let secret = std::env::temp_dir().join("h1_3885911_outside_secret.txt");
+        std::fs::write(&secret, "OUTSIDE_SECRET").unwrap();
+        let params = serde_json::json!({
+            "refs": [secret.to_string_lossy(), "../escape.txt"]
+        });
+        let result = handler
+            .dispatch("workspace.resolve_file_references", params, None)
+            .await
+            .expect("dispatch itself should succeed");
+        let arr = result.as_array().expect("results array");
+        assert_eq!(arr.len(), 2);
+        for entry in arr {
+            assert_eq!(entry["exists"], serde_json::Value::Bool(false));
+            assert_eq!(entry["content"], serde_json::Value::Null);
+            assert!(
+                entry["error"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("escapes workspace root"),
+                "escape should be rejected, not read: {entry:?}"
+            );
+        }
+        std::fs::remove_file(&secret).ok();
+    }
+    #[tokio::test]
     async fn handle_hook_pause_resume_are_noops() {
         let handle = make_handle();
         let handler = WorkspaceRpcHandler::new(handle);
@@ -3033,6 +3107,7 @@ mod tests {
             <InstallPluginReq as WorkspaceRpc>::METHOD,
             <RefreshPluginsReq as WorkspaceRpc>::METHOD,
             <DiscoverPluginsReq as WorkspaceRpc>::METHOD,
+            <ExportGithubReq as WorkspaceRpc>::METHOD,
         ];
         let skipped_global_db_mutators = [
             <WorktreeGcReq as WorkspaceRpc>::METHOD,

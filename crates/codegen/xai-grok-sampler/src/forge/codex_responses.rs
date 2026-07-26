@@ -511,7 +511,11 @@ mod tests {
 
         let out = ResponsesBackend::Codex.prepare_request_body(body, false);
         let input = out["input"].as_array().expect("input array");
-        assert_eq!(input.len(), 3, "web_search should become a text item, not drop");
+        assert_eq!(
+            input.len(),
+            3,
+            "web_search should become a text item, not drop"
+        );
 
         // No raw hosted tool types remain.
         for item in input {
@@ -535,7 +539,9 @@ mod tests {
 
         let flattened = &input[1];
         assert_eq!(flattened["role"], "assistant");
-        let content = flattened["content"].as_str().expect("assistant text content");
+        let content = flattened["content"]
+            .as_str()
+            .expect("assistant text content");
         assert!(
             content.contains("[backend web_search]"),
             "expected summary, got {content}"

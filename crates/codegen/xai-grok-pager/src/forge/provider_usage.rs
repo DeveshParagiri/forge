@@ -11,10 +11,7 @@ use crate::scrollback::block::RenderBlock;
 ///
 /// Keeping this branch in Forge lets every provider share upstream's session
 /// usage block while still using its own account/quota surface afterward.
-pub(crate) fn account_follow_up(
-    app: &mut AppView,
-    id: crate::app::agent::AgentId,
-) -> Vec<Effect> {
+pub(crate) fn account_follow_up(app: &mut AppView, id: crate::app::agent::AgentId) -> Vec<Effect> {
     let Some(provider) = app
         .agents
         .get(&id)
