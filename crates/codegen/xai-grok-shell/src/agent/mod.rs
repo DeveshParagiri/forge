@@ -13,6 +13,7 @@ pub mod init;
 pub mod model_providers;
 pub mod models;
 pub mod mvp_agent;
+pub(crate) mod otel_gate;
 /// Compatibility exports for downstream provider-login consumers.
 pub mod provider_auth;
 /// Compatibility exports for the history transform.
