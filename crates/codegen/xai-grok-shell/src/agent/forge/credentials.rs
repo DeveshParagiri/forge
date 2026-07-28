@@ -1,32 +1,6 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
-
-use crate::agent::config::{EnvKeys, ModelEntry, ResolvedCredentials};
-
-/// On-disk store for BYOK provider keys that are not SpaceXAI session auth.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ProviderKeysFile {
-    #[serde(default)]
-    pub openrouter: Option<ProviderKeyEntry>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderKeyEntry {
-    pub api_key: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub updated_at: Option<String>,
-}
-
-pub(super) fn grok_home() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".grok")
-}
-
-pub fn provider_keys_path() -> PathBuf {
-    grok_home().join("provider_keys.json")
-}
+use crate::agent::config::EnvKeys;
 
 pub fn codex_auth_path() -> PathBuf {
     dirs::home_dir()
@@ -35,108 +9,29 @@ pub fn codex_auth_path() -> PathBuf {
         .join("auth.json")
 }
 
-pub fn load_provider_keys() -> ProviderKeysFile {
-    let path = provider_keys_path();
-    let Ok(raw) = std::fs::read_to_string(&path) else {
-        return ProviderKeysFile::default();
-    };
-    serde_json::from_str(&raw).unwrap_or_default()
+fn read_codex_token_field(path: &Path, field: &str) -> Option<String> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    value
+        .get("tokens")
+        .and_then(|tokens| tokens.get(field))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
 }
 
-pub fn save_provider_keys(file: &ProviderKeysFile) -> std::io::Result<()> {
-    let path = provider_keys_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let body = serde_json::to_string_pretty(file)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    // TODO: Make provider-key writes atomic in the dedicated correctness follow-up.
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)?;
-        file.write_all(body.as_bytes())?;
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::write(&path, body)?;
-    }
-    Ok(())
-}
-
-pub fn set_openrouter_api_key(api_key: &str) -> std::io::Result<()> {
-    let key = api_key.trim();
-    if key.is_empty() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "empty API key",
-        ));
-    }
-    let mut file = load_provider_keys();
-    file.openrouter = Some(ProviderKeyEntry {
-        api_key: key.to_string(),
-        updated_at: Some(chrono_lite_now()),
-    });
-    save_provider_keys(&file)
-}
-
-fn chrono_lite_now() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
-    format!("unix:{secs}")
-}
-
-/// Read OpenRouter key: env first, then provider_keys.json.
-pub fn read_openrouter_api_key() -> Option<String> {
-    if let Ok(value) = std::env::var("OPENROUTER_API_KEY") {
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_string());
-        }
-    }
-    load_provider_keys()
-        .openrouter
-        .map(|entry| entry.api_key)
-        .map(|key| key.trim().to_string())
-        .filter(|key| !key.is_empty())
-}
-
-/// Read Codex ChatGPT OAuth access token from `~/.codex/auth.json`.
+/// Read the ChatGPT OAuth access token owned by the Codex CLI.
 pub fn read_codex_access_token() -> Option<String> {
-    let raw = std::fs::read_to_string(codex_auth_path()).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    value
-        .get("tokens")
-        .and_then(|tokens| tokens.get("access_token"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-        .map(str::to_owned)
+    read_codex_token_field(&codex_auth_path(), "access_token")
 }
 
-/// Read Codex ChatGPT account id.
+/// Read the ChatGPT account id owned by the Codex CLI.
 pub fn read_codex_account_id() -> Option<String> {
-    let raw = std::fs::read_to_string(codex_auth_path()).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    value
-        .get("tokens")
-        .and_then(|tokens| tokens.get("account_id"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|account_id| !account_id.is_empty())
-        .map(str::to_owned)
+    read_codex_token_field(&codex_auth_path(), "account_id")
 }
 
-/// Whether environment key names should fall back to Codex credentials.
+/// Whether environment key names request the narrow Codex credential fallback.
 pub fn env_requests_codex_token(names: &[&str]) -> bool {
     names.iter().any(|key| {
         key.eq_ignore_ascii_case("CODEX_ACCESS_TOKEN")
@@ -144,80 +39,102 @@ pub fn env_requests_codex_token(names: &[&str]) -> bool {
     })
 }
 
-/// Whether environment key names should fall back to OpenRouter credentials.
-pub fn env_requests_openrouter_token(names: &[&str]) -> bool {
-    names
-        .iter()
-        .any(|key| key.eq_ignore_ascii_case("OPENROUTER_API_KEY"))
+fn codex_file_fallback_allowed(base_url: &str, env_key: Option<&EnvKeys>) -> bool {
+    let names = env_key.map(EnvKeys::names).unwrap_or_default();
+    super::identity::is_codex_auth_base(base_url) && env_requests_codex_token(&names)
 }
 
-pub(crate) fn resolve_own(api_key: Option<&str>, env_key: Option<&EnvKeys>) -> Option<String> {
+/// Resolve ordinary static/env credentials, with one additional fallback to
+/// the Codex CLI credential file only when the configured env key explicitly
+/// names the ChatGPT subscription token and the model uses the canonical
+/// official HTTPS Codex endpoint.
+pub(crate) fn resolve_own(
+    api_key: Option<&str>,
+    env_key: Option<&EnvKeys>,
+    base_url: &str,
+) -> Option<String> {
     api_key
         .filter(|key| !key.trim().is_empty())
         .map(str::to_owned)
         .or_else(|| env_key.and_then(EnvKeys::resolve_value))
         .or_else(|| {
-            let names = env_key.map(EnvKeys::names).unwrap_or_default();
-            let name_refs: Vec<&str> = names.to_vec();
-            if env_requests_codex_token(&name_refs) {
-                read_codex_access_token()
-            } else if env_requests_openrouter_token(&name_refs) {
-                read_openrouter_api_key()
-            } else {
-                None
-            }
+            codex_file_fallback_allowed(base_url, env_key)
+                .then(read_codex_access_token)
+                .flatten()
         })
 }
 
-pub(crate) fn resolve(model: &ModelEntry, session_key: Option<&str>) -> ResolvedCredentials {
-    let info = model.info();
-    let (api_key, base_url, auth_type) = if let Some(key) = model.own_credential() {
-        (
-            Some(key),
-            info.base_url.clone(),
-            xai_chat_state::AuthType::ApiKey,
-        )
-    } else if let Some(key) =
-        session_key.filter(|_| !super::identity::is_third_party_model_base(&info.base_url))
-    {
-        (
-            Some(key.to_owned()),
-            info.base_url.clone(),
-            xai_chat_state::AuthType::SessionToken,
-        )
-    } else if !super::identity::is_third_party_model_base(&info.base_url)
-        && let Ok(key) = crate::agent::auth_method::read_xai_api_key_env()
-    {
-        let url = model
-            .api_base_url
-            .clone()
-            .unwrap_or_else(|| info.base_url.clone());
-        (Some(key), url, xai_chat_state::AuthType::ApiKey)
-    } else {
-        if let Some(ref env_keys) = model.env_key
-            && !env_keys.is_empty()
-        {
-            tracing::warn!(
-                model = %info.model,
-                env_key = %env_keys,
-                "model has env_key configured but none of the environment variables are set — requests will have no API key",
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn auth_file(body: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("auth.json");
+        std::fs::write(&path, body).unwrap();
+        (dir, path)
+    }
+
+    #[test]
+    fn fixture_parser_reads_token_and_account() {
+        let (_dir, path) = auth_file(
+            r#"{"tokens":{"access_token":"  token-value  ","account_id":" account-1 "}}"#,
+        );
+        assert_eq!(
+            read_codex_token_field(&path, "access_token").as_deref(),
+            Some("token-value")
+        );
+        assert_eq!(
+            read_codex_token_field(&path, "account_id").as_deref(),
+            Some("account-1")
+        );
+    }
+
+    #[test]
+    fn fixture_parser_fails_closed_for_missing_blank_or_malformed_values() {
+        let (_missing_dir, missing) = auth_file(r#"{"tokens":{}}"#);
+        assert!(read_codex_token_field(&missing, "access_token").is_none());
+
+        let (_blank_dir, blank) = auth_file(r#"{"tokens":{"access_token":"  "}}"#);
+        assert!(read_codex_token_field(&blank, "access_token").is_none());
+
+        let (_bad_dir, bad) = auth_file("not-json");
+        assert!(read_codex_token_field(&bad, "access_token").is_none());
+
+        let nonexistent = bad.with_file_name("absent.json");
+        assert!(read_codex_token_field(&nonexistent, "access_token").is_none());
+    }
+
+    #[test]
+    fn only_explicit_codex_env_names_enable_file_fallback() {
+        assert!(env_requests_codex_token(&["CODEX_ACCESS_TOKEN"]));
+        assert!(env_requests_codex_token(&["openai_codex_token"]));
+        assert!(!env_requests_codex_token(&["OPENROUTER_API_KEY"]));
+        assert!(!env_requests_codex_token(&[]));
+    }
+
+    #[test]
+    fn codex_file_fallback_is_bound_to_canonical_official_endpoint() {
+        let env_key = EnvKeys::single("CODEX_ACCESS_TOKEN");
+        assert!(codex_file_fallback_allowed(
+            "https://chatgpt.com/backend-api/codex",
+            Some(&env_key)
+        ));
+        for url in [
+            "https://evil.example/v1",
+            "https://chatgpt.com.attacker.example/backend-api/codex",
+            "https://proxy.example/backend-api/codex",
+            "http://chatgpt.com/backend-api/codex",
+            "https://chatgpt.com/backend-api/codex/v1",
+        ] {
+            assert!(
+                !codex_file_fallback_allowed(url, Some(&env_key)),
+                "allowed Codex auth-file fallback for {url}"
             );
         }
-        (
-            None,
-            info.base_url.clone(),
-            xai_chat_state::AuthType::ApiKey,
-        )
-    };
-    tracing::debug!(
-        model = %info.model,
-        auth_type = ?auth_type,
-        "resolved credentials"
-    );
-    ResolvedCredentials {
-        api_key,
-        base_url,
-        auth_type,
-        auth_scheme: info.auth_scheme,
+        assert!(!codex_file_fallback_allowed(
+            "https://chatgpt.com/backend-api/codex",
+            Some(&EnvKeys::single("OPENROUTER_API_KEY"))
+        ));
     }
 }

@@ -158,6 +158,10 @@ pub(crate) fn stream_responses_tracked<'a>(
         // Forge: construct backend-agnostic terminal recovery state.
         let mut terminal_recovery = ResponsesTerminalRecovery::default();
         let mut reasoning_acc = String::new();
+        // Responses reasoning summaries are split into independently indexed
+        // parts. Preserve that boundary so adjacent Markdown headings do not
+        // collapse into glued text (or `****`) in the thinking renderer.
+        let mut last_reasoning_summary_part: Option<(String, u32, u32)> = None;
         let mut last_content_chunk_at = Instant::now();
 
         // Maps Responses API `output_index` to our tool-only `tool_index`.
@@ -255,11 +259,25 @@ pub(crate) fn stream_responses_tracked<'a>(
                                 request_id: request_id.clone(),
                             };
                         }
+
+                        let part = (
+                            summary_event.item_id,
+                            summary_event.output_index,
+                            summary_event.summary_index,
+                        );
+                        let text = match last_reasoning_summary_part.as_ref() {
+                            Some(previous) if previous != &part && !delta.starts_with('\n') => {
+                                format!("\n{delta}")
+                            }
+                            _ => delta,
+                        };
+                        last_reasoning_summary_part = Some(part);
+
                         chunk_index += 1;
                         yield SamplingEvent::ChannelToken {
                             request_id: request_id.clone(),
                             channel: SamplingChannel::Reasoning,
-                            text: delta,
+                            text,
                             chunk_index,
                         };
                     }
@@ -654,6 +672,23 @@ mod tests {
         })
     }
 
+    fn reasoning_summary_delta(
+        item_id: &str,
+        output_index: u32,
+        summary_index: u32,
+        delta: &str,
+    ) -> rs::ResponseStreamEvent {
+        rs::ResponseStreamEvent::ResponseReasoningSummaryTextDelta(
+            rs_types::ResponseReasoningSummaryTextDeltaEvent {
+                sequence_number: 0,
+                item_id: item_id.into(),
+                output_index,
+                summary_index,
+                delta: delta.into(),
+            },
+        )
+    }
+
     fn completed_event() -> rs::ResponseStreamEvent {
         rs::ResponseStreamEvent::ResponseCompleted(rs_types::ResponseCompletedEvent {
             response: empty_completed_response(),
@@ -725,6 +760,140 @@ mod tests {
             }
             other => panic!("expected Completed, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn reasoning_summary_parts_are_separated_by_newlines() {
+        // Codex emits independently indexed summary parts without trailing
+        // whitespace. The stream transform must preserve their boundary while
+        // leaving token deltas within the same part untouched.
+        let raw = stream::iter(vec![
+            Ok(reasoning_summary_delta(
+                "reasoning-1",
+                0,
+                0,
+                "**Identifying architectural",
+            )),
+            Ok(reasoning_summary_delta(
+                "reasoning-1",
+                0,
+                0,
+                " limitations**",
+            )),
+            Ok(reasoning_summary_delta(
+                "reasoning-1",
+                0,
+                1,
+                "**Evaluating upload behavior**",
+            )),
+            Ok(reasoning_summary_delta(
+                "reasoning-1",
+                0,
+                2,
+                "**Optimizing request flow**",
+            )),
+            Ok(completed_event()),
+        ])
+        .boxed();
+        let events = collect(stream_responses(
+            raw,
+            None,
+            rid(),
+            Duration::from_secs(60),
+            None,
+        ))
+        .await;
+
+        let reasoning_tokens: Vec<&str> = events
+            .iter()
+            .filter_map(|event| match event {
+                SamplingEvent::ChannelToken {
+                    channel: SamplingChannel::Reasoning,
+                    text,
+                    ..
+                } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            reasoning_tokens,
+            vec![
+                "**Identifying architectural",
+                " limitations**",
+                "\n**Evaluating upload behavior**",
+                "\n**Optimizing request flow**",
+            ]
+        );
+
+        let joined = reasoning_tokens.concat();
+        assert_eq!(
+            joined,
+            "**Identifying architectural limitations**\n**Evaluating upload behavior**\n**Optimizing request flow**"
+        );
+        assert!(!joined.contains("limitationsEvaluating"));
+        assert!(!joined.contains("****"));
+    }
+
+    #[tokio::test]
+    async fn reasoning_summary_boundary_preserves_existing_leading_newline() {
+        let raw = stream::iter(vec![
+            Ok(reasoning_summary_delta("reasoning-1", 0, 0, "first")),
+            Ok(reasoning_summary_delta("reasoning-1", 0, 1, "\nsecond")),
+            Ok(completed_event()),
+        ])
+        .boxed();
+        let events = collect(stream_responses(
+            raw,
+            None,
+            rid(),
+            Duration::from_secs(60),
+            None,
+        ))
+        .await;
+
+        let reasoning_tokens: Vec<&str> = events
+            .iter()
+            .filter_map(|event| match event {
+                SamplingEvent::ChannelToken {
+                    channel: SamplingChannel::Reasoning,
+                    text,
+                    ..
+                } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(reasoning_tokens, vec!["first", "\nsecond"]);
+    }
+
+    #[tokio::test]
+    async fn reasoning_summary_boundary_includes_item_and_output_identity() {
+        let raw = stream::iter(vec![
+            Ok(reasoning_summary_delta("reasoning-1", 0, 0, "first")),
+            Ok(reasoning_summary_delta("reasoning-2", 1, 0, "second")),
+            Ok(completed_event()),
+        ])
+        .boxed();
+        let events = collect(stream_responses(
+            raw,
+            None,
+            rid(),
+            Duration::from_secs(60),
+            None,
+        ))
+        .await;
+
+        let joined: String = events
+            .iter()
+            .filter_map(|event| match event {
+                SamplingEvent::ChannelToken {
+                    channel: SamplingChannel::Reasoning,
+                    text,
+                    ..
+                } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(joined, "first\nsecond");
     }
 
     #[test]

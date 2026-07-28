@@ -14,7 +14,7 @@ pub mod model_providers;
 pub mod models;
 pub mod mvp_agent;
 pub(crate) mod otel_gate;
-/// Compatibility exports for downstream provider-login consumers.
+/// Compatibility exports for the pager's provider-aware usage API.
 pub mod provider_auth;
 /// Compatibility exports for the history transform.
 pub mod provider_history;

@@ -1,11 +1,11 @@
-/// Provider families supported by the Forge model packs.
+/// Provider families with additional Forge behavior.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderId {
-    /// SpaceXAI / Grok subscription (existing `grok login` / `~/.grok/auth.json`).
+    /// SpaceXAI / Grok subscription (`grok login` / `~/.grok/auth.json`).
     Spacexai,
     /// OpenAI Codex via ChatGPT Plus/Pro OAuth (`~/.codex/auth.json`).
     OpenaiCodex,
-    /// OpenRouter API key (`~/.grok/provider_keys.json` + `OPENROUTER_API_KEY`).
+    /// OpenRouter through upstream model-provider credentials.
     Openrouter,
 }
 
@@ -53,22 +53,56 @@ impl ProviderId {
     }
 }
 
-/// Resolve the three Forge provider families from a model endpoint.
-///
-/// TODO: Replace substring classification with parsed-host matching in the
-/// dedicated hardening follow-up. This intentionally preserves current broad
-/// third-party semantics.
+fn parsed_https_url(base_url: &str) -> Option<reqwest::Url> {
+    let url = reqwest::Url::parse(base_url).ok()?;
+    (url.scheme() == "https").then_some(url)
+}
+
+fn path_has_prefix(path: &str, prefix: &str) -> bool {
+    path == prefix
+        || path
+            .strip_prefix(prefix)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+pub(crate) fn is_codex_base(base_url: &str) -> bool {
+    let Some(url) = parsed_https_url(base_url) else {
+        return false;
+    };
+    url.host_str() == Some("chatgpt.com") && path_has_prefix(url.path(), "/backend-api/codex")
+}
+
+/// True only for the canonical ChatGPT Codex base URL allowed to source an
+/// OAuth bearer from `~/.codex/auth.json`. Request adaptation may support
+/// subpaths, but credential-file discovery is deliberately exact and narrower.
+pub(crate) fn is_codex_auth_base(base_url: &str) -> bool {
+    base_url == "https://chatgpt.com/backend-api/codex"
+}
+
+fn is_openrouter_base(base_url: &str) -> bool {
+    parsed_https_url(base_url)
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .is_some_and(|host| host == "openrouter.ai")
+}
+
+fn is_spacexai_base(base_url: &str) -> bool {
+    parsed_https_url(base_url)
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .is_some_and(|host| {
+            host == "x.ai"
+                || host.ends_with(".x.ai")
+                || host == "grok.com"
+                || host.ends_with(".grok.com")
+        })
+}
+
+/// Resolve Forge provider identity from positively matched HTTPS hosts.
 pub fn provider_id_for_base(base_url: &str) -> Option<ProviderId> {
-    let url = base_url.to_ascii_lowercase();
-    if url.contains("chatgpt.com") || url.contains("backend-api/codex") {
+    if is_codex_base(base_url) {
         Some(ProviderId::OpenaiCodex)
-    } else if url.contains("openrouter.ai") {
+    } else if is_openrouter_base(base_url) {
         Some(ProviderId::Openrouter)
-    } else if url.contains("api.x.ai")
-        || url.contains("grok.com")
-        || url.contains("spacexai")
-        || url.contains(".x.ai")
-    {
+    } else if is_spacexai_base(base_url) {
         Some(ProviderId::Spacexai)
     } else {
         None
@@ -83,13 +117,11 @@ pub fn provider_scope_for_base(base_url: &str) -> String {
         .unwrap_or_else(|| base_url.trim().trim_end_matches('/').to_ascii_lowercase())
 }
 
-/// True when `base_url` is a third-party host that must never receive Grok session OIDC.
+/// True unless the endpoint is a positively recognized HTTPS xAI host.
+/// Unknown, custom, malformed, and cleartext endpoints therefore fail closed
+/// for xAI-only turn capabilities and first-party bearer refresh behavior.
 pub fn is_third_party_model_base(base_url: &str) -> bool {
-    let u = base_url.to_ascii_lowercase();
-    u.contains("chatgpt.com")
-        || u.contains("backend-api/codex")
-        || u.contains("openrouter.ai")
-        || u.contains("api.openai.com")
+    !is_spacexai_base(base_url)
 }
 
 /// Normalize a configured model name, then prefix it with its provider.
@@ -133,16 +165,24 @@ mod tests {
     }
 
     #[test]
-    fn third_party_bases() {
-        assert!(is_third_party_model_base(
-            "https://chatgpt.com/backend-api/codex"
-        ));
-        assert!(is_third_party_model_base("https://openrouter.ai/api/v1"));
-        assert!(!is_third_party_model_base("https://api.x.ai/v1"));
+    fn codex_auth_file_fallback_requires_canonical_base_url() {
+        assert!(is_codex_auth_base("https://chatgpt.com/backend-api/codex"));
+        for url in [
+            "https://chatgpt.com/backend-api/codex/",
+            "https://chatgpt.com/backend-api/codex/v1",
+            "https://chatgpt.com:444/backend-api/codex",
+            "https://chatgpt.com/backend-api/codex?proxy=true",
+            "http://chatgpt.com/backend-api/codex",
+            "https://chatgpt.com.attacker.example/backend-api/codex",
+            "https://chatgpt.com@attacker.example/backend-api/codex",
+            "https://evil.example/v1",
+        ] {
+            assert!(!is_codex_auth_base(url), "accepted {url}");
+        }
     }
 
     #[test]
-    fn provider_base_classification() {
+    fn exact_https_provider_bases_are_classified() {
         assert_eq!(
             provider_id_for_base("https://chatgpt.com/backend-api/codex"),
             Some(ProviderId::OpenaiCodex)
@@ -155,7 +195,41 @@ mod tests {
             provider_id_for_base("https://api.x.ai/v1"),
             Some(ProviderId::Spacexai)
         );
-        assert_eq!(provider_id_for_base("http://localhost:11434/v1"), None);
+        assert_eq!(
+            provider_id_for_base("https://cli-chat-proxy.grok.com/v1"),
+            Some(ProviderId::Spacexai)
+        );
+    }
+
+    #[test]
+    fn spoofed_or_cleartext_provider_urls_are_rejected() {
+        for url in [
+            "https://chatgpt.com.attacker.example/backend-api/codex",
+            "https://chatgpt.com@attacker.example/backend-api/codex",
+            "https://proxy.example/backend-api/codex",
+            "http://chatgpt.com/backend-api/codex",
+            "https://openrouter.ai.attacker.example/api/v1",
+            "http://openrouter.ai/api/v1",
+            "https://api.x.ai.attacker.example/v1",
+            "http://api.x.ai/v1",
+        ] {
+            assert_eq!(provider_id_for_base(url), None, "classified {url}");
+        }
+    }
+
+    #[test]
+    fn third_party_bases() {
+        assert!(is_third_party_model_base(
+            "https://chatgpt.com/backend-api/codex"
+        ));
+        assert!(is_third_party_model_base("https://openrouter.ai/api/v1"));
+        assert!(is_third_party_model_base("https://api.openai.com/v1"));
+        assert!(!is_third_party_model_base("https://api.x.ai/v1"));
+        assert!(is_third_party_model_base(
+            "https://chatgpt.com.attacker.example/backend-api/codex"
+        ));
+        assert!(is_third_party_model_base("https://unknown.example/v1"));
+        assert!(is_third_party_model_base("http://api.x.ai/v1"));
     }
 
     #[test]

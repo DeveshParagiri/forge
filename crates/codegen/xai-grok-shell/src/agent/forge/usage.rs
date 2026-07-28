@@ -48,9 +48,9 @@ pub async fn fetch_provider_usage(provider: ProviderId) -> Result<ProviderUsageS
 
 async fn fetch_codex_usage(url: &str) -> Result<ProviderUsageSnapshot> {
     let token = super::credentials::read_codex_access_token()
-        .context("ChatGPT Codex OAuth is not configured; run /login codex")?;
+        .context("ChatGPT Codex OAuth is not configured; run `codex login`")?;
     let account_id = super::credentials::read_codex_account_id()
-        .context("ChatGPT Codex account ID is missing; run /login codex")?;
+        .context("ChatGPT Codex account ID is missing; run `codex login`")?;
 
     let response = crate::http::shared_client()
         .get(url)

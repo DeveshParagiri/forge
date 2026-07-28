@@ -4,6 +4,47 @@ This changelog tracks Forge releases independently from the synchronized upstrea
 Grok Build version. Forge release tags use `forge-vMAJOR.MINOR.PATCH`; the
 upstream base is recorded in each release entry.
 
+## [0.3.0] - 2026-07-27
+
+**Upstream base:** Grok Build 0.2.112
+
+### Added
+
+- A fail-closed endpoint policy positively identifies official xAI and ChatGPT
+  Codex HTTPS endpoints before enabling provider-specific credentials, headers,
+  or response metadata.
+- Portable cross-provider history normalization removes opaque reasoning and
+  flattens backend-only tool calls when switching provider families.
+
+### Changed
+
+- Generic third-party providers now use upstream `[model_providers.*]`
+  configuration and credentials instead of Forge-owned provider machinery.
+- ChatGPT subscription support is reduced to a narrow Codex OAuth and Responses
+  compatibility layer. Codex requests always send `store = false`, and Fast
+  Mode remains session-scoped through `service_tier = "priority"`.
+- Streamed Codex reasoning summaries preserve indexed part boundaries so
+  adjacent Markdown sections do not render as glued text.
+- Forge is synchronized with Grok Build 0.2.112, including the latest startup,
+  workflow, session replay, and background-task improvements.
+
+### Removed
+
+- The legacy Forge `[provider.*]` configuration, provider key store, provider
+  status machinery, and provider-login UI. Existing third-party providers must
+  be configured through upstream `[model_providers.*]`.
+- OpenRouter-specific credential storage; OpenRouter now uses ordinary upstream
+  provider API-key or environment-key configuration.
+
+### Fixed
+
+- xAI bearer tokens and private request metadata can no longer reach unknown,
+  cleartext, proxy, or third-party endpoints.
+- Codex OAuth-file fallback is limited to the canonical ChatGPT Codex endpoint
+  and cannot be activated merely by reusing the expected environment key name.
+- Provider-aware credential reload now resolves the complete active model,
+  including provider defaults and overrides.
+
 ## [0.2.0] - 2026-07-19
 
 **Upstream base:** Grok Build 0.2.106

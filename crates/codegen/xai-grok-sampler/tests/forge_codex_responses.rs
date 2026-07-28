@@ -59,6 +59,8 @@ fn responses_config(base_url: String) -> SamplerConfig {
         api_backend: ApiBackend::Responses,
         auth_scheme: Default::default(),
         extra_headers: IndexMap::new(),
+        query_params: IndexMap::new(),
+        env_http_headers: IndexMap::new(),
         context_window: 128_000,
         force_http1: false,
         max_retries: Some(2),

@@ -1080,16 +1080,6 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
             vec![]
         }
         Action::Login => dispatch_login(app),
-        // Forge: multi-provider picker + handlers.
-        Action::ChooseProviderLogin => {
-            crate::forge::provider_login::dispatch_choose_provider_login(app)
-        }
-        Action::ProviderLoginSelected { provider_id } => {
-            crate::forge::provider_login::dispatch_provider_login_selected(app, provider_id)
-        }
-        Action::OpenRouterKeySubmitted { api_key } => {
-            crate::forge::provider_login::dispatch_openrouter_key_submitted(app, api_key)
-        }
         Action::CancelLogin => dispatch_cancel_login(app),
         Action::SubmitAuthCode(code) => dispatch_submit_auth_code(app, code),
         Action::CopyAuthUrl => {

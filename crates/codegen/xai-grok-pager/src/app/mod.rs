@@ -23,7 +23,6 @@ pub mod mermaid_worker;
 pub use xai_prompt_queue as prompt_queue;
 mod acp_handler;
 mod csi_filter;
-// Forge: `dispatch_login` re-export is crate-visible for multi-provider `/login`.
 pub(crate) mod dispatch;
 /// Display-refresh probe + motion cadence + terminal telemetry at startup.
 mod display_refresh_startup;

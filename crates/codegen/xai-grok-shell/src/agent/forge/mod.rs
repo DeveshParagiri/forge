@@ -1,8 +1,8 @@
 //! Forge multi-provider extensions.
 //!
-//! Provider identity, config packs, credentials, status, catalog policy,
-//! request profiles, and cross-provider history handling live here so the
-//! stock agent config and catalog code retain only narrow integration hooks.
+//! Generic endpoints and credentials use upstream model-provider config. This
+//! module keeps only provider identity, the narrow ChatGPT subscription shim,
+//! catalog policy, request profiles, usage, and cross-provider history.
 
 pub mod catalog;
 pub mod credentials;
@@ -10,23 +10,14 @@ pub(crate) mod fast_mode;
 pub mod history;
 pub mod identity;
 pub mod profile;
-pub mod provider_config;
-pub mod status;
 pub mod usage;
 
 pub use catalog::{ProviderCatalogConfig, ProviderCatalogRule};
 pub use credentials::{
-    ProviderKeyEntry, ProviderKeysFile, codex_auth_path, env_requests_codex_token,
-    env_requests_openrouter_token, load_provider_keys, provider_keys_path, read_codex_access_token,
-    read_codex_account_id, read_openrouter_api_key, save_provider_keys, set_openrouter_api_key,
+    codex_auth_path, env_requests_codex_token, read_codex_access_token, read_codex_account_id,
 };
 pub use identity::{
     ProviderId, display_model_name, is_third_party_model_base, provider_id_for_base,
     provider_scope_for_base,
-};
-pub use provider_config::ProviderConfig;
-pub use status::{
-    ProviderAuthStatus, codex_status, login_picker_providers, openrouter_status,
-    picker_auth_status, spacexai_status, status_for,
 };
 pub use usage::{ProviderUsageSnapshot, UsageCredits, UsageWindow, fetch_provider_usage};

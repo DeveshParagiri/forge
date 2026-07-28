@@ -74,6 +74,24 @@ impl GrokRequestHeaders<'_> {
     }
 }
 
+fn strip_xai_private_headers(headers: &mut HeaderMap) {
+    let private_headers: Vec<_> = headers
+        .keys()
+        .filter(|name| name.as_str().starts_with("x-grok-"))
+        .cloned()
+        .collect();
+    for name in private_headers {
+        headers.remove(name);
+    }
+    for name in [
+        "x-xai-token-auth",
+        "x-compactions-remaining",
+        "x-compaction-at",
+    ] {
+        headers.remove(name);
+    }
+}
+
 /// Parse the `Retry-After` response header as delta-seconds.
 /// Our inference backends only emit integer seconds (never HTTP-date),
 /// so we only handle that form. HTTP-dates silently return `None` and
@@ -705,49 +723,47 @@ impl SamplingClient {
                 }
             }
         }
-        {
-            let auth_prefix = headers
-                .get(AUTHORIZATION)
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.chars().take(20).collect::<String>());
-            let x_api_key_prefix = headers
-                .get(HeaderName::from_static("x-api-key"))
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.chars().take(12).collect::<String>());
-            tracing::info!(
-                target: crate::sampling_log::TARGET,
-                event = "client_post",
-                base_url = %self.base_url,
-                model = %self.defaults.model,
-                api_backend = ?self.defaults.api_backend,
-                auth_scheme = ?self.defaults.auth_scheme,
-                has_bearer_resolver = self.bearer_resolver.is_some(),
-                has_authorization_header = headers.get(AUTHORIZATION).is_some(),
-                has_x_api_key_header = headers.get(HeaderName::from_static("x-api-key")).is_some(),
-                auth_header_prefix = auth_prefix.as_deref().unwrap_or("none"),
-                x_api_key_prefix = x_api_key_prefix.as_deref().unwrap_or("none"),
-            );
-        }
         if let Some(injector) = &self.header_injector {
             injector.inject(&mut headers);
         }
+        if !self.accepts_xai_private_headers() {
+            strip_xai_private_headers(&mut headers);
+        }
+        tracing::info!(
+            target: crate::sampling_log::TARGET,
+            event = "client_post",
+            base_url = %self.base_url,
+            model = %self.defaults.model,
+            api_backend = ?self.defaults.api_backend,
+            auth_scheme = ?self.defaults.auth_scheme,
+            has_bearer_resolver = self.bearer_resolver.is_some(),
+            has_authorization_header = headers.get(AUTHORIZATION).is_some(),
+            has_x_api_key_header = headers.get(HeaderName::from_static("x-api-key")).is_some(),
+        );
         headers
     }
 
-    /// POST with default headers. Overrides auth from resolver if wired.
+    fn accepts_xai_private_headers(&self) -> bool {
+        crate::forge::endpoint_policy::accepts_xai_private_headers(&self.base_url)
+    }
+
+    /// POST with endpoint-scoped default headers and refreshed auth.
     fn post(&self, url: impl reqwest::IntoUrl) -> reqwest::RequestBuilder {
         self.http.post(url).headers(self.request_headers())
     }
 
-    /// POST to a Responses endpoint after applying its backend-specific
-    /// transport boundary. In particular, ChatGPT Codex keeps provider auth
-    /// and ordinary headers while dropping xAI/Grok-private metadata.
-    fn post_responses(
+    /// Add per-request Grok metadata only to positively trusted xAI endpoints.
+    fn post_with_grok_headers(
         &self,
-        backend: crate::forge::codex_responses::ResponsesBackend,
+        url: impl reqwest::IntoUrl,
+        grok_headers: &GrokRequestHeaders<'_>,
     ) -> reqwest::RequestBuilder {
-        let headers = backend.prepare_request_headers(self.request_headers());
-        self.http.post(self.endpoint("responses")).headers(headers)
+        let builder = self.post(url);
+        if self.accepts_xai_private_headers() {
+            grok_headers.apply(builder)
+        } else {
+            builder
+        }
     }
 
     /// Bearer prefix for 401 attribution. When a resolver is wired it is
@@ -949,8 +965,8 @@ impl SamplingClient {
             deployment_id: payload.x_grok_deployment_id.as_deref(),
             user_id: payload.x_grok_user_id.as_deref(),
         };
-        let http_request = grok_headers
-            .apply(self.post(self.endpoint("chat/completions")))
+        let http_request = self
+            .post_with_grok_headers(self.endpoint("chat/completions"), &grok_headers)
             .json(&payload);
 
         let response = http_request.send().await.map_err(|e| {
@@ -1007,8 +1023,8 @@ impl SamplingClient {
             deployment_id: payload.x_grok_deployment_id.as_deref(),
             user_id: payload.x_grok_user_id.as_deref(),
         };
-        let http_request = grok_headers
-            .apply(self.post(self.endpoint("chat/completions")))
+        let http_request = self
+            .post_with_grok_headers(self.endpoint("chat/completions"), &grok_headers)
             .header(ACCEPT, HeaderValue::from_static("text/event-stream"))
             .json(&streaming_request);
 
@@ -1231,8 +1247,8 @@ impl SamplingClient {
         // it in post-serialize. This is the last surviving piece of the
         // old raw_output machinery.
         xai_grok_sampling_types::patch_reasoning_text_types(&mut request_body);
-        let http_request = grok_headers
-            .apply(self.post_responses(responses_backend))
+        let http_request = self
+            .post_with_grok_headers(self.endpoint("responses"), &grok_headers)
             .json(&request_body);
 
         let response = http_request.send().await.map_err(|e| {
@@ -1357,12 +1373,13 @@ impl SamplingClient {
         // Forge: select the Responses backend policy at the request boundary.
         let responses_backend =
             crate::forge::codex_responses::ResponsesBackend::detect(&self.base_url);
-        if self.defaults.stream_tool_calls && responses_backend.accepts_xai_extensions() {
+        let accepts_xai_extensions = self.accepts_xai_private_headers();
+        if self.defaults.stream_tool_calls && accepts_xai_extensions {
             request_body["stream_tool_calls"] = serde_json::json!(true);
         }
         // Inject xAI-specific tools (e.g., x_search) that can't be expressed
         // via async_openai's rs::Tool enum.
-        if !extra_tool_entries.is_empty() && responses_backend.accepts_xai_extensions() {
+        if !extra_tool_entries.is_empty() && accepts_xai_extensions {
             if let Some(tools) = request_body.get_mut("tools").and_then(|v| v.as_array_mut()) {
                 tools.extend(extra_tool_entries);
             } else {
@@ -1391,23 +1408,16 @@ impl SamplingClient {
         }
         // Fresh per attempt so signals never leak across retries; `None`
         // (check disabled) sends no header and does no peek work per event.
-        let doom_loop = if responses_backend.supports_doom_loop_check() {
+        let doom_loop = if accepts_xai_extensions {
             self.defaults
                 .doom_loop_recovery
                 .map(crate::doom_loop::DoomLoopSignalCollector::new)
         } else {
             None
         };
-        // Forge: backend policy keeps Codex requests free of x-grok-* headers,
-        // including defaults and values added by the tracing injector.
-        let mut http_request = if !responses_backend.uses_grok_headers() {
-            self.post_responses(responses_backend)
-                .header(ACCEPT, HeaderValue::from_static("text/event-stream"))
-        } else {
-            grok_headers
-                .apply(self.post_responses(responses_backend))
-                .header(ACCEPT, HeaderValue::from_static("text/event-stream"))
-        };
+        let mut http_request = self
+            .post_with_grok_headers(self.endpoint("responses"), &grok_headers)
+            .header(ACCEPT, HeaderValue::from_static("text/event-stream"));
         if doom_loop.is_some() {
             // Presence opts in; the server ignores the value.
             http_request = http_request.header(DOOM_LOOP_CHECK_HEADER, "true");
@@ -1461,8 +1471,6 @@ impl SamplingClient {
                 base_url = %self.base_url,
                 "responses API error"
             );
-            // Forge: let the backend policy surface Codex detail strings.
-            let message = responses_backend.augment_error_message(message, bytes.as_ref());
             return Err(SamplingError::Api {
                 status,
                 message,
@@ -1609,8 +1617,8 @@ impl SamplingClient {
             deployment_id: request.x_grok_deployment_id.as_deref(),
             user_id: request.x_grok_user_id.as_deref(),
         };
-        let http_request = grok_headers
-            .apply(self.post(self.endpoint("messages")))
+        let http_request = self
+            .post_with_grok_headers(self.endpoint("messages"), &grok_headers)
             .json(&request.inner);
 
         let response = http_request.send().await.map_err(|e| {
@@ -1716,8 +1724,8 @@ impl SamplingClient {
             deployment_id: request.x_grok_deployment_id.as_deref(),
             user_id: request.x_grok_user_id.as_deref(),
         };
-        let http_request = grok_headers
-            .apply(self.post(self.endpoint("messages")))
+        let http_request = self
+            .post_with_grok_headers(self.endpoint("messages"), &grok_headers)
             .header(ACCEPT, HeaderValue::from_static("text/event-stream"))
             .json(&request.inner);
 
@@ -2410,7 +2418,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_responses_post_strips_xai_headers_after_injection() {
+    fn all_third_party_request_shapes_strip_xai_headers_after_injection() {
         #[derive(Debug)]
         struct TestInjector;
         impl crate::config::HeaderInjector for TestInjector {
@@ -2426,39 +2434,122 @@ mod tests {
             }
         }
 
+        for base_url in [
+            "https://chatgpt.com/backend-api/codex",
+            "https://openrouter.ai/api/v1",
+            "https://api.openai.com/v1",
+            "https://unknown-provider.example/v1",
+        ] {
+            let mut config = minimal_config();
+            config.base_url = base_url.to_string();
+            config.client_version = Some("0.2.112".to_string());
+            config.deployment_id = Some("deployment".to_string());
+            config.user_id = Some("user".to_string());
+            config.client_identifier = Some("forge".to_string());
+            config
+                .extra_headers
+                .insert("x-XAI-token-auth".to_string(), "xai-grok-cli".to_string());
+            config
+                .extra_headers
+                .insert("x-compactions-remaining".to_string(), "1".to_string());
+            config
+                .extra_headers
+                .insert("x-compaction-at".to_string(), "200000".to_string());
+            config
+                .extra_headers
+                .insert("x-provider-feature".to_string(), "enabled".to_string());
+            config.header_injector = Some(std::sync::Arc::new(TestInjector));
+
+            let client = SamplingClient::new(config).expect("build");
+            for path in ["chat/completions", "responses", "messages"] {
+                let request = client.post(client.endpoint(path)).build().expect("build");
+                let headers = request.headers();
+                assert!(headers.contains_key(AUTHORIZATION), "{base_url}/{path}");
+                assert!(headers.contains_key(USER_AGENT), "{base_url}/{path}");
+                assert!(headers.contains_key("traceparent"), "{base_url}/{path}");
+                assert!(
+                    headers.contains_key("x-provider-feature"),
+                    "{base_url}/{path}"
+                );
+                assert!(
+                    !headers.contains_key("x-xai-token-auth"),
+                    "{base_url}/{path}"
+                );
+                assert!(
+                    !headers.contains_key("x-compactions-remaining"),
+                    "{base_url}/{path}"
+                );
+                assert!(
+                    !headers.contains_key("x-compaction-at"),
+                    "{base_url}/{path}"
+                );
+                assert!(
+                    headers
+                        .keys()
+                        .all(|name| !name.as_str().starts_with("x-grok-")),
+                    "third-party request leaked x-grok headers at {base_url}/{path}: {headers:?}",
+                );
+            }
+
+            let grok_headers = GrokRequestHeaders {
+                conv_id: "conversation",
+                req_id: "request",
+                model_id: "model",
+                session_id: "session",
+                turn_idx: Some("1"),
+                agent_id: "agent",
+                deployment_id: Some("deployment"),
+                user_id: Some("user"),
+            };
+            let request = client
+                .post_with_grok_headers(client.endpoint("responses"), &grok_headers)
+                .build()
+                .expect("build");
+            assert!(
+                request
+                    .headers()
+                    .keys()
+                    .all(|name| !name.as_str().starts_with("x-grok-"))
+            );
+            assert!(!request.headers().contains_key("x-compactions-remaining"));
+            assert!(!request.headers().contains_key("x-compaction-at"));
+        }
+    }
+
+    #[test]
+    fn trusted_xai_request_keeps_private_headers() {
         let mut config = minimal_config();
-        config.base_url = "https://chatgpt.com/backend-api/codex".to_string();
-        config.client_version = Some("0.2.110".to_string());
-        config.deployment_id = Some("deployment".to_string());
-        config.user_id = Some("user".to_string());
+        config.base_url = "https://api.x.ai/v1".to_string();
         config.client_identifier = Some("forge".to_string());
         config
             .extra_headers
             .insert("x-XAI-token-auth".to_string(), "xai-grok-cli".to_string());
         config
             .extra_headers
-            .insert("x-provider-feature".to_string(), "enabled".to_string());
-        config.header_injector = Some(std::sync::Arc::new(TestInjector));
-
+            .insert("x-compactions-remaining".to_string(), "1".to_string());
+        config
+            .extra_headers
+            .insert("x-compaction-at".to_string(), "200000".to_string());
         let client = SamplingClient::new(config).expect("build");
-        let backend = crate::forge::codex_responses::ResponsesBackend::Codex;
+        let grok_headers = GrokRequestHeaders {
+            conv_id: "conversation",
+            req_id: "request",
+            model_id: "model",
+            session_id: "session",
+            turn_idx: None,
+            agent_id: "agent",
+            deployment_id: None,
+            user_id: None,
+        };
         let request = client
-            .post_responses(backend)
+            .post_with_grok_headers(client.endpoint("responses"), &grok_headers)
             .build()
-            .expect("build request");
-        let headers = request.headers();
-
-        assert!(headers.contains_key(AUTHORIZATION));
-        assert!(headers.contains_key(USER_AGENT));
-        assert!(headers.contains_key("traceparent"));
-        assert!(headers.contains_key("x-provider-feature"));
-        assert!(!headers.contains_key("x-xai-token-auth"));
-        assert!(
-            headers
-                .keys()
-                .all(|name| !name.as_str().starts_with("x-grok-")),
-            "Codex Responses request leaked x-grok headers: {headers:?}",
-        );
+            .expect("build");
+        assert!(request.headers().contains_key("x-xai-token-auth"));
+        assert!(request.headers().contains_key("x-compactions-remaining"));
+        assert!(request.headers().contains_key("x-compaction-at"));
+        assert!(request.headers().contains_key("x-grok-client-identifier"));
+        assert!(request.headers().contains_key("x-grok-conv-id"));
     }
 
     #[tokio::test]

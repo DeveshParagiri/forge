@@ -2471,88 +2471,65 @@ impl AgentView {
                     },
                     Style::default().bg(row_bg),
                 );
-                // Forge: render provider key entry as one plain input field.
-                let direct_input = self
-                    .question_view
-                    .as_ref()
-                    .is_some_and(|qv| qv.is_direct_input());
                 let prefix_w = self
                     .question_view
                     .as_ref()
                     .and_then(|qv| qv.questions.get(qv.active_tab))
                     .map(crate::views::question_view::option_prefix_w)
                     .unwrap_or(6) as u16;
+                let num_style = Style::default().fg(theme.accent_user).bg(row_bg);
+                let marker_style = Style::default()
+                    .fg(theme.text_primary)
+                    .bg(row_bg)
+                    .add_modifier(ratatui::style::Modifier::BOLD);
                 let prompt_ind = Style::default().fg(theme.accent_user).bg(row_bg);
-                let (text_x, text_w, leading_w) = if direct_input {
-                    let prefix = crate::forge::provider_login::direct_input_prefix();
-                    buf.set_span_safe(
-                        content_x,
-                        row_y,
-                        &Span::styled(crate::glyphs::prompt_arrow(), prompt_ind),
-                        prefix.leading_w,
-                    );
-                    (
-                        content_x + prefix.leading_w,
-                        content_w.saturating_sub(prefix.leading_w),
-                        prefix.leading_w,
-                    )
-                } else {
-                    let num_style = Style::default().fg(theme.accent_user).bg(row_bg);
-                    let marker_style = Style::default()
-                        .fg(theme.text_primary)
-                        .bg(row_bg)
-                        .add_modifier(ratatui::style::Modifier::BOLD);
-                    buf.set_span_safe(content_x, row_y, &Span::styled("z ", num_style), 2);
-                    let is_multi = self
-                        .question_view
-                        .as_ref()
-                        .and_then(|qv| qv.questions.get(qv.active_tab))
-                        .and_then(|q| q.multi_select)
-                        .unwrap_or(false);
-                    let freeform_sel = self
-                        .question_view
-                        .as_ref()
-                        .and_then(|qv| {
-                            qv.per_question_freeform_selected
-                                .get(qv.active_tab)
-                                .copied()
-                        })
-                        .unwrap_or(false);
-                    let (marker_text, actual_marker_style) = if is_multi {
-                        if freeform_sel {
-                            ("[x] ".to_string(), marker_style)
-                        } else {
-                            (
-                                "[ ] ".to_string(),
-                                Style::default().fg(theme.gray).bg(row_bg),
-                            )
-                        }
-                    } else if freeform_sel {
-                        (format!("({}) ", crate::glyphs::filled_dot()), marker_style)
+                buf.set_span_safe(content_x, row_y, &Span::styled("z ", num_style), 2);
+                let is_multi = self
+                    .question_view
+                    .as_ref()
+                    .and_then(|qv| qv.questions.get(qv.active_tab))
+                    .and_then(|q| q.multi_select)
+                    .unwrap_or(false);
+                let freeform_sel = self
+                    .question_view
+                    .as_ref()
+                    .and_then(|qv| {
+                        qv.per_question_freeform_selected
+                            .get(qv.active_tab)
+                            .copied()
+                    })
+                    .unwrap_or(false);
+                let (marker_text, actual_marker_style) = if is_multi {
+                    if freeform_sel {
+                        ("[x] ".to_string(), marker_style)
                     } else {
                         (
-                            "(\u{25cb}) ".to_string(),
+                            "[ ] ".to_string(),
                             Style::default().fg(theme.gray).bg(row_bg),
                         )
-                    };
-                    buf.set_span_safe(
-                        content_x + 2,
-                        row_y,
-                        &Span::styled(marker_text, actual_marker_style),
-                        4,
-                    );
-                    buf.set_span_safe(
-                        content_x + prefix_w,
-                        row_y,
-                        &Span::styled(crate::glyphs::prompt_arrow(), prompt_ind),
-                        2,
-                    );
+                    }
+                } else if freeform_sel {
+                    (format!("({}) ", crate::glyphs::filled_dot()), marker_style)
+                } else {
                     (
-                        content_x + prefix_w + 2,
-                        content_w.saturating_sub(prefix_w + 2),
-                        prefix_w + 2,
+                        "(\u{25cb}) ".to_string(),
+                        Style::default().fg(theme.gray).bg(row_bg),
                     )
                 };
+                buf.set_span_safe(
+                    content_x + 2,
+                    row_y,
+                    &Span::styled(marker_text, actual_marker_style),
+                    4,
+                );
+                buf.set_span_safe(
+                    content_x + prefix_w,
+                    row_y,
+                    &Span::styled(crate::glyphs::prompt_arrow(), prompt_ind),
+                    2,
+                );
+                let text_x = content_x + prefix_w + 2;
+                let text_w = content_w.saturating_sub(prefix_w + 2);
                 let text_style = PromptStyle {
                     show_prefix: false,
                     ..question_input_style.clone()
@@ -2584,7 +2561,7 @@ impl AgentView {
                             Rect {
                                 x: content_x,
                                 y,
-                                width: leading_w,
+                                width: prefix_w + 2,
                                 height: 1,
                             },
                             Style::default().bg(row_bg),
@@ -2653,47 +2630,31 @@ impl AgentView {
                         .bg(footer_bg)
                         .add_modifier(Modifier::BOLD);
                     let mut left_spans: Vec<Span<'_>> = Vec::new();
-                    // Forge: provider question footer policy.
-                    use crate::forge::provider_login::{FooterLeftPolicy, footer_left_policy};
-                    let footer_policy = footer_left_policy(qv.local_kind.as_ref());
-                    match footer_policy {
-                        FooterLeftPolicy::DirectInput => {
-                            left_spans.push(Span::styled("Esc", hint_key));
-                            left_spans.push(Span::styled(" cancel", hint_style));
-                        }
-                        FooterLeftPolicy::ProviderPicker | FooterLeftPolicy::Standard => {
-                            if qv.questions.len() > 1 {
-                                let counter =
-                                    format!("[{}/{}] ", qv.active_tab + 1, qv.questions.len());
-                                left_spans.push(Span::styled(counter, hint_style));
-                                left_spans.push(Span::styled(" \u{b7} ", hint_style));
-                            }
-                            left_spans.push(Span::styled("\u{2191}/\u{2193}", hint_key));
-                            left_spans.push(Span::styled(" navigate", hint_style));
-                            if qv.questions.len() > 1 {
-                                left_spans.push(Span::styled(" \u{b7} ", hint_style));
-                                left_spans.push(Span::styled("\u{2190}/\u{2192}", hint_key));
-                                left_spans.push(Span::styled(" question", hint_style));
-                            }
-                            left_spans.push(Span::styled(" \u{b7} ", hint_style));
-                            if matches!(footer_policy, FooterLeftPolicy::ProviderPicker) {
-                                left_spans.push(Span::styled("Esc", hint_key));
-                                left_spans.push(Span::styled(" cancel", hint_style));
-                            } else {
-                                left_spans.push(Span::styled("y", hint_key));
-                                left_spans.push(Span::styled(" copy", hint_style));
-                            }
-                        }
+                    if qv.questions.len() > 1 {
+                        let counter = format!("[{}/{}] ", qv.active_tab + 1, qv.questions.len());
+                        left_spans.push(Span::styled(counter, hint_style));
                     }
+                    left_spans.push(Span::styled("\u{2191}/\u{2193}", hint_key));
+                    left_spans.push(Span::styled(" navigate", hint_style));
+                    if qv.questions.len() > 1 {
+                        left_spans.push(Span::styled(" \u{b7} ", hint_style));
+                        left_spans.push(Span::styled("\u{2190}/\u{2192}", hint_key));
+                        left_spans.push(Span::styled(" question", hint_style));
+                    }
+                    left_spans.push(Span::styled(" \u{b7} ", hint_style));
+                    left_spans.push(Span::styled("y", hint_key));
+                    left_spans.push(Span::styled(" copy", hint_style));
                     let left_line = Line::from(left_spans);
                     let avail_w = footer_w.saturating_sub(3);
                     buf.set_line_safe(content_x, footer_y, &left_line, avail_w);
                     let is_last = qv.active_tab >= qv.questions.len().saturating_sub(1);
-                    let enter_label = crate::forge::provider_login::enter_label(
-                        matches!(footer_policy, FooterLeftPolicy::DirectInput),
-                        qv.is_on_freeform_row(),
-                        is_last,
-                    );
+                    let enter_label = if qv.is_on_freeform_row() {
+                        "edit"
+                    } else if is_last {
+                        "submit"
+                    } else {
+                        "select"
+                    };
                     let btn_key = "Enter";
                     let btn_bg = theme.bg_base;
                     let bkey_style = Style::default()

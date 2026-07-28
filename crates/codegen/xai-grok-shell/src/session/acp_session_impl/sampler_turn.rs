@@ -467,7 +467,12 @@ impl SessionActor {
         );
         let compaction_at_tokens = self.compaction_at_tokens.get();
         let compactions_remaining = self.compactions_remaining.get();
-        if compactions_remaining.is_some() || compaction_at_tokens.is_some() {
+        // Forge: these are xAI-private capability headers. Generate them only
+        // for positively trusted xAI endpoints; the sampler also strips them
+        // at its final third-party request boundary as defense in depth.
+        if !crate::agent::forge::is_third_party_model_base(&cfg.base_url)
+            && (compactions_remaining.is_some() || compaction_at_tokens.is_some())
+        {
             let has_compaction_summary = self
                 .chat_state_handle
                 .get_last_compaction_prompt_index()
@@ -1323,12 +1328,13 @@ impl SessionActor {
         let config = crate::agent::config::Config::new_from_toml_cfg(&raw_config)
             .map_err(|e| tracing::warn!(error = %e, "Failed to parse reloaded config.toml"))
             .ok()?;
-        let config_model = config
-            .config_models
-            .iter()
-            .find(|(k, v)| v.model.as_deref().unwrap_or(k.as_str()) == current_model_id)
-            .map(|(_, v)| v);
-        let Some(model) = config_model else {
+        let models = crate::agent::config::resolve_model_list(&config, None);
+        let model = models.get(current_model_id).or_else(|| {
+            models
+                .values()
+                .find(|entry| entry.info.model == current_model_id)
+        });
+        let Some(model) = model else {
             tracing::warn!(
                 model = %current_model_id,
                 available = ?config.config_models.keys().collect::<Vec<_>>(),
@@ -1336,10 +1342,7 @@ impl SessionActor {
             );
             return None;
         };
-        let key = crate::agent::config::first_own_credential(
-            model.api_key.as_deref(),
-            model.env_key.as_ref(),
-        );
+        let key = model.own_credential();
         if key.is_none() {
             tracing::warn!(
                 model = %current_model_id,

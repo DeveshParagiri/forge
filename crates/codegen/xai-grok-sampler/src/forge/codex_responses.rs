@@ -1,5 +1,4 @@
-use reqwest::header::HeaderMap;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ResponsesBackend {
@@ -9,7 +8,7 @@ pub(crate) enum ResponsesBackend {
 
 impl ResponsesBackend {
     pub(crate) fn detect(base_url: &str) -> Self {
-        if base_url.contains("chatgpt.com") || base_url.contains("backend-api/codex") {
+        if super::endpoint_policy::is_codex_endpoint(base_url) {
             Self::Codex
         } else {
             Self::Standard
@@ -20,51 +19,10 @@ impl ResponsesBackend {
         matches!(self, Self::Standard)
     }
 
-    pub(crate) fn uses_grok_headers(self) -> bool {
-        matches!(self, Self::Standard)
-    }
-
-    /// Strip xAI/Grok transport metadata from requests sent to a third-party
-    /// Responses backend. Authentication, content negotiation, tracing, and
-    /// explicit provider headers remain intact; only the fork's private
-    /// `x-grok-*` namespace and xAI proxy marker are removed.
-    pub(crate) fn prepare_request_headers(self, mut headers: HeaderMap) -> HeaderMap {
-        if matches!(self, Self::Codex) {
-            let private_headers: Vec<_> = headers
-                .keys()
-                .filter(|name| name.as_str().starts_with("x-grok-"))
-                .cloned()
-                .collect();
-            for name in private_headers {
-                headers.remove(name);
-            }
-            headers.remove("x-xai-token-auth");
-        }
-        headers
-    }
-
-    pub(crate) fn supports_doom_loop_check(self) -> bool {
-        matches!(self, Self::Standard)
-    }
-
     pub(crate) fn prepare_request_body(self, body: Value, fast_mode: bool) -> Value {
         match self {
             Self::Standard => body,
             Self::Codex => sanitize_body_for_codex_backend(body, fast_mode),
-        }
-    }
-
-    pub(crate) fn augment_error_message(self, message: String, bytes: &[u8]) -> String {
-        match self {
-            Self::Standard => message,
-            Self::Codex => {
-                let detail = String::from_utf8_lossy(bytes);
-                if detail.contains("detail") || detail.contains("Unsupported") {
-                    format!("{message} — {detail}")
-                } else {
-                    message
-                }
-            }
         }
     }
 }
@@ -87,39 +45,43 @@ const HOSTED_TOOL_CALL_TYPES: &[&str] = &[
     "computer_call_output",
 ];
 
-/// Reshape a Responses API JSON body for ChatGPT Codex
-/// (`chatgpt.com/backend-api/codex/responses`), matching Pi's
-/// `openai-codex-responses` contract.
-///
-/// Codex rejects (400) parameters that api.openai.com / api.x.ai accept:
-/// `temperature`, `top_p`, `max_output_tokens`, `truncation`, `background`,
-/// `metadata`, `stream_tool_calls`, and **system messages in `input`**
-/// (use `instructions` instead). Also requires `store: false` and `stream: true`.
-///
-/// Additionally, when a session previously used xAI-hosted tools (web search
-/// etc.), those `web_search_call` input items carry ids longer than 64 chars
-/// and/or tool types Codex does not accept. We flatten them to synthetic
-/// assistant text — the same strategy chat-completions uses for
-/// `BackendToolCall` — and clamp any remaining `id` / `call_id` fields.
+/// Apply only the proven ChatGPT Codex transport deltas to an upstream
+/// Responses request. Generic Responses defaults and schema construction stay
+/// owned by the shared sampler; this shim removes fields rejected by the
+/// subscription endpoint, lifts system/developer input into `instructions`,
+/// filters unsupported hosted tools, and repairs oversized item IDs.
 fn sanitize_body_for_codex_backend(mut body: Value, fast_mode: bool) -> Value {
-    // Lift system / developer text out of input → instructions (Pi style).
-    let mut instruction_parts: Vec<String> = Vec::new();
-    if let Some(existing) = body.get("instructions").and_then(|v| v.as_str())
-        && !existing.trim().is_empty()
-    {
-        instruction_parts.push(existing.to_string());
+    let Some(out) = body.as_object_mut() else {
+        return body;
+    };
+
+    for key in [
+        "temperature",
+        "top_p",
+        "max_output_tokens",
+        "truncation",
+        "background",
+        "metadata",
+        "stream_tool_calls",
+    ] {
+        out.remove(key);
     }
 
-    let mut filtered_input: Vec<Value> = Vec::new();
-    if let Some(items) = body.get("input").and_then(|v| v.as_array()) {
+    let mut instruction_parts = out
+        .get("instructions")
+        .and_then(Value::as_str)
+        .filter(|text| !text.trim().is_empty())
+        .map(|text| vec![text.to_string()])
+        .unwrap_or_default();
+    let mut filtered_input = Vec::new();
+    if let Some(items) = out
+        .remove("input")
+        .and_then(|value| value.as_array().cloned())
+    {
         for item in items {
-            let role = item.get("role").and_then(|r| r.as_str()).unwrap_or("");
-            // EasyMessage form: { type?, role, content }
-            // Item form: { type: "message", role, content }
-            let is_systemish =
-                role.eq_ignore_ascii_case("system") || role.eq_ignore_ascii_case("developer");
-            if is_systemish {
-                if let Some(text) = extract_input_item_text(item)
+            let role = item.get("role").and_then(Value::as_str).unwrap_or("");
+            if role.eq_ignore_ascii_case("system") || role.eq_ignore_ascii_case("developer") {
+                if let Some(text) = extract_input_item_text(&item)
                     && !text.trim().is_empty()
                 {
                     instruction_parts.push(text);
@@ -127,51 +89,14 @@ fn sanitize_body_for_codex_backend(mut body: Value, fast_mode: bool) -> Value {
                 continue;
             }
 
-            let item_type = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
             if HOSTED_TOOL_CALL_TYPES.contains(&item_type) {
-                // Preserve search/context continuity without shipping illegal
-                // ids or tool types Codex cannot round-trip.
-                filtered_input.push(hosted_tool_call_to_assistant_message(item));
-                continue;
-            }
-
-            filtered_input.push(clamp_responses_item_ids(item.clone()));
-        }
-    }
-
-    // Whitelist of Codex-accepted top-level keys (Pi buildRequestBody + tools).
-    // Anything else → 400 Unsupported parameter.
-    const ALLOW: &[&str] = &[
-        "model",
-        "input",
-        "instructions",
-        "tools",
-        "tool_choice",
-        "parallel_tool_calls",
-        "reasoning",
-        "include",
-        "text",
-        "prompt_cache_key",
-        "service_tier",
-        "store",
-        "stream",
-    ];
-
-    let mut out = Map::new();
-    if let Some(obj) = body.as_object_mut() {
-        for key in ALLOW {
-            if let Some(v) = obj.remove(*key)
-                && !v.is_null()
-            {
-                out.insert((*key).to_string(), v);
+                filtered_input.push(hosted_tool_call_to_assistant_message(&item));
+            } else {
+                filtered_input.push(clamp_responses_item_ids(item));
             }
         }
     }
-
-    out.insert("store".into(), json!(false));
-    out.insert("stream".into(), json!(true));
-    // Forge: concrete fast-mode wire mapping stays in its feature module.
-    super::fast_mode::apply_codex_request_option(&mut out, fast_mode);
     out.insert("input".into(), Value::Array(filtered_input));
 
     if !instruction_parts.is_empty() {
@@ -179,71 +104,13 @@ fn sanitize_body_for_codex_backend(mut body: Value, fast_mode: bool) -> Value {
             "instructions".into(),
             Value::String(instruction_parts.join("\n\n")),
         );
-    } else if !out.contains_key("instructions") {
-        // Pi always sends instructions; Codex is fine with a default.
-        out.insert(
-            "instructions".into(),
-            Value::String("You are a helpful assistant.".into()),
-        );
     }
 
-    // Reasoning: keep effort; prefer summary "auto" (Pi) for visible streams.
-    if let Some(Value::Object(reasoning)) = out.get_mut("reasoning") {
-        if reasoning.get("effort").map(|e| e.is_null()).unwrap_or(true) {
-            reasoning.remove("effort");
-        }
-        // Drop null-only reasoning
-        if reasoning.is_empty() {
-            out.remove("reasoning");
-        } else if !reasoning.contains_key("summary")
-            && let Some(Value::Object(reasoning)) = out.get_mut("reasoning")
-        {
-            reasoning.insert("summary".into(), json!("auto"));
-        }
-    }
-
-    // include: only encrypted reasoning is useful for multi-turn store:false
-    if let Some(Value::Array(inc)) = out.get_mut("include") {
-        inc.retain(|v| {
-            v.as_str()
-                .is_some_and(|s| s == "reasoning.encrypted_content")
-        });
-        let empty = out
-            .get("include")
-            .and_then(|v| v.as_array())
-            .is_some_and(|a| a.is_empty());
-        if empty {
-            out.insert("include".into(), json!(["reasoning.encrypted_content"]));
-        }
-    } else {
-        out.insert("include".into(), json!(["reasoning.encrypted_content"]));
-    }
-
-    // parallel_tool_calls default when tools present
-    if out.contains_key("tools") && !out.contains_key("parallel_tool_calls") {
-        out.insert("parallel_tool_calls".into(), json!(true));
-    }
-    if out.contains_key("tools") && !out.contains_key("tool_choice") {
-        out.insert("tool_choice".into(), json!("auto"));
-    }
-
-    // Keep only function tools (Codex rejects hosted/xAI tool types).
+    // Upstream emits canonical function tools. Codex rejects hosted/xAI tool
+    // definitions, so remove only non-function forms without reconstructing
+    // otherwise ordinary tool JSON.
     if let Some(Value::Array(tools)) = out.get_mut("tools") {
-        tools.retain(|tool| {
-            tool.get("type")
-                .and_then(|t| t.as_str())
-                .is_some_and(|t| t == "function")
-                || tool.get("name").is_some() // EasyFunction form
-        });
-        for tool in tools.iter_mut() {
-            if let Value::Object(t) = tool {
-                t.retain(|_, v| !v.is_null());
-                // Ensure type is present for bare function shapes
-                if !t.contains_key("type") && t.contains_key("name") {
-                    t.insert("type".into(), json!("function"));
-                }
-            }
-        }
+        tools.retain(|tool| tool.get("type").and_then(Value::as_str) == Some("function"));
         if tools.is_empty() {
             out.remove("tools");
             out.remove("tool_choice");
@@ -251,7 +118,11 @@ fn sanitize_body_for_codex_backend(mut body: Value, fast_mode: bool) -> Value {
         }
     }
 
-    Value::Object(out)
+    // ChatGPT subscription inference must remain zero-data-retention even if a
+    // generic Responses caller explicitly supplied `store = true`.
+    out.insert("store".into(), Value::Bool(false));
+    super::fast_mode::apply_codex_request_option(out, fast_mode);
+    body
 }
 
 /// Clamp Responses item `id` / `call_id` fields to the API max length.
@@ -364,45 +235,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn detects_codex_with_existing_substring_rules() {
+    fn detects_only_the_official_https_codex_endpoint() {
         assert_eq!(
             ResponsesBackend::detect("https://chatgpt.com/backend-api/codex"),
             ResponsesBackend::Codex
         );
-        assert_eq!(
-            ResponsesBackend::detect("https://proxy.example/backend-api/codex/v1"),
-            ResponsesBackend::Codex
-        );
-        assert_eq!(
-            ResponsesBackend::detect("https://api.x.ai/v1"),
-            ResponsesBackend::Standard
-        );
-    }
-
-    #[test]
-    fn codex_header_boundary_strips_only_xai_private_metadata() {
-        let mut headers = HeaderMap::new();
-        headers.insert("authorization", "Bearer provider-token".parse().unwrap());
-        headers.insert("user-agent", "forge-test".parse().unwrap());
-        headers.insert("traceparent", "00-test-trace".parse().unwrap());
-        headers.insert("x-provider-feature", "enabled".parse().unwrap());
-        headers.insert("x-grok-client-identifier", "forge".parse().unwrap());
-        headers.insert("x-grok-conv-id", "conversation".parse().unwrap());
-        headers.insert("x-xai-token-auth", "xai-grok-cli".parse().unwrap());
-
-        let codex = ResponsesBackend::Codex.prepare_request_headers(headers.clone());
-        assert!(codex.contains_key("authorization"));
-        assert!(codex.contains_key("user-agent"));
-        assert!(codex.contains_key("traceparent"));
-        assert!(codex.contains_key("x-provider-feature"));
-        assert!(!codex.contains_key("x-grok-client-identifier"));
-        assert!(!codex.contains_key("x-grok-conv-id"));
-        assert!(!codex.contains_key("x-xai-token-auth"));
-
-        assert_eq!(
-            ResponsesBackend::Standard.prepare_request_headers(headers.clone()),
-            headers,
-        );
+        for url in [
+            "https://proxy.example/backend-api/codex/v1",
+            "https://chatgpt.com.attacker.example/backend-api/codex",
+            "https://chatgpt.com@attacker.example/backend-api/codex",
+            "http://chatgpt.com/backend-api/codex",
+            "https://api.x.ai/v1",
+        ] {
+            assert_eq!(
+                ResponsesBackend::detect(url),
+                ResponsesBackend::Standard,
+                "classified {url} as Codex"
+            );
+        }
     }
 
     #[test]
@@ -439,8 +289,8 @@ mod tests {
             "reasoning": {"effort": "medium", "summary": "concise"},
         });
         let out = ResponsesBackend::Codex.prepare_request_body(body, false);
-        assert_eq!(out["store"], json!(false));
-        assert_eq!(out["stream"], json!(true));
+        assert_eq!(out["store"], serde_json::json!(false));
+        assert_eq!(out["stream"], serde_json::json!(false));
         assert!(out.get("temperature").is_none());
         assert!(out.get("top_p").is_none());
         assert!(out.get("max_output_tokens").is_none());
@@ -459,28 +309,16 @@ mod tests {
     }
 
     #[test]
-    fn retains_default_instructions_punctuation() {
-        let out = ResponsesBackend::Codex.prepare_request_body(json!({"input": []}), false);
-        assert_eq!(out["instructions"], "You are a helpful assistant.");
-    }
-
-    #[test]
-    fn augments_only_codex_errors_with_detail_markers() {
-        let message = "Bad Request (400)".to_string();
-        assert_eq!(
-            ResponsesBackend::Codex
-                .augment_error_message(message.clone(), br#"{"detail":"Unsupported parameter"}"#),
-            "Bad Request (400) — {\"detail\":\"Unsupported parameter\"}"
-        );
-        assert_eq!(
-            ResponsesBackend::Codex.augment_error_message(message.clone(), b"plain failure"),
-            message
-        );
-        assert_eq!(
-            ResponsesBackend::Standard
-                .augment_error_message("Bad Request (400)".to_string(), b"Unsupported parameter"),
-            "Bad Request (400)"
-        );
+    fn only_invents_the_codex_privacy_default() {
+        let out =
+            ResponsesBackend::Codex.prepare_request_body(serde_json::json!({"input": []}), false);
+        assert!(out.get("instructions").is_none());
+        assert_eq!(out.get("store"), Some(&serde_json::json!(false)));
+        assert!(out.get("stream").is_none());
+        assert!(out.get("include").is_none());
+        assert!(out.get("reasoning").is_none());
+        assert!(out.get("tool_choice").is_none());
+        assert!(out.get("parallel_tool_calls").is_none());
     }
 
     #[test]

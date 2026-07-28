@@ -1659,11 +1659,6 @@ fn translate_local_submit(
     if skipped {
         return InputOutcome::Changed;
     }
-    // Forge: OpenRouter key + provider picker submit translation.
-    if let Some(outcome) = crate::forge::provider_login::translate_provider_login_submit(qv, &kind)
-    {
-        return outcome;
-    }
     let Some(QuestionSelection::Single(Some(idx))) = qv.selections.first() else {
         return InputOutcome::Changed;
     };
@@ -1727,10 +1722,6 @@ fn translate_local_submit(
                 model_id: model_id.clone(),
                 effort,
             })
-        }
-        // Forge: handled above via translate_provider_login_submit.
-        LocalQuestionKind::ProviderLogin | LocalQuestionKind::OpenRouterApiKey => {
-            unreachable!("handled above")
         }
         LocalQuestionKind::DoctorFix { target, plan } => {
             if *idx == 0 {

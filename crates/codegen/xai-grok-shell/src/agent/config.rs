@@ -22,8 +22,6 @@ use xai_grok_tools::types::compat::{
     COMPAT_CELLS, CompatConfig, CompatConfigToml, CompatRemoteKey, CompatSurface, CompatVendor,
 };
 
-pub use crate::agent::forge::ProviderConfig;
-
 /// The mode in which the agent is running.
 /// Determines behavior like relay sync enablement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1365,10 +1363,6 @@ pub struct Config {
     /// `[model.*]` overrides from config.toml. Resolve via `resolve_model_list()`.
     #[serde(skip)]
     pub config_models: IndexMap<String, ConfigModelOverride>,
-    /// `[provider.*]` shared auth/endpoint packs (Forge extension).
-    /// Models reference them with `provider = "codex"` etc.
-    #[serde(skip)]
-    pub providers: IndexMap<String, ProviderConfig>,
     /// Forge: provider-scoped include/exclude rules under `[catalog.*]`.
     #[serde(default)]
     pub catalog: crate::agent::forge::ProviderCatalogConfig,
@@ -1816,7 +1810,6 @@ impl Default for Config {
             worktree: WorktreeConfigSection::default(),
             auto_mode: AutoModeConfig::default(),
             config_models: IndexMap::new(),
-            providers: IndexMap::new(),
             catalog: crate::agent::forge::ProviderCatalogConfig::default(),
             config_warnings: Vec::new(),
             grok_com_config: GrokComConfig::default(),
@@ -2037,9 +2030,6 @@ impl Config {
             models: config_models,
             warnings: config_warnings,
         } = super::config_model_override_parse::parse_model_overrides(raw_config);
-        // Forge provider packs remain a compatibility layer alongside
-        // upstream's native model-provider configuration.
-        let providers = crate::agent::forge::provider_config::parse(raw_config);
         let (mut auth_providers, auth_provider_warnings) = parse_auth_providers(raw_config);
         let (model_providers, mut model_provider_warnings) = parse_model_providers(raw_config);
         for (id, provider) in &model_providers {
@@ -2065,12 +2055,10 @@ impl Config {
         let mut base = toml::Value::try_from(Self::default()).map_err(|e| e.to_string())?;
         if let toml::Value::Table(ref mut t) = base {
             t.remove("model");
-            t.remove("provider");
         }
         let mut raw_without_model_sections = raw_config.clone();
         if let toml::Value::Table(ref mut t) = raw_without_model_sections {
             t.remove("model");
-            t.remove("provider");
             t.remove("auth_provider");
             t.remove("model_providers");
         }
@@ -2087,7 +2075,6 @@ impl Config {
             Self::deserialize_collecting_unrecognized(base, &raw_without_model_sections)?;
         config.mcp_servers = parsed_mcp_servers.into_iter().collect();
         config.config_models = config_models;
-        config.providers = providers;
         config.config_warnings = config_warnings;
         config.auth_providers = auth_providers;
         config.model_providers = model_providers;
@@ -3626,14 +3613,6 @@ pub fn resolve_model_list(
         });
         let effective = with_provider.as_ref().unwrap_or(model_override);
         let mut entry = effective.apply(key, base, &cfg.endpoints);
-        // Forge's legacy `[provider.*]` packs are applied after upstream's
-        // native provider defaults, while model-local fields still win.
-        crate::agent::forge::catalog::apply_provider_override(
-            &cfg.providers,
-            effective,
-            key,
-            &mut entry,
-        );
         let session_bearer_unsafe = !crate::util::is_xai_api_bearer_url(&entry.info.base_url)
             || entry
                 .api_base_url
@@ -4062,10 +4041,6 @@ pub struct ConfigModelOverride {
     pub api_key: Option<String>,
     /// Env var name(s) for the provider key — string or array in config.toml.
     pub env_key: Option<EnvKeys>,
-    /// Reference a `[provider.<name>]` pack (base_url / auth / headers).
-    /// Model-local fields override the provider after merge.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider: Option<String>,
     /// Name of a `[auth_provider.<name>]` credential helper that mints
     /// this model's bearer token. Static `api_key` / `env_key` win when both
     /// are set.
@@ -4455,7 +4430,11 @@ impl ModelEntry {
     /// `None` → fall through to session / global key. Static only: never
     /// consults auth-provider tokens.
     pub(crate) fn own_credential(&self) -> Option<String> {
-        first_own_credential(self.api_key.as_deref(), self.env_key.as_ref())
+        first_own_credential(
+            self.api_key.as_deref(),
+            self.env_key.as_ref(),
+            &self.info.base_url,
+        )
     }
     /// The provider governing this model's bearer: `None` when a static
     /// `api_key`/`env_key` resolves. The turn paths consult this, so a
@@ -4842,17 +4821,18 @@ pub struct ResolvedCredentials {
     pub auth_scheme: AuthScheme,
 }
 /// First usable BYOK credential: a non-empty API key, then an environment
-/// value, then an Forge provider credential file fallback.
+/// value, then the narrow Codex CLI credential fallback when explicitly named
+/// for the canonical official ChatGPT Codex endpoint.
 pub(crate) fn first_own_credential(
     api_key: Option<&str>,
     env_key: Option<&EnvKeys>,
+    base_url: &str,
 ) -> Option<String> {
-    // Forge: provider credential fallback at the stock model credential hook.
-    crate::agent::forge::credentials::resolve_own(api_key, env_key)
+    crate::agent::forge::credentials::resolve_own(api_key, env_key, base_url)
 }
 /// Resolve credentials for a model.
 ///
-/// Priority: model api_key/env_key (incl. Forge credential-file fallback) >
+/// Priority: model api_key/env_key (including the Codex token shim) >
 /// cached auth-provider token > session token > XAI_API_KEY.
 ///
 /// Adopts the upstream orchestration (auth_provider cached-token branch,
@@ -5460,7 +5440,7 @@ pub fn to_acp_model_info(
                     "agentType".to_string(),
                     serde_json::Value::String(info.agent_type.clone()),
                 );
-                // Forge: provider/auth metadata powers the existing picker.
+                // Forge: stable provider identity powers provider-aware usage.
                 if let Some(provider) = crate::agent::forge::provider_id_for_base(&info.base_url) {
                     map.insert(
                         "provider".to_string(),
@@ -5469,12 +5449,6 @@ pub fn to_acp_model_info(
                     map.insert(
                         "providerId".to_string(),
                         serde_json::Value::String(provider.as_str().to_string()),
-                    );
-                    map.insert(
-                        "authStatus".to_string(),
-                        serde_json::Value::String(
-                            crate::agent::forge::picker_auth_status(provider).to_string(),
-                        ),
                     );
                 }
                 // Forge: advertise optional feature capabilities through a narrow hook.
@@ -6330,6 +6304,33 @@ reasoning_effort = "low"
         );
     }
     #[test]
+    fn legacy_provider_section_is_unrecognized_and_inert() {
+        let raw_config: toml::Value = toml::from_str(
+            r#"
+            [provider.codex]
+            base_url = "https://chatgpt.com/backend-api/codex"
+            api_key = "must-not-be-used"
+            "#,
+        )
+        .unwrap();
+
+        let mut merged = toml::Value::try_from(Config::default()).unwrap();
+        crate::config::deep_merge_toml(&mut merged, &raw_config);
+        let (_, unrecognized) =
+            Config::deserialize_collecting_unrecognized(merged, &raw_config).unwrap();
+        assert!(
+            unrecognized.iter().any(|path| path == "provider"),
+            "legacy section should produce an unrecognized-key warning: {unrecognized:?}"
+        );
+
+        let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should still parse");
+        assert!(
+            cfg.model_providers.is_empty(),
+            "legacy [provider.*] entries must not become active model providers"
+        );
+    }
+
+    #[test]
     fn parses_model_api_key() {
         let raw_config: toml::Value = toml::from_str(
             r#"
@@ -6795,11 +6796,17 @@ reasoning_effort = "low"
         let _guard = EnvGuard::set(var, "env-token");
         let env_key = EnvKeys::single(var);
         assert_eq!(
-            first_own_credential(Some("   "), Some(&env_key)).as_deref(),
+            first_own_credential(Some("   "), Some(&env_key), "https://inference.example/v1")
+                .as_deref(),
             Some("env-token")
         );
         assert_eq!(
-            first_own_credential(Some("real-key"), Some(&env_key)).as_deref(),
+            first_own_credential(
+                Some("real-key"),
+                Some(&env_key),
+                "https://inference.example/v1"
+            )
+            .as_deref(),
             Some("real-key")
         );
     }
@@ -7818,7 +7825,7 @@ reasoning_effort = "low"
         assert_eq!(meta["totalContextTokens"], 256_000);
     }
     #[test]
-    fn acp_model_meta_includes_personal_provider_and_auth_status() {
+    fn acp_model_meta_includes_personal_provider_identity() {
         let mut models = IndexMap::new();
         let entry = test_model_entry(
             "codex-model",
@@ -7832,10 +7839,7 @@ reasoning_effort = "low"
         let meta = acp_models.values().next().unwrap().meta.as_ref().unwrap();
         assert_eq!(meta["provider"], "OpenAI Codex");
         assert_eq!(meta["providerId"], "openai-codex");
-        assert!(matches!(
-            meta["authStatus"].as_str(),
-            Some("ready" | "login required")
-        ));
+        assert!(meta.get("authStatus").is_none());
     }
     #[test]
     fn acp_model_name_uses_compact_provider_prefix_without_codex_suffix() {
@@ -12869,46 +12873,5 @@ default = "grok-4.5"
             Some(true),
             true,
         );
-    }
-}
-#[cfg(test)]
-mod personal_codex_live_tests {
-    use super::*;
-    #[test]
-    fn live_codex_model_is_byok_when_token_present() {
-        if crate::agent::forge::read_codex_access_token().is_none() {
-            eprintln!("skip: no codex token");
-            return;
-        }
-        // Force-load effective config from user's real home.
-        let (facts, _provider) = resolve_model_auth_facts_and_provider("gpt-5.6-sol");
-        eprintln!("byok={:?} scheme={:?}", facts.byok, facts.auth_scheme);
-        let creds =
-            try_resolve_model_credentials("gpt-5.6-sol", Some("fake-session-should-not-use"));
-        eprintln!(
-            "creds={:?}",
-            creds.as_ref().map(|c| (
-                c.base_url.clone(),
-                c.auth_type,
-                c.api_key
-                    .as_ref()
-                    .map(|k| k.chars().take(8).collect::<String>())
-            ))
-        );
-        assert_eq!(
-            facts.byok,
-            crate::agent::auth_method::ModelByok::Byok,
-            "expected Byok for gpt-5.6-sol"
-        );
-        let c = creds.expect("credentials");
-        assert!(
-            c.base_url.contains("chatgpt.com"),
-            "base_url={}",
-            c.base_url
-        );
-        assert_eq!(c.auth_type, xai_chat_state::AuthType::ApiKey);
-        assert!(c.api_key.is_some());
-        // Must not be the fake session
-        assert_ne!(c.api_key.as_deref(), Some("fake-session-should-not-use"));
     }
 }

@@ -127,11 +127,6 @@ pub enum LocalQuestionKind {
         model_id: agent_client_protocol::ModelId,
         effort: Option<xai_grok_shell::sampling::types::ReasoningEffort>,
     },
-    /// Forge: Pi-style `/login` provider picker.
-    /// Option `id`s are `spacexai` | `openai-codex` | `openrouter`.
-    ProviderLogin,
-    /// Forge: freeform capture for OpenRouter API key after provider pick.
-    OpenRouterApiKey,
     DoctorFix {
         target: crate::app::actions::DoctorFixTarget,
         plan: Box<crate::diagnostics::FixPlan>,
@@ -296,12 +291,6 @@ impl QuestionViewState {
     pub fn with_no_freeform(mut self) -> Self {
         self.no_freeform = true;
         self
-    }
-
-    /// Forge: whether this local question is a dedicated text field rather than an
-    /// option list with an optional "Other" row.
-    pub fn is_direct_input(&self) -> bool {
-        crate::forge::provider_login::is_direct_input_kind(self.local_kind.as_ref())
     }
 
     /// Number of items for a given question: options + 1 free-form row

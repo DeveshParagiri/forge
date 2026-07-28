@@ -2,28 +2,15 @@ use indexmap::IndexMap;
 
 use crate::agent::config::ResolvedCredentials;
 
-/// Apply provider-specific headers derived from the request endpoint.
+/// Apply the one dynamic ChatGPT subscription header. Static provider headers
+/// belong in upstream `[model_providers.<id>.extra_headers]` configuration.
 pub(crate) fn apply_headers(headers: &mut IndexMap<String, String>, base_url: &str) {
-    if base_url.contains("chatgpt.com") || base_url.contains("backend-api/codex") {
-        if let Some(account_id) = super::credentials::read_codex_account_id() {
-            headers
-                .entry("ChatGPT-Account-Id".to_string())
-                .or_insert(account_id);
-        }
+    if super::identity::is_codex_base(base_url)
+        && let Some(account_id) = super::credentials::read_codex_account_id()
+    {
         headers
-            .entry("OpenAI-Beta".to_string())
-            .or_insert_with(|| "responses=experimental".to_string());
-        headers
-            .entry("originator".to_string())
-            .or_insert_with(|| "codex_cli_rs".to_string());
-    }
-    if base_url.contains("openrouter.ai") {
-        headers
-            .entry("HTTP-Referer".to_string())
-            .or_insert_with(|| "https://github.com/xai-org/grok-build".to_string());
-        headers
-            .entry("X-Title".to_string())
-            .or_insert_with(|| "Grok Build (personal)".to_string());
+            .entry("ChatGPT-Account-Id".to_string())
+            .or_insert(account_id);
     }
 }
 

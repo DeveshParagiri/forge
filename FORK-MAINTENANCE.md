@@ -13,7 +13,7 @@ upstream is tracked through the `upstream/main` remote-tracking branch.
 | Update script | `~/bin/grok-update-from-source` |
 | Config, auth, and sessions | `~/.grok/` |
 | ChatGPT Codex auth | `~/.codex/auth.json` |
-| OpenRouter key store | `~/.grok/provider_keys.json` |
+| Third-party provider config | `[model_providers.*]` in `~/.grok/config.toml` |
 
 `~/.local/bin/grok`, `~/.local/share/grok/versions/current`,
 `~/.grok/local/grok`, and `~/bin/grok` are compatibility symlinks to the
@@ -40,9 +40,9 @@ Bulk fork logic belongs in additive, crate-local modules:
 
 | Crate | Forge modules | Responsibility |
 |------|-------------------|----------------|
-| `xai-grok-sampler` | `src/forge/` | Codex Responses request policy, unknown-event compatibility, streamed terminal recovery |
-| `xai-grok-shell` | `src/agent/forge/` | Provider identity, configuration, credentials, status, catalog policy, profiles, and portable history |
-| `xai-grok-pager` | `src/forge/` | Provider login, effort controls, layout, welcome branding, and focused UI tests |
+| `xai-grok-sampler` | `src/forge/` | Codex Responses request policy, endpoint trust, unknown-event compatibility, and streamed terminal recovery |
+| `xai-grok-shell` | `src/agent/forge/` | Provider identity, narrow Codex credentials, catalog policy, request profiles, usage, Fast Mode, and portable history |
+| `xai-grok-pager` | `src/forge/` | Provider usage, Fast Mode and effort controls, layout, welcome branding, and focused UI tests |
 | `xai-grok-pager-render` | `src/forge/` | Claude palette/package policy and shortcut-footer state |
 
 Use `// Forge:` or `/// Forge:` for residual hooks in upstream-owned
@@ -60,28 +60,31 @@ part of the behavior:
 
 ### Sampler
 
-- `xai-grok-sampler/src/client.rs`: select and apply Responses backend policy.
+- `xai-grok-sampler/src/client.rs`: enforce the final credential/header boundary for every request shape.
+- `xai-grok-sampler/src/forge/endpoint_policy.rs`: positively identify official Codex and xAI HTTPS endpoints.
 - `xai-grok-sampler/src/stream/responses.rs`: observe and apply terminal recovery.
 - `xai-grok-sampler/tests/forge_codex_responses.rs`: cross-module Codex integration coverage.
 
 ### Shell
 
-- `agent/config.rs`: parse provider packs and apply credentials/request metadata.
+- `agent/model_providers.rs`: upstream shared provider endpoint/credential/header configuration.
+- `agent/config.rs`: apply model-provider defaults and expose provider-aware model metadata.
 - `agent/models.rs`: refine the stock model list with provider catalog policy.
-- `session/acp_session_impl/model_switch.rs`: remove provider-bound reasoning when required.
-- `session/acp_session_impl/sampler_turn.rs`: apply the provider request profile.
+- `session/acp_session_impl/model_switch.rs`: remove or flatten provider-bound history when required.
+- `session/acp_session_impl/sampler_turn.rs`: apply the narrow Codex request profile and dynamic account header.
 
 Legacy `agent/provider_auth.rs` and `agent/provider_history.rs` remain thin
 compatibility facades; implementation belongs in `agent/forge/`.
 
 ### Pager
 
-- `app/dispatch/router.rs`: route provider login and Claude effort cycling.
-- `app/agent_view/{interactions,render}.rs`: provider input hooks.
+- `app/dispatch/status.rs` and `app/dispatch/task_result.rs`: provider-aware `/usage` routing and output.
+- `app/agent_view/{interactions,render}.rs`: Fast Mode and reasoning-effort controls.
 - `app/agent_view/prompt.rs`: ordering-sensitive `Esc` cancellation.
 - `views/welcome/` and dashboard files: small branding/layout hooks.
 
-Provider login implementation: `src/forge/provider_login/`.
+`/login` remains the stock SpaceXAI login path. Codex and OpenRouter credentials
+are configured out of band; there is no fork-owned provider-login UI.
 
 ### Pager render
 
@@ -93,19 +96,28 @@ Forge palette implementation: `src/forge/forge_theme.rs`.
 
 ## Preserved behavior
 
-- Stock SpaceXAI welcome login remains on the upstream path.
-- `/login` supports SpaceXAI, ChatGPT Codex, and OpenRouter.
-- ChatGPT Codex reads `~/.codex/auth.json`.
-- OpenRouter reads the environment or `~/.grok/provider_keys.json`.
+- Stock SpaceXAI welcome login remains on the upstream `/login` path.
+- Generic third-party providers use upstream `[model_providers.*]` plus each
+  model's `model_provider`; the removed `[provider.*]` syntax is inert and warns
+  as unrecognized configuration.
+- ChatGPT Codex reads OAuth access/account data from `~/.codex/auth.json`; run
+  `codex login` to populate or refresh that file.
+- OpenRouter uses upstream `api_key`/`env_key` configuration, normally
+  `env_key = "OPENROUTER_API_KEY"`; Forge does not own a provider key store.
 - Provider catalogs support include/exclude filtering.
-- Provider-family switches remove nonportable Responses reasoning while
-  retaining user, assistant, and tool context.
-- Codex requests suppress xAI-only body fields and headers.
+- Provider-family switches remove nonportable Responses reasoning and flatten
+  backend-only tool calls while retaining portable user/assistant/tool context.
+- Fast Mode is session-scoped and sends `service_tier = "priority"` only for
+  models that explicitly set `supports_fast_mode = true`.
+- Codex requests suppress endpoint-rejected body fields, and all non-xAI
+  endpoints reject xAI bearer/private metadata at the final request boundary.
 - Unknown additive Responses events and liveness events are tolerated.
 - Streamed text/function calls are recovered when terminal Responses output is
   incomplete.
 - Forge theme Shift+Tab cycles reasoning effort; other themes retain stock
   permission-mode cycling.
+- `/usage` remains provider-aware: stock SpaceXAI billing stays upstream while
+  ChatGPT Codex uses its account usage endpoint.
 - Running-turn `Esc` cancels generation like `Ctrl+C` after overlays and
   selections receive their normal priority.
 
@@ -163,13 +175,14 @@ compatibility symlink refresh:
 ## Deferred hardening
 
 Keep these as separate behavior-changing commits rather than folding them into
-module extraction:
+provider cleanup:
 
-- Replace substring backend detection with parsed URL/host matching.
-- Make provider-key writes atomic.
-- Refresh OpenRouter catalog state immediately after saving a key.
-- Make provider-switch history conversion explicitly transactional.
-- Narrow broad third-party capability checks into provider capabilities.
+- Extend provider-aware `/usage` only when a provider exposes a stable account
+  usage API.
+- Consider finer per-provider capability objects if additional endpoint-specific
+  behavior appears; unknown endpoints must continue to fail closed.
+- Consider a transactional history rewrite only if the current in-memory model
+  switch flow gains fallible mutation after normalization.
 
 The detailed provider parity background remains in
 [`docs/CHATGPT-HANDOFF-PI-PARITY.md`](docs/CHATGPT-HANDOFF-PI-PARITY.md), but

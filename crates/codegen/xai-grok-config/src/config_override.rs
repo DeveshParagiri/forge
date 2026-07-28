@@ -77,14 +77,12 @@ pub fn patch_touches_any(patch: &toml::Table, paths: &[PatchPath]) -> bool {
 
 /// Keys stripped from every applied patch: an override cannot re-inject nested
 /// `version_overrides`/`campaigns`, define `[auth_provider.*]` command tables, or
-/// inject either upstream `[model_providers.*]` or Forge `[provider.*]`
-/// endpoint/credential packs. Models may still name providers defined by a
-/// trusted local configuration layer.
+/// inject upstream `[model_providers.*]` endpoint/credential packs. Models may
+/// still name providers defined by a trusted local configuration layer.
 pub const PATCH_STRIP_KEYS: &[&str] = &[
     "version_overrides",
     "campaigns",
     "auth_provider",
-    "provider",
     "model_providers",
 ];
 
@@ -144,7 +142,6 @@ mod tests {
             "auth_provider".into(),
             toml::Value::Table(toml::Table::new()),
         );
-        p.insert("provider".into(), toml::Value::Table(toml::Table::new()));
         p.insert(
             "model_providers".into(),
             toml::Value::Table(toml::Table::new()),
@@ -154,7 +151,6 @@ mod tests {
         assert!(cfg2.get("version_overrides").is_none());
         assert!(cfg2.get("campaigns").is_none());
         assert!(cfg2.get("auth_provider").is_none());
-        assert!(cfg2.get("provider").is_none());
         assert!(cfg2.get("model_providers").is_none());
         assert_eq!(cfg2["keep"].as_bool(), Some(true));
 

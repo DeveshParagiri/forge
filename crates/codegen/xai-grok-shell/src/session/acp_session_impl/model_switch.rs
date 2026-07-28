@@ -15,18 +15,19 @@ impl SessionActor {
         let previous_sampling_config = self.chat_state_handle.get_sampling_config().await;
         if let Some(previous_sampling_config) = previous_sampling_config {
             let mut conversation = self.chat_state_handle.get_conversation().await;
-            let stripped = crate::agent::forge::history::strip_for_provider_switch(
+            let normalized = crate::agent::forge::history::normalize_for_provider_switch(
                 &previous_sampling_config.base_url,
                 &sampling_config.base_url,
                 &mut conversation,
             );
-            if stripped > 0 {
+            if normalized.changed() {
                 self.chat_state_handle.replace_conversation(conversation);
                 tracing::info!(
                     session_id = %self.session_info.id.0,
                     new_model = %sampling_config.model,
-                    stripped_reasoning_items = stripped,
-                    "provider switch removed non-portable reasoning while preserving transcript context"
+                    stripped_reasoning_items = normalized.reasoning_removed,
+                    flattened_backend_tool_items = normalized.backend_tools_flattened,
+                    "provider switch normalized provider-bound history while preserving transcript context"
                 );
             }
         }

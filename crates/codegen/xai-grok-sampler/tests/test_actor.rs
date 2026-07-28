@@ -88,6 +88,7 @@ fn test_config(base_url: String, model: &str) -> SamplerConfig {
         stream_tool_calls: false,
         idle_timeout_secs: Some(30),
         reasoning_effort: None,
+        fast_mode: false,
         origin_client: None,
         client_identifier: None,
         deployment_id: None,
@@ -778,12 +779,11 @@ fn responses_config(base_url: String, doom_loop: Option<DoomLoopRecoveryPolicy>)
     cfg
 }
 
-/// Server-reported doom-loop triggers flow through the actor rung onto the
-/// completed response, without retries. The trigger is non-confident
-/// (`@response` channel), so the recovery — which resamples only confident
-/// signals — leaves it alone.
+/// Unknown and cleartext endpoints must not activate xAI-only doom-loop
+/// collection. The mock server sends the private terminal field anyway; the
+/// response still completes, but no xAI signal is surfaced to the actor.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_doom_loop_signals_reach_completed_response() {
+async fn third_party_responses_ignore_xai_doom_loop_signals() {
     let counter = Arc::new(AtomicU32::new(0));
     let counter_handler = Arc::clone(&counter);
     let app = Router::new().route(
@@ -817,21 +817,17 @@ async fn responses_doom_loop_signals_reach_completed_response() {
         .await;
     server.shutdown();
 
-    let (response, _metrics) = result.expect("a signalled turn still completes");
-    assert_eq!(counter.load(Ordering::SeqCst), 1, "warn-only: no resample");
-    assert_eq!(response.doom_loop_signals.len(), 1);
-    assert_eq!(
-        response.doom_loop_signals[0].raw,
-        "tail_repetition:4@response"
-    );
+    let (response, _metrics) = result.expect("a turn with an ignored private field completes");
+    assert_eq!(counter.load(Ordering::SeqCst), 1, "no private resample");
+    assert!(response.doom_loop_signals.is_empty());
     assert_eq!(response.assistant_text(), "an answer");
 }
 
-/// Acceptance spec for the recovery rung: a confident signal
-/// (`tail_repetition:8@thinking` at the default threshold) is resampled once
-/// and the clean second response is accepted, on its own budget.
+/// A confident xAI-only signal sent by an unknown cleartext endpoint must not
+/// trigger the private recovery rung. Endpoint trust, not payload shape,
+/// controls whether the feature is enabled.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn responses_confident_doom_loop_signal_resamples_once() {
+async fn third_party_responses_do_not_resample_xai_doom_loop_signals() {
     let counter = Arc::new(AtomicU32::new(0));
     let counter_handler = Arc::clone(&counter);
     let app = Router::new().route(
@@ -874,13 +870,10 @@ async fn responses_confident_doom_loop_signal_resamples_once() {
         .await;
     server.shutdown();
 
-    let (response, _metrics) = result.expect("recovery accepts the clean resample");
-    assert_eq!(counter.load(Ordering::SeqCst), 2, "exactly one resample");
-    assert_eq!(response.assistant_text(), "clean answer");
-    assert!(
-        response.doom_loop_signals.is_empty(),
-        "the accepted response is the clean resample"
-    );
+    let (response, _metrics) = result.expect("ignored private signal leaves the turn successful");
+    assert_eq!(counter.load(Ordering::SeqCst), 1, "no private resample");
+    assert_eq!(response.assistant_text(), "poisoned answer");
+    assert!(response.doom_loop_signals.is_empty());
 }
 
 // ---------------------------------------------------------------------------

@@ -641,19 +641,8 @@ pub enum Action {
     Logout,
     /// Log out and immediately start a new login flow.
     SwitchAccount,
-    /// User pressed login on the welcome screen (SpaceXAI / upstream path).
+    /// User pressed login on the welcome screen.
     Login,
-    /// Forge: open Pi-style multi-provider `/login` picker.
-    ChooseProviderLogin,
-    /// Forge: user picked a provider in the `/login` picker.
-    /// `provider_id` is `spacexai` | `openai-codex` | `openrouter`.
-    ProviderLoginSelected {
-        provider_id: String,
-    },
-    /// Forge: user submitted an OpenRouter API key via freeform modal.
-    OpenRouterKeySubmitted {
-        api_key: String,
-    },
     /// Cancel an in-progress login that was started from inside a session
     /// (`/login` or a 401 re-auth prompt) and return to the previous view.
     /// Distinct from `Quit`: abandoning a mid-session re-auth must not exit
