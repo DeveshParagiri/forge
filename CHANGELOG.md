@@ -4,6 +4,27 @@ This changelog tracks Forge releases independently from the synchronized upstrea
 Grok Build version. Forge release tags use `forge-vMAJOR.MINOR.PATCH`; the
 upstream base is recorded in each release entry.
 
+## [0.3.1] - 2026-07-31
+
+**Upstream base:** Grok Build 0.2.116
+
+### Changed
+
+- Forge is synchronized with Grok Build 0.2.116, bringing upstream improvements
+  to streamed JSON tool results and usage, `/undo`, mode-aware slash-command
+  visibility, OAuth refresh and login reliability, MCP credentials and OAuth,
+  LSP stability, worktree lifecycle, and terminal handling.
+- The synchronization retains Forge’s narrow subscription-backed ChatGPT Codex
+  compatibility, session-scoped Fast Mode, provider-aware controls, external
+  Claude Code and Codex CLI harnesses, and portable cross-provider history.
+
+### Fixed
+
+- xAI-only bearer resolution, private request headers, and backend recovery
+  metadata remain positively gated to trusted xAI endpoints during the upstream
+  request-path refactor. ChatGPT Codex fallback remains limited to its canonical
+  endpoint, and Responses requests continue to use `store = false`.
+
 ## [0.3.0] - 2026-07-27
 
 **Upstream base:** Grok Build 0.2.112
