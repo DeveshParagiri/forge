@@ -122,7 +122,7 @@ pub(in crate::app::dispatch) fn dispatch_open_command_palette(app: &mut AppView)
     agent.active_modal = Some(ActiveModal::CommandPalette {
         entries: crate::views::modal::default_palette_entries(
             agent.sharing_enabled,
-            agent.prompt.slash_controller.screen_mode(),
+            &agent.prompt.slash_controller,
         ),
         // Type-to-find: open in input mode (matches Ctrl+P).
         state: crate::views::picker::PickerState::input_active(),
@@ -255,9 +255,11 @@ pub(in crate::app::dispatch) fn dispatch_open_settings(
     if let Some(key) = focus_key
         && state.focus_key(key)
     {
-        // Land directly on the setting's chooser page (e.g. the coding data
-        // sharing opt-in/out picker), not just the focused browse row.
-        state.try_enter_picking_enum();
+        // Try the chooser; a locked row keeps Browse (`try_enter_picking_enum`
+        // refuses when `row_lock` is set).
+        if state.try_enter_picking_enum() {
+            state.close_on_picker_exit = true;
+        }
     }
     agent.active_modal = Some(ActiveModal::Settings { state });
     effects

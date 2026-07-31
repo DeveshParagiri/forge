@@ -5477,6 +5477,15 @@ dependencies = [
 
 [[package]]
 name = "itertools"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
+dependencies = [
+ "either",
+]
+
+[[package]]
+name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
@@ -7877,6 +7886,18 @@ dependencies = [
  "procfs",
  "protobuf",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "prometheus-parse"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "811031bea65e5a401fb2e1f37d802cca6601e204ac463809a3189352d13b78a5"
+dependencies = [
+ "chrono",
+ "itertools 0.12.1",
+ "once_cell",
+ "regex",
 ]
 
 [[package]]
@@ -12884,6 +12905,7 @@ name = "xai-circuit-breaker"
 version = "0.1.0"
 dependencies = [
  "log",
+ "tonic",
 ]
 
 [[package]]
@@ -12977,6 +12999,7 @@ dependencies = [
  "opentelemetry_sdk",
  "parking_lot",
  "prometheus",
+ "prometheus-parse",
  "prost",
  "reqwest 0.12.24",
  "schemars 1.0.4",
@@ -13231,6 +13254,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "xai-grok-extra-ca"
+version = "0.1.0"
+dependencies = [
+ "reqwest 0.12.24",
+ "rustls",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "xai-grok-hooks"
 version = "0.1.0"
 dependencies = [
@@ -13259,6 +13292,7 @@ dependencies = [
  "serde_json",
  "tracing",
  "xai-grok-auth",
+ "xai-grok-extra-ca",
  "xai-grok-sampler",
  "xai-grok-telemetry",
  "xai-grok-version",
@@ -13325,6 +13359,7 @@ dependencies = [
  "xai-computer-hub-sdk",
  "xai-file-utils",
  "xai-grok-config",
+ "xai-grok-extra-ca",
  "xai-grok-telemetry",
  "xai-grok-tools",
  "xai-grok-version",
@@ -13396,7 +13431,7 @@ dependencies = [
 
 [[package]]
 name = "xai-grok-pager"
-version = "0.2.112"
+version = "0.2.116"
 dependencies = [
  "agent-client-protocol",
  "ansi-to-tui",
@@ -13486,7 +13521,7 @@ dependencies = [
 
 [[package]]
 name = "xai-grok-pager-bin"
-version = "0.2.112"
+version = "0.2.116"
 dependencies = [
  "anyhow",
  "clap",
@@ -13662,6 +13697,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "xai-grok-extra-ca",
  "xai-grok-sampling-types",
  "xai-grok-test-support",
  "xai-grok-version",
@@ -13750,7 +13786,7 @@ dependencies = [
 
 [[package]]
 name = "xai-grok-shell"
-version = "0.2.112"
+version = "0.2.116"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -13856,6 +13892,7 @@ dependencies = [
  "xai-grok-compaction",
  "xai-grok-config",
  "xai-grok-config-types",
+ "xai-grok-extra-ca",
  "xai-grok-hooks",
  "xai-grok-http",
  "xai-grok-mcp",
@@ -14000,6 +14037,7 @@ dependencies = [
  "xai-grok-auth",
  "xai-grok-config",
  "xai-grok-env",
+ "xai-grok-extra-ca",
  "xai-grok-sampler",
  "xai-grok-secrets",
  "xai-mixpanel",
@@ -14100,6 +14138,7 @@ dependencies = [
  "xai-file-utils",
  "xai-grok-config",
  "xai-grok-env",
+ "xai-grok-extra-ca",
  "xai-grok-sandbox",
  "xai-grok-test-support",
  "xai-grok-tools-api",
@@ -14154,7 +14193,7 @@ dependencies = [
 
 [[package]]
 name = "xai-grok-version"
-version = "0.2.112"
+version = "0.2.116"
 dependencies = [
  "semver",
 ]

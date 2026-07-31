@@ -159,12 +159,12 @@ pub static USER_GUIDE: &[Doc] = &[
     guide!(
         "23-dashboard.md",
         "Agent Dashboard",
-        "Central overview of local sessions and forks"
+        "Live multi-session roster: peek, dispatch, pin, stop, and search"
     ),
     guide!(
         "24-monitoring-usage.md",
-        "Monitoring Usage",
-        "External OpenTelemetry export and privacy controls"
+        "Monitoring Usage (External OpenTelemetry)",
+        "Export usage metrics to a customer OpenTelemetry collector"
     ),
     // Forge: keep fork-specific behavior in the final additive guide.
     guide!(

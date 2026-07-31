@@ -265,7 +265,7 @@ pub enum TickDemand {
 pub const SLOW_TICK_INTERVAL: Duration = Duration::from_millis(83);
 /// Welcome toast lifetime (wall clock, so the duration holds whether the
 /// event loop is ticking Slow or Fast).
-const WELCOME_TOAST_DURATION: Duration = Duration::from_secs(4);
+const WELCOME_TOAST_DURATION: Duration = Duration::from_secs(2);
 /// Which prompt box in-flight voice dictation appends its finalized text to.
 /// Captured when recording **starts** so a trailing STT final still lands where
 /// the user was dictating, even if they navigate away — or toggle a dashboard
@@ -687,16 +687,19 @@ pub struct AppView {
     pub tip: Option<String>,
     /// Whether to show the resolved model ID in /session-info output.
     pub show_resolved_model: bool,
-    /// Whether the `/share` slash command is available. Gated by
-    /// `RemoteSettings.sharing_enabled`; defaults to `false` when remote
-    /// settings are unavailable or the field is absent.
+    /// Whether the `/share` slash command is available. Currently forced off
+    /// while session share links are temporarily disabled in clients.
     pub sharing_enabled: bool,
     /// Whether the plugin marketplace CTA is enabled. Env `GROK_PLUGIN_CTA`
     /// overrides `RemoteSettings.plugin_cta` (remote settings); defaults to `false`.
     pub plugin_cta_enabled: bool,
     /// Consumer billing surface (credit fetches / warnings). False for team
-    /// and API-key auth. `/usage` itself stays available for session token/cost.
+    /// and API-key auth. `/usage` itself stays available for session token/cost
+    /// unless [`Self::has_external_auth_provider`].
     pub usage_visible: bool,
+    /// External `auth_provider_command` deployment.
+    /// No grok.com billing session exists; `/usage` and credit UI stay off.
+    pub has_external_auth_provider: bool,
     /// Slash commands denied for the current subscription tier
     /// ([`TIER_RESTRICTED_COMMANDS`] when the user is on the free / X Basic
     /// tier, empty otherwise). Recomputed by [`Self::apply_tier_restrictions`]
@@ -861,9 +864,10 @@ pub struct AppView {
     /// Hit-test rect for the welcome hero upgrade CTA `[label]` button
     /// (click → `AnnouncementsOpenCta(Welcome)`).
     pub welcome_upgrade_cta_rect: Option<ratatui::layout::Rect>,
-    pub welcome_privacy_banner_accept_rect: Option<ratatui::layout::Rect>,
-    pub welcome_privacy_banner_customize_rect: Option<ratatui::layout::Rect>,
-    pub welcome_privacy_banner_legal_rect: Option<ratatui::layout::Rect>,
+    pub welcome_privacy_banner_opt_in_rect: Option<ratatui::layout::Rect>,
+    pub welcome_privacy_banner_opt_out_rect: Option<ratatui::layout::Rect>,
+    pub welcome_privacy_banner_terms_rect: Option<ratatui::layout::Rect>,
+    pub welcome_privacy_banner_policy_rect: Option<ratatui::layout::Rect>,
     /// Transient welcome toast: (message, wall-clock expiry).
     pub welcome_toast: Option<(String, std::time::Instant)>,
     /// Sticky hover flag for the privacy banner buttons (redraw on enter/leave).
@@ -1067,7 +1071,12 @@ pub struct AppView {
     /// Local `[privacy].privacy_banner_acked` (RFC 3339 UTC).
     pub privacy_banner_acked: Option<String>,
     /// Accept awaits ACP success before ack.
-    pub privacy_banner_accept_inflight: bool,
+    pub privacy_banner_opt_in_inflight: bool,
+    /// Newest `SetCodingDataSharing` write. Bumped per dispatch and echoed
+    /// on the `TaskResult`, so an older write's late reply — whose
+    /// `rollback_to_opted_in` was captured before the newer one — cannot
+    /// clobber the current value.
+    pub coding_data_write_seq: u64,
     /// Persisted `[cli].show_tips` mirror. `None` = no override (default `true`).
     pub show_tips: Option<bool>,
     /// Persisted `[cli].auto_update` mirror. `None` = no override (default `true`).
@@ -1194,31 +1203,6 @@ fn privacy_banner_reshow_elapsed(acked_at: &str, reshow_days: Option<u64>) -> bo
     };
     chrono::Utc::now() >= next
 }
-/// Bottom-right toast overlay on the welcome screen (mirrors agent toast style).
-fn paint_welcome_toast(buf: &mut ratatui::buffer::Buffer, area: ratatui::layout::Rect, msg: &str) {
-    let theme = crate::theme::Theme::current();
-    let max_msg = (area.width as usize).saturating_sub(4);
-    if max_msg == 0 || area.height == 0 {
-        return;
-    }
-    let toast = if msg.chars().count() <= max_msg {
-        format!(" {msg} ")
-    } else {
-        let truncated: String = msg.chars().take(max_msg.saturating_sub(1)).collect();
-        format!(" {}… ", truncated.trim_end())
-    };
-    let w = toast.chars().count() as u16;
-    let x = area.right().saturating_sub(w + 1);
-    let y = area.bottom().saturating_sub(1);
-    for (i, ch) in toast.chars().enumerate() {
-        if let Some(cell) = buf.cell_mut((x + i as u16, y)) {
-            cell.set_char(ch);
-            cell.fg = theme.accent_user;
-            cell.bg = theme.bg_base;
-            cell.modifier = ratatui::prelude::Modifier::BOLD;
-        }
-    }
-}
 impl AppView {
     pub fn is_zdr_blocked(&self) -> bool {
         self.is_zdr && !self.zdr_access_enabled
@@ -1325,7 +1309,8 @@ impl AppView {
                 .subscription_tier
                 .as_deref()
                 .is_some_and(is_api_key_label);
-        self.usage_visible = meta.team_name.is_none() && !self.is_api_key_auth;
+        self.usage_visible =
+            meta.team_name.is_none() && !self.is_api_key_auth && !self.has_external_auth_provider;
         self.sync_billing_surface_to_agents();
         self.apply_tier_restrictions();
         if self.is_api_key_auth {
@@ -1339,23 +1324,34 @@ impl AppView {
             self.show_resolved_model = show;
         }
     }
-    /// Mirror [`Self::usage_visible`] onto every slash surface that can run
-    /// `/usage` (agents, welcome, dashboard dispatch / peek-reply).
+    /// Mirror billing + `/usage` gates onto every slash surface (agents,
+    /// welcome, dashboard dispatch / peek-reply).
     pub(crate) fn sync_billing_surface_to_agents(&mut self) {
-        let visible = self.usage_visible;
+        let billing = self.usage_visible;
+        let usage_cmd = !self.has_external_auth_provider;
         for agent in self.agents.values_mut() {
-            agent.set_billing_surface_visible(visible);
+            agent.set_billing_surface_visible(billing);
+            agent.set_usage_command_visible(usage_cmd);
         }
         self.welcome_prompt
             .slash_controller
-            .set_billing_surface_visible(visible);
+            .set_billing_surface_visible(billing);
+        self.welcome_prompt
+            .slash_controller
+            .set_usage_command_visible(usage_cmd);
         if let Some(dash) = self.dashboard.as_mut() {
             dash.dispatch
                 .slash_controller
-                .set_billing_surface_visible(visible);
+                .set_billing_surface_visible(billing);
+            dash.dispatch
+                .slash_controller
+                .set_usage_command_visible(usage_cmd);
             dash.peek_reply
                 .slash_controller
-                .set_billing_surface_visible(visible);
+                .set_billing_surface_visible(billing);
+            dash.peek_reply
+                .slash_controller
+                .set_usage_command_visible(usage_cmd);
         }
     }
     /// Force voice on for API-key sessions when only a remote rule left it off.
@@ -1445,9 +1441,10 @@ impl AppView {
             welcome_refresh_rect: None,
             welcome_gate_url_rect: None,
             welcome_upgrade_cta_rect: None,
-            welcome_privacy_banner_accept_rect: None,
-            welcome_privacy_banner_customize_rect: None,
-            welcome_privacy_banner_legal_rect: None,
+            welcome_privacy_banner_opt_in_rect: None,
+            welcome_privacy_banner_opt_out_rect: None,
+            welcome_privacy_banner_terms_rect: None,
+            welcome_privacy_banner_policy_rect: None,
             welcome_toast: None,
             welcome_on_privacy_banner: false,
             welcome_on_upgrade_cta: false,
@@ -1522,7 +1519,8 @@ impl AppView {
             privacy_notice_rollout: false,
             privacy_banner_reshow_days: None,
             privacy_banner_acked: None,
-            privacy_banner_accept_inflight: false,
+            privacy_banner_opt_in_inflight: false,
+            coding_data_write_seq: 0,
             show_tips: None,
             auto_update: None,
             ask_user_question_timeout_enabled: None,
@@ -1553,6 +1551,7 @@ impl AppView {
             sharing_enabled: false,
             plugin_cta_enabled: false,
             usage_visible: true,
+            has_external_auth_provider: false,
             tier_restricted_commands: Vec::new(),
             leader_mode: false,
             credit_balance: None,
@@ -1661,6 +1660,7 @@ impl AppView {
     pub fn apply_tier_restrictions(&mut self) {
         let restricted = self.team_name.is_none()
             && !self.is_api_key_auth
+            && !self.has_external_auth_provider
             && is_restricted_tier(self.subscription_tier.as_deref());
         let names: Vec<String> = if restricted {
             TIER_RESTRICTED_COMMANDS
@@ -1960,7 +1960,7 @@ impl AppView {
     ///
     /// From the dashboard, toasts route into the dispatch input's inline
     /// error slot. From an agent view the existing per-agent toast machinery
-    /// fires. On welcome, a bottom-right overlay for
+    /// fires. On welcome, an overlay above the prompt for
     /// [`WELCOME_TOAST_DURATION`].
     pub fn show_toast(&mut self, msg: &str) {
         match self.active_view {
@@ -1977,13 +1977,14 @@ impl AppView {
             }
             ActiveView::AgentDashboard => {
                 if let Some(d) = self.dashboard.as_mut() {
-                    d.error_toast = Some(crate::glyphs::legacy_glyph_fallback(msg).into_owned());
+                    d.error_toast = Some(crate::glyphs::sanitize_toast_message(msg).into_owned());
                 }
             }
             ActiveView::Welcome => {
-                let msg = crate::glyphs::legacy_glyph_fallback(msg).into_owned();
-                self.welcome_toast =
-                    Some((msg, std::time::Instant::now() + WELCOME_TOAST_DURATION));
+                self.welcome_toast = Some((
+                    crate::glyphs::sanitize_toast_message(msg).into_owned(),
+                    std::time::Instant::now() + WELCOME_TOAST_DURATION,
+                ));
             }
         }
     }
@@ -2463,11 +2464,10 @@ impl AppView {
                     refresh_rect: self.welcome_refresh_rect.as_ref(),
                     gate_url_rect: self.welcome_gate_url_rect.as_ref(),
                     upgrade_cta_rect: self.welcome_upgrade_cta_rect.as_ref(),
-                    privacy_banner_accept_rect: self.welcome_privacy_banner_accept_rect.as_ref(),
-                    privacy_banner_customize_rect: self
-                        .welcome_privacy_banner_customize_rect
-                        .as_ref(),
-                    privacy_banner_legal_rect: self.welcome_privacy_banner_legal_rect.as_ref(),
+                    privacy_banner_opt_in_rect: self.welcome_privacy_banner_opt_in_rect.as_ref(),
+                    privacy_banner_opt_out_rect: self.welcome_privacy_banner_opt_out_rect.as_ref(),
+                    privacy_banner_terms_rect: self.welcome_privacy_banner_terms_rect.as_ref(),
+                    privacy_banner_policy_rect: self.welcome_privacy_banner_policy_rect.as_ref(),
                     on_privacy_banner: &mut self.welcome_on_privacy_banner,
                     on_upgrade_cta: &mut self.welcome_on_upgrade_cta,
                     upgrade_cta_keyboard: welcome_pinned_upgrade_cta,
@@ -3061,9 +3061,10 @@ struct WelcomeInputCtx<'a> {
     /// Hit-test rect for the welcome hero upgrade CTA `[label]` button
     /// (click → open the promo url).
     upgrade_cta_rect: Option<&'a ratatui::layout::Rect>,
-    privacy_banner_accept_rect: Option<&'a ratatui::layout::Rect>,
-    privacy_banner_customize_rect: Option<&'a ratatui::layout::Rect>,
-    privacy_banner_legal_rect: Option<&'a ratatui::layout::Rect>,
+    privacy_banner_opt_in_rect: Option<&'a ratatui::layout::Rect>,
+    privacy_banner_opt_out_rect: Option<&'a ratatui::layout::Rect>,
+    privacy_banner_terms_rect: Option<&'a ratatui::layout::Rect>,
+    privacy_banner_policy_rect: Option<&'a ratatui::layout::Rect>,
     /// Sticky hover flag for the privacy banner buttons (redraw on
     /// enter/leave/crossing so they brighten/dim).
     on_privacy_banner: &'a mut bool,
@@ -3702,21 +3703,28 @@ fn handle_welcome_input(ev: &Event, ctx: &mut WelcomeInputCtx<'_>) -> InputOutco
                         xai_grok_telemetry::events::AnnouncementCtaSurface::Welcome,
                     ));
                 }
-                if let Some(rect) = ctx.privacy_banner_accept_rect
+                if let Some(rect) = ctx.privacy_banner_opt_in_rect
                     && rect.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
                 {
-                    return InputOutcome::Action(Action::PrivacyBannerAccept);
+                    return InputOutcome::Action(Action::PrivacyBannerOptIn);
                 }
-                if let Some(rect) = ctx.privacy_banner_customize_rect
+                if let Some(rect) = ctx.privacy_banner_opt_out_rect
                     && rect.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
                 {
-                    return InputOutcome::Action(Action::PrivacyBannerCustomize);
+                    return InputOutcome::Action(Action::PrivacyBannerOptOut);
                 }
-                if let Some(rect) = ctx.privacy_banner_legal_rect
+                if let Some(rect) = ctx.privacy_banner_terms_rect
                     && rect.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
                 {
                     return InputOutcome::Action(Action::OpenUrl(
-                        crate::views::privacy_banner::PRIVACY_BANNER_LEGAL_URL.to_string(),
+                        crate::views::privacy_banner::PRIVACY_BANNER_TERMS_URL.to_string(),
+                    ));
+                }
+                if let Some(rect) = ctx.privacy_banner_policy_rect
+                    && rect.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+                {
+                    return InputOutcome::Action(Action::OpenUrl(
+                        crate::views::privacy_banner::PRIVACY_BANNER_POLICY_URL.to_string(),
                     ));
                 }
                 if let Some(rect) = ctx.changelog_cta_rect
@@ -3798,13 +3806,16 @@ fn handle_welcome_input(ev: &Event, ctx: &mut WelcomeInputCtx<'_>) -> InputOutco
                     return InputOutcome::Changed;
                 }
                 let over_banner = ctx
-                    .privacy_banner_accept_rect
+                    .privacy_banner_opt_in_rect
                     .is_some_and(|r| r.contains(pos))
                     || ctx
-                        .privacy_banner_customize_rect
+                        .privacy_banner_opt_out_rect
                         .is_some_and(|r| r.contains(pos))
                     || ctx
-                        .privacy_banner_legal_rect
+                        .privacy_banner_terms_rect
+                        .is_some_and(|r| r.contains(pos))
+                    || ctx
+                        .privacy_banner_policy_rect
                         .is_some_and(|r| r.contains(pos));
                 if over_banner || *ctx.on_privacy_banner {
                     *ctx.on_privacy_banner = over_banner;
@@ -4358,13 +4369,19 @@ impl AppView {
                         self.welcome_refresh_rect = result.refresh_rect;
                         self.welcome_gate_url_rect = result.gate_url_rect;
                         self.welcome_upgrade_cta_rect = result.upgrade_cta_rect;
-                        self.welcome_privacy_banner_accept_rect = result.privacy_banner_accept_rect;
-                        self.welcome_privacy_banner_customize_rect =
-                            result.privacy_banner_customize_rect;
-                        self.welcome_privacy_banner_legal_rect = result.privacy_banner_legal_rect;
+                        self.welcome_privacy_banner_opt_in_rect = result.privacy_banner_opt_in_rect;
+                        self.welcome_privacy_banner_opt_out_rect =
+                            result.privacy_banner_opt_out_rect;
+                        self.welcome_privacy_banner_terms_rect = result.privacy_banner_terms_rect;
+                        self.welcome_privacy_banner_policy_rect = result.privacy_banner_policy_rect;
                         self.welcome_changelog_cta_rect = result.changelog_cta_rect;
                         if let Some((ref msg, _)) = self.welcome_toast {
-                            paint_welcome_toast(f.buffer_mut(), view_area, msg);
+                            crate::views::welcome::paint_welcome_toast(
+                                f.buffer_mut(),
+                                view_area,
+                                msg,
+                                self.welcome_prompt_rect,
+                            );
                         }
                         self.welcome_announcement.truncated = result.announcement_truncated;
                         self.welcome_announcement.rect = result.announcement_rect;
@@ -4548,7 +4565,7 @@ impl AppView {
                                 !privacy_banner && self.tip.is_some() && agent.should_show_tip();
                             let has_mode_banner = agent.mode_switch_banner.is_some();
                             let banner_height = if privacy_banner {
-                                2
+                                crate::views::privacy_banner::MIN_HEIGHT
                             } else if has_mode_banner {
                                 1
                             } else if announcement_banner_h > 0 {
@@ -5596,6 +5613,22 @@ pub(crate) mod tests {
         Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
     #[test]
+    fn welcome_show_toast_scrubs_control_chars() {
+        let mut app = test_app();
+        assert!(matches!(app.active_view, ActiveView::Welcome));
+        app.show_toast("a\nb\rc\thttps://x.ai");
+        let toast = app
+            .welcome_toast
+            .as_ref()
+            .map(|(m, _)| m.as_str())
+            .unwrap_or("");
+        assert!(
+            !toast.chars().any(|c| c.is_control()),
+            "control chars must be scrubbed at write: {toast:?}"
+        );
+        assert!(toast.contains("https://x.ai"), "{toast:?}");
+    }
+    #[test]
     fn parse_esc_ttl_bounds() {
         let default = PendingAction::ESC_DOUBLE_PRESS_TTL;
         assert_eq!(parse_esc_ttl(None), default);
@@ -5743,7 +5776,8 @@ pub(crate) mod tests {
             privacy_notice_rollout: false,
             privacy_banner_reshow_days: None,
             privacy_banner_acked: None,
-            privacy_banner_accept_inflight: false,
+            privacy_banner_opt_in_inflight: false,
+            coding_data_write_seq: 0,
             show_tips: None,
             auto_update: None,
             ask_user_question_timeout_enabled: None,
@@ -5786,9 +5820,10 @@ pub(crate) mod tests {
             welcome_refresh_rect: None,
             welcome_gate_url_rect: None,
             welcome_upgrade_cta_rect: None,
-            welcome_privacy_banner_accept_rect: None,
-            welcome_privacy_banner_customize_rect: None,
-            welcome_privacy_banner_legal_rect: None,
+            welcome_privacy_banner_opt_in_rect: None,
+            welcome_privacy_banner_opt_out_rect: None,
+            welcome_privacy_banner_terms_rect: None,
+            welcome_privacy_banner_policy_rect: None,
             welcome_toast: None,
             welcome_on_privacy_banner: false,
             welcome_on_upgrade_cta: false,
@@ -5835,6 +5870,7 @@ pub(crate) mod tests {
             sharing_enabled: false,
             plugin_cta_enabled: false,
             usage_visible: true,
+            has_external_auth_provider: false,
             tier_restricted_commands: Vec::new(),
             leader_mode: true,
             credit_balance: None,
@@ -7018,6 +7054,22 @@ pub(crate) mod tests {
         agent.note_terminal_size((120, 50));
         assert!(agent.show_ephemeral_tip(tip(), &mut counts));
         assert_eq!(counts.get("t_seen"), Some(&2));
+    }
+    #[test]
+    fn external_auth_provider_keeps_billing_off_after_auth_meta() {
+        let mut app = test_app();
+        app.has_external_auth_provider = true;
+        app.usage_visible = false;
+        app.apply_auth_meta(&xai_grok_shell::auth::AuthMeta::default());
+        assert!(!app.usage_visible);
+        assert!(app.tier_restricted_commands.is_empty());
+        assert!(
+            !app.welcome_prompt
+                .slash_controller
+                .registry()
+                .is_restricted("usage")
+        );
+        assert!(!app.welcome_prompt.slash_controller.usage_command_visible());
     }
     #[test]
     fn apply_auth_meta_disables_billing_surface_for_team_users() {
@@ -10033,9 +10085,10 @@ pub(crate) mod tests {
     fn welcome_privacy_banner_hover_triggers_redraw() {
         let mut app = test_app();
         app.active_view = ActiveView::Welcome;
-        app.welcome_privacy_banner_accept_rect = Some(ratatui::layout::Rect::new(50, 10, 8, 1));
-        app.welcome_privacy_banner_customize_rect = Some(ratatui::layout::Rect::new(25, 10, 24, 1));
-        app.welcome_privacy_banner_legal_rect = Some(ratatui::layout::Rect::new(2, 11, 45, 1));
+        app.welcome_privacy_banner_opt_in_rect = Some(ratatui::layout::Rect::new(50, 10, 8, 1));
+        app.welcome_privacy_banner_opt_out_rect = Some(ratatui::layout::Rect::new(25, 10, 24, 1));
+        app.welcome_privacy_banner_terms_rect = Some(ratatui::layout::Rect::new(7, 11, 5, 1));
+        app.welcome_privacy_banner_policy_rect = Some(ratatui::layout::Rect::new(17, 11, 14, 1));
         let over = left_mouse(MouseEventKind::Moved, 52, 10);
         assert!(matches!(app.handle_input(&over), InputOutcome::Changed));
         assert!(app.welcome_on_privacy_banner);

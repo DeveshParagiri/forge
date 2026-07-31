@@ -34,6 +34,11 @@ fn jwt_tier_claim_maps_free_and_paid() {
         jwt_tier_claim(&jwt_with_tier(6)).as_deref(),
         Some("supergrok_lite")
     );
+    assert_eq!(
+        jwt_tier_claim(&jwt_with_tier(7)).as_deref(),
+        Some("supergrok_plus")
+    );
+    assert_eq!(jwt_tier_claim(&jwt_with_tier(9)).as_deref(), Some("9"));
     assert_eq!(jwt_tier_claim(&jwt_with_tier(99)).as_deref(), Some("99"));
 }
 fn auth_with_mode(mode: crate::auth::AuthMode, key: &str) -> crate::auth::GrokAuth {
@@ -99,7 +104,9 @@ fn jwt_claim_matches_user_subscription_tier_known_pairs() {
         ("x_premium", "XPremium"),
         ("x_premium_plus", "XPremiumPlus"),
         ("supergrok_heavy", "SuperGrokPro"),
+        ("9", "EnterpriseMystery"),
         ("supergrok_lite", "SuperGrokLite"),
+        ("supergrok_plus", "SuperGrokPlus"),
     ];
     for (claim, user_tier) in cases {
         assert!(
@@ -118,10 +125,22 @@ fn jwt_claim_matches_user_subscription_tier_rejects_stale_and_unknown() {
         "supergrok",
         "SuperGrokPro"
     ));
+    assert!(!jwt_claim_matches_user_subscription_tier(
+        "supergrok",
+        "SuperGrokPlus"
+    ));
+    assert!(!jwt_claim_matches_user_subscription_tier(
+        "supergrok_heavy",
+        "SuperGrokPlus"
+    ));
     assert!(!jwt_claim_matches_user_subscription_tier("free", "GrokPro"));
     assert!(!jwt_claim_matches_user_subscription_tier("", "XPremium"));
     assert!(!jwt_claim_matches_user_subscription_tier(
         "supergrok_heavy",
+        "EnterpriseMystery"
+    ));
+    assert!(!jwt_claim_matches_user_subscription_tier(
+        "0",
         "EnterpriseMystery"
     ));
 }
@@ -354,12 +373,10 @@ fn trace_turn_to_i32_saturates_at_max() {
     let result = i32::try_from(boundary).unwrap_or(i32::MAX);
     assert_eq!(result, i32::MAX);
 }
-/// When remote settings are absent (`None`), default to blocked.
 #[test]
-fn settings_allow_access_none_settings_is_blocked() {
-    assert!(!settings_allow_access(None));
+fn settings_allow_access_none_settings_is_allowed() {
+    assert!(settings_allow_access(None));
 }
-/// When `allow_access` is `Some(true)`, user is allowed.
 #[test]
 fn settings_allow_access_true_is_allowed() {
     let rs = crate::util::config::RemoteSettings {
@@ -368,10 +385,6 @@ fn settings_allow_access_true_is_allowed() {
     };
     assert!(settings_allow_access(Some(&rs)));
 }
-/// When `allow_access` is `Some(false)` (remote settings default / rule
-/// disabled), user stays blocked — even if they hold a qualifying
-/// subscription. This is the regression guard for the bug where
-/// `retry_subscription_check` unconditionally lifted the gate.
 #[test]
 fn settings_allow_access_false_is_blocked() {
     let rs = crate::util::config::RemoteSettings {
@@ -380,18 +393,16 @@ fn settings_allow_access_false_is_blocked() {
     };
     assert!(!settings_allow_access(Some(&rs)));
 }
-/// When `/settings` returned successfully but the field is absent
-/// (`None`), default to blocked (conservative).
 #[test]
-fn settings_allow_access_field_absent_is_blocked() {
+fn settings_allow_access_field_absent_is_allowed() {
     let rs = crate::util::config::RemoteSettings {
         allow_access: None,
         ..Default::default()
     };
-    assert!(!settings_allow_access(Some(&rs)));
+    assert!(settings_allow_access(Some(&rs)));
 }
-/// After allocating a turn number, `session_turn_numbers` holds the next
-/// value (current + 1). This is the value that must be persisted via
+/// After allocating a turn number, the retained (in-memory) turn counter holds
+/// the next value (current + 1). This is the value that must be persisted via
 /// `SetNextTraceTurn` so the counter survives restarts.
 #[test]
 fn allocate_turn_number_advances_counter() {
@@ -1809,6 +1820,8 @@ async fn ensure_plugin_registry_lazily_populates_snapshot() {
         "repeat call must keep the populated snapshot"
     );
 }
+#[cfg(unix)]
+mod process_scope_reclaim;
 mod subagent_spawn_context_tests;
 /// No load in flight and no session → the wait returns immediately
 /// (the caller then surfaces "unknown session id" exactly as before).
@@ -3013,6 +3026,27 @@ fn parse_session_kind_matrix() {
     assert_eq!(parse_session_kind(None), SessionKind::Build, "[none]");
 }
 #[test]
+fn reject_chat_kind_without_feature_errors_without_chat_feature() {
+    use serde_json::json;
+    assert!(
+        reject_chat_kind_without_feature(json!({"x.ai/session": {"kind": "chat"}}).as_object())
+            .is_err()
+    );
+    assert!(reject_chat_kind_without_feature(None).is_ok());
+    assert!(
+        reject_chat_kind_without_feature(
+            json!({ "x.ai/session" : { "kind" : "build" } }).as_object()
+        )
+        .is_ok()
+    );
+    assert!(!is_chat_session_kind(
+        json!({"x.ai/session": {"kind": "chat"}}).as_object()
+    ));
+    assert!(!is_chat_session_kind(
+        json!({ "x.ai/session" : { "kind" : "build" } }).as_object()
+    ));
+}
+#[test]
 fn chat_initial_model_matrix() {
     let cases: &[(&str, bool, Option<&str>, Option<&str>)] = &[
         ("chat_with_model", true, Some("grok-4.5"), Some("grok-4.5")),
@@ -3118,6 +3152,7 @@ fn chat_session_spawn_options_matches_thin_profile() {
         opts.persistence.is_noop(),
         "K10 thin profile must use PersistenceHandle::noop()"
     );
+    assert!(opts.is_chat_kind);
 }
 /// `remove_session` releases the workspace binding and drains the
 /// per-session side maps. Test agents default to `workspace_ops = None`,
@@ -3144,16 +3179,21 @@ async fn remove_session_releases_workspace_binding_and_side_maps() {
         sid.0.to_string(),
         acp::ModelId::new(std::sync::Arc::from("gone-model")),
     );
-    agent
-        .session_turn_numbers
-        .borrow_mut()
-        .insert(sid.clone(), 3);
+    agent.set_turn_number(&sid, 3);
     let (_permission_tx, permission_rx) =
         tokio::sync::mpsc::unbounded_channel::<xai_grok_workspace::permission::PermissionEvent>();
     agent
-        .permission_event_receivers
+        .retained_resources
         .borrow_mut()
-        .insert(sid.clone(), permission_rx);
+        .entry(sid.clone())
+        .or_default()
+        .permission_event_receiver = Some(permission_rx);
+    agent
+        .resident_resources
+        .borrow_mut()
+        .entry(sid.clone())
+        .or_default()
+        .require_gateway = true;
     agent.remove_session(&sid);
     assert!(
         toolset_weak.upgrade().is_none(),
@@ -3165,8 +3205,11 @@ async fn remove_session_releases_workspace_binding_and_side_maps() {
             .borrow()
             .contains_key(sid.0.as_ref())
     );
-    assert!(!agent.session_turn_numbers.borrow().contains_key(&sid));
-    assert!(!agent.permission_event_receivers.borrow().contains_key(&sid));
+    assert!(!agent.resident_resources.borrow().contains_key(&sid));
+    assert!(
+        !agent.retained_resources.borrow().contains_key(&sid),
+        "retained per-session resources must be reclaimed on removal"
+    );
 }
 /// Without a bridge, `ext_method` falls through to the unchanged local
 /// dispatch (`rewind::handle`), which reports the missing session — proving
@@ -3214,7 +3257,7 @@ fn cancel_does_not_forward_to_bridge_in_local_mode() {
     });
 }
 /// Regression (post-cancel slot hang, first bad release 0.2.101; see
-/// `dispatch_locks`). SDK e2e shape:
+/// `dispatch_lock`). SDK e2e shape:
 /// `test_cancel_ends_in_flight_turn_and_frees_slot` (grok-agent-sdk).
 #[test]
 fn cancel_never_overtakes_in_flight_prompt_intake() {

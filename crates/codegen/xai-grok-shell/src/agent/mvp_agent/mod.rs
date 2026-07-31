@@ -134,6 +134,7 @@ pub(crate) fn jwt_tier_claim(jwt: &str) -> Option<String> {
             4 => "x_premium_plus",
             5 => "supergrok_heavy",
             6 => "supergrok_lite",
+            7 => "supergrok_plus",
             0 => "free",
             _ => return Some(tier.to_string()),
         }
@@ -178,11 +179,17 @@ pub(crate) fn jwt_claim_matches_user_subscription_tier(
         "XPremiumPlus" => jwt_claim == "x_premium_plus",
         "SuperGrokPro" => jwt_claim == "supergrok_heavy",
         "SuperGrokLite" => jwt_claim == "supergrok_lite",
-        _ => false,
+        "SuperGrokPlus" => jwt_claim == "supergrok_plus",
+        _ => jwt_claim.parse::<u64>().is_ok_and(|n| n != 0),
     }
 }
 fn parse_session_computer_sessions(_meta: Option<&acp::Meta>) -> Option<Vec<()>> {
     None
+}
+fn resolve_session_computer_sessions(
+    _meta: Option<&acp::Meta>,
+) -> Result<Option<Vec<()>>, acp::Error> {
+    Ok(None)
 }
 pub(crate) struct SessionSpawnOptions<'a> {
     pub session_info: SessionInfo,
@@ -216,6 +223,8 @@ pub(crate) struct SessionSpawnOptions<'a> {
     pub session_yolo_mode: bool,
     pub session_auto_mode: bool,
     pub prompt_display_cwd: Option<String>,
+    /// Sticky chat product kind for ACU / product skills sourcing.
+    pub is_chat_kind: bool,
 }
 #[derive(Clone, Copy)]
 #[allow(dead_code)]
@@ -245,10 +254,31 @@ fn parse_session_kind(
         .and_then(|k| SessionKind::deserialize(k).ok())
         .unwrap_or(SessionKind::Build)
 }
-/// Hard-off in release builds: `kind: "chat"` meta is ignored and
-/// sessions stay on the local Build path.
+/// Whether meta requests chat kind (ignores whether the binary supports it).
+fn wants_chat_session_kind(meta: Option<&acp::Meta>) -> bool {
+    matches!(
+        parse_session_kind(meta),
+        crate::session::unified_list::SessionKind::Chat
+    )
+}
+/// Chat-kind sessions are only active when the `chat` feature is compiled in.
 fn is_chat_session_kind(meta: Option<&acp::Meta>) -> bool {
-    false
+    {
+        let _ = meta;
+        false
+    }
+}
+/// Fail closed when a client requests `kind: "chat"` on a build-only binary.
+fn reject_chat_kind_without_feature(meta: Option<&acp::Meta>) -> Result<(), acp::Error> {
+    {
+        if wants_chat_session_kind(meta) {
+            return Err(
+                acp::Error::invalid_params()
+                    .data("session kind \"chat\" requires a chat-enabled binary"),
+            );
+        }
+        Ok(())
+    }
 }
 fn chat_initial_model(
     is_chat_kind: bool,
@@ -353,6 +383,7 @@ pub(crate) fn chat_session_spawn_options<'a>(
         session_yolo_mode,
         session_auto_mode: false,
         prompt_display_cwd: None,
+        is_chat_kind: true,
     }
 }
 /// `_meta.noReplay` → skip gateway replay (client already has the transcript).
@@ -609,39 +640,40 @@ const SESSION_SUPERVISOR_TICK: std::time::Duration = std::time::Duration::from_m
 /// actor is between turns and responsive); on timeout we conservatively treat
 /// the session as busy and keep it resident.
 const IDLE_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+/// Per-session state freed on removal or idle-unload (but kept across a reload
+/// rebuild); retained state instead survives an unload and is freed only at
+/// removal.
+#[derive(Default)]
+struct ResidentResources {
+    /// Strong ref pinning the code-nav index; the manager holds only a `Weak`.
+    codebase_index: Option<std::sync::Arc<xai_codebase_graph::IndexManagerHandle>>,
+    require_gateway: bool,
+}
+/// Per-session state that survives an idle-unload (so the session stays
+/// resumable); freed only at `remove_session`. See [`ResidentResources`].
+#[derive(Default)]
+struct RetainedResources {
+    turn_number: Option<u64>,
+    dispatch_lock: Option<std::rc::Rc<tokio::sync::Mutex<()>>>,
+    permission_event_receiver: Option<
+        tokio::sync::mpsc::UnboundedReceiver<PermissionEvent>,
+    >,
+}
 pub struct MvpAgent {
-    /// LEADER-SAFE(per-session): keyed by SessionId. Sessions are created/removed
-    /// per client request; no cross-session iteration except cleanup
-    /// (`remove_session`, `sweep_dead_sessions`).
+    /// LEADER-SAFE(per-session). Removed by `remove_session` / `sweep_dead_sessions`.
     pub(crate) sessions: RefCell<HashMap<acp::SessionId, SessionHandle>>,
-    /// `Send + Sync` mirror of per-session activity (running turn, pending
-    /// interactions, subagent gauge) shared with the leader's auto-update
-    /// checker, which cannot read the `!Send` maps above. Sessions are
-    /// registered at handle creation and expire when their actor exits — no
-    /// unregister bookkeeping. See [`crate::agent::activity::AgentActivity`].
+    /// LEADER-SAFE(shared): `Send + Sync` mirror of per-session activity for the
+    /// leader's auto-update checker, which cannot read the `!Send` maps. Expires
+    /// when the actor exits. See [`crate::agent::activity::AgentActivity`].
     pub(crate) activity: crate::agent::activity::AgentActivity,
-    /// Sessions with a `session/load` currently in flight. LEADER-SAFE(per-session).
-    ///
-    /// Inserted by [`Self::begin_session_load`] at the top of `load_session`
-    /// and removed when the returned RAII guard drops (any exit path). Lets
-    /// racing session-scoped requests — notably `session/prompt` sent right
-    /// behind a reconnect-replayed `session/load` after a leader restart —
-    /// wait for the load via [`Self::wait_for_in_flight_session_load`]
-    /// instead of failing with "unknown session id". The watch channel closes
-    /// when the guard drops, waking all waiters.
+    /// LEADER-SAFE(per-session): in-flight `session/load` guards. Lets a racing
+    /// `session/prompt` wait via [`Self::wait_for_in_flight_session_load`] instead
+    /// of failing "unknown session id"; the RAII guard's drop wakes waiters.
     loading_sessions: RefCell<
         HashMap<acp::SessionId, tokio::sync::watch::Receiver<bool>>,
     >,
-    /// Per-session lock ordering dispatch onto the actor's mailbox:
-    /// [`Self::prompt`] holds it across its intake preamble and
-    /// [`Self::cancel`] around its `Cancel` send, so prompts land in
-    /// submission order and a cancel cannot overtake the prompt it targets
-    /// (see `cancel_never_overtakes_in_flight_prompt_intake`). Cancels wait
-    /// out preambles held ahead of them — keep preambles lean; bridge cancels
-    /// are unordered. LEADER-SAFE(per-session): mirrors `sessions` lifecycle.
-    dispatch_locks: RefCell<
-        HashMap<acp::SessionId, std::rc::Rc<tokio::sync::Mutex<()>>>,
-    >,
+    /// LEADER-SAFE(per-session): reclaimed at `remove_session`. See [`RetainedResources`].
+    retained_resources: RefCell<HashMap<acp::SessionId, RetainedResources>>,
     /// LEADER-SAFE(per-session): keyed by SessionId. Mirrors `sessions` lifecycle.
     session_threads: RefCell<HashMap<acp::SessionId, SessionThread>>,
     /// Title per resident session id, refreshed each `build_roster`. Lets the
@@ -758,24 +790,11 @@ pub struct MvpAgent {
     buffering_settings: RefCell<Option<update_chunk_merge::BufferingSettings>>,
     /// Context for managing background copy operations (e.g., copying ignored files)
     pub(crate) background_copy_context: BackgroundCopyContext,
-    /// LEADER-SAFE(per-session): keyed by SessionId, no cross-session iteration.
-    /// Released by `remove_session`.
-    pub(crate) session_turn_numbers: RefCell<HashMap<acp::SessionId, u64>>,
-    /// LEADER-SAFE(per-session): keyed by SessionId, no cross-session iteration.
-    /// Released by `remove_session`.
-    permission_event_receivers: RefCell<
-        HashMap<acp::SessionId, tokio::sync::mpsc::UnboundedReceiver<PermissionEvent>>,
-    >,
-    /// Agent-level codebase index manager for code navigation.
-    /// Indexes are shared across sessions with the same cwd.
-    /// LEADER-SAFE(shared): keyed internally by cwd. No per-client state.
+    /// LEADER-SAFE(shared): agent-level code-nav index manager, keyed by cwd,
+    /// no per-client state.
     codebase_indexes: Arc<parking_lot::Mutex<CodebaseIndexManager>>,
-    /// Per-session strong refs that keep the code-nav index alive. The
-    /// CodebaseIndexManager holds only Weak; without these the actor would
-    /// be reaped immediately. Cleaned up in remove_session.
-    session_index_claims: RefCell<
-        HashMap<acp::SessionId, std::sync::Arc<xai_codebase_graph::IndexManagerHandle>>,
-    >,
+    /// LEADER-SAFE(per-session): reclaimed on removal / idle-unload. See [`ResidentResources`].
+    resident_resources: RefCell<HashMap<acp::SessionId, ResidentResources>>,
     /// Worktree creation type (resolved: local config > remote > default Linked).
     pub(crate) worktree_type: crate::util::config::WorktreeType,
     /// Restore codebase state on worktree resume (resolved: local config > remote > default false).
@@ -869,10 +888,6 @@ pub struct MvpAgent {
     /// The agent never opens Computer Hub as a harness/client; remote cloud
     /// sandboxes are gateway-owned (`gateway_bridge` / `computer_sessions`).
     workspace_ops: RefCell<Option<xai_grok_workspace::WorkspaceOps>>,
-    /// Sessions opened with `require_gateway` / chat light-frontend (K13).
-    /// Prompt-time guard consults this when the bridge map entry is missing,
-    /// independent of prompt `_meta` (pager often omits kind on prompt).
-    require_gateway_sessions: Rc<RefCell<std::collections::HashSet<acp::SessionId>>>,
     /// Per-session coarse lifecycle state (residency + turn-state).
     /// Updated by `spawn_and_register_session` (→ `IdleResident`) and the
     /// join-handle supervisor on actor exit (→ `DeadFailed`) / explicit close
@@ -1793,10 +1808,9 @@ impl MvpAgent {
     /// Check whether the user has access via remote settings `allow_access`.
     ///
     /// Non-xAI auth (API keys, enterprise) always passes. For xAI OAuth2
-    /// users, reads `allow_access` from remote settings. When settings exist
-    /// but the field is absent/false, defaults to `false` (blocked); when
-    /// settings have not arrived yet (background fetch pending) the gate is
-    /// provisionally open and re-resolved on arrival.
+    /// users, reads `allow_access` from remote settings (explicit `false`
+    /// blocks; absent field fails open). When settings have not arrived yet
+    /// the gate is provisionally open and re-resolved on arrival.
     pub(super) async fn enforce_grok_code_access(&self, auth: &crate::auth::GrokAuth) {
         if !auth.is_xai_auth() {
             self.tier_allowed.set(true);
@@ -2021,18 +2035,7 @@ impl MvpAgent {
             .auth_manager
             .current()
             .map(|auth| {
-                let gate = if !self.tier_allowed.get() && gate.is_none() {
-                    let message = "A subscription is required.".to_string();
-                    Some(crate::auth::GateInfo {
-                        message,
-                        url: Some(
-                            "https://grok.com/supergrok?referrer=grok-build".to_string(),
-                        ),
-                        label: Some("Subscribe".to_string()),
-                    })
-                } else {
-                    gate
-                };
+                let gate = if self.tier_allowed.get() { None } else { gate };
                 let auth_meta = crate::auth::AuthMeta {
                     email: auth.email.clone(),
                     auth_mode: Some(format!("{:?}", auth.auth_mode)),
@@ -2652,19 +2655,11 @@ fn spawn_post_unblock_jwt_and_catalog_retry(
         }
     });
 }
-/// Resolve `allow_access` from remote settings.
-///
-/// Returns `true` only when remote settings explicitly set `allow_access: true`.
-/// Defaults to `false` (blocked) when settings are `None` or the field is
-/// absent — matching the `grok_build_access_gate` flag's server-side default.
-///
-/// Used by both `enforce_grok_code_access` (initial login gate) and
-/// `retry_subscription_check` (poller gate lift) to keep the decision in
-/// one place.
+/// `allow_access` from remote settings. Fail-open unless explicitly `false`.
 pub(crate) fn settings_allow_access(
     rs: Option<&crate::util::config::RemoteSettings>,
 ) -> bool {
-    rs.and_then(|s| s.allow_access).unwrap_or(false)
+    !matches!(rs.and_then(|s| s.allow_access), Some(false))
 }
 #[cfg(test)]
 mod tests;
