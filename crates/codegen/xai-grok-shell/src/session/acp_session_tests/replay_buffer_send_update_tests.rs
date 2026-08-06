@@ -69,6 +69,7 @@ pub(super) async fn make_replay_send_update_fixture() -> ReplaySendUpdateFixture
         pending_notifications: Vec::new(),
         notifications_suppressed: false,
         rewindable: false,
+        front_message_committed: false,
         nudges_used_this_session: 0,
     });
     let (event_tx, event_rx) = mpsc::unbounded_channel::<SessionEvent>();
@@ -87,6 +88,7 @@ pub(super) async fn make_replay_send_update_fixture() -> ReplaySendUpdateFixture
             gateway,
             gateway_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             persistence_tx,
+            disk_full: crate::session::notifications::idle_disk_full_rx(),
         },
         permissions: PermissionHandle::allow_all(),
         tool_context,
@@ -123,6 +125,7 @@ pub(super) async fn make_replay_send_update_fixture() -> ReplaySendUpdateFixture
             tool_choice: crate::util::config::CompactionToolChoice::Auto,
             prefire: crate::session::compaction_config::PrefireState::default(),
             prefix_released: std::sync::atomic::AtomicBool::new(false),
+            cancel: Default::default(),
         },
         memory: crate::session::memory_state::SessionMemory {
             flush_config: crate::config::MemoryFlushConfig::default(),
@@ -240,6 +243,9 @@ pub(super) async fn make_replay_send_update_fixture() -> ReplaySendUpdateFixture
         last_recap_main_turn: std::cell::Cell::new(0),
         recap_in_flight: std::cell::Cell::new(false),
         recap_epoch: std::cell::Cell::new(0),
+        turn_summary_task: std::cell::RefCell::new(None),
+        turn_summary_generation: std::cell::Cell::new(0),
+        turn_summary_enabled: false,
         session_turn_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         streaming_turn_capture: parking_lot::Mutex::new(StreamingTurnCapture::default()),
         turn_stream_drained: parking_lot::Mutex::new(None),
@@ -804,10 +810,12 @@ async fn failed_event_preserves_streaming_capture_for_takeout() {
                         message: "max output tokens reached".to_string(),
                         is_retryable: false,
                         retry_after_secs: None,
+                        should_retry: None,
                         model_metadata: None,
                         empty_response_context: None,
                         doom_loop_triggers: None,
                         doom_loop_aborted_at_chunk: None,
+                        credential: xai_grok_sampling_types::SentCredential::Unknown,
                     },
                 })
                 .await;
@@ -1214,6 +1222,7 @@ async fn reasoning_only_doomloop_turn_captures_every_generation_as_segments() {
                 message: "empty response from model (reasoning_only)".to_string(),
                 is_retryable: false,
                 retry_after_secs: None,
+                should_retry: None,
                 model_metadata: None,
                 empty_response_context: Some(EmptyResponseContext {
                     reason: EmptyReason::ReasoningOnly,
@@ -1229,6 +1238,7 @@ async fn reasoning_only_doomloop_turn_captures_every_generation_as_segments() {
                 }),
                 doom_loop_triggers: None,
                 doom_loop_aborted_at_chunk: None,
+                credential: xai_grok_sampling_types::SentCredential::Unknown,
             };
             actor
                 .handle_sampling_event(SamplingEvent::Failed {

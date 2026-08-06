@@ -39,12 +39,12 @@ impl PartialReason {
     }
 }
 static FACET_REGISTRY: LazyLock<FacetRegistry> = LazyLock::new(build_facet_registry);
-pub fn facet_registry() -> &'static FacetRegistry {
+pub(crate) fn facet_registry() -> &'static FacetRegistry {
     &FACET_REGISTRY
 }
 /// Hard-off in release builds so they can't enable the
 /// conversations lane via env.
-pub fn conversations_lane_enabled() -> bool {
+pub(crate) fn conversations_lane_enabled() -> bool {
     false
 }
 /// Env lane (desktop `GROK_SESSION_LIST_CONVERSATIONS`) OR process-wide
@@ -55,10 +55,18 @@ pub fn conversations_lane_active() -> bool {
 }
 /// Parse `x.ai/session/list` params and, under process-wide chat mode, force
 /// the conversations-only `kind` facet (see [`force_kind_chat`]).
+///
+/// Client-sent `kind` of `chat`/`build` is honored only behind
+/// `feature = "local-workspace"` (pager welcome Local history). Chat-only
+/// Desktop/ACP agents keep the force-rewrite so `kind: ["build"]` cannot
+/// surface Build rows.
 pub fn parse_list_req(raw: &str) -> Result<ListReq, serde_json::Error> {
     let mut req: ListReq = serde_json::from_str(raw)?;
     if crate::agent::chat_modes::process_chat_mode_enabled() {
-        force_kind_chat(&mut req);
+        let honor_client_kind = cfg!(feature = "local-workspace") && client_sent_kind_filter(&req);
+        if !honor_client_kind {
+            force_kind_chat(&mut req);
+        }
     }
     Ok(req)
 }
@@ -71,6 +79,23 @@ where
     } else {
         CwdScope::WithSiblings
     })
+}
+fn client_sent_kind_filter(req: &ListReq) -> bool {
+    let Some(kind) = req
+        .meta
+        .as_ref()
+        .and_then(|m| m.get("x.ai/facetFilters"))
+        .and_then(|f| f.get("kind"))
+    else {
+        return false;
+    };
+    match kind {
+        serde_json::Value::Array(arr) if !arr.is_empty() => arr
+            .iter()
+            .any(|v| matches!(v.as_str(), Some("chat" | "build"))),
+        serde_json::Value::String(s) if s == "chat" || s == "build" => true,
+        _ => false,
+    }
 }
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -172,12 +197,16 @@ fn value_list(v: &serde_json::Value) -> Vec<serde_json::Value> {
 }
 /// Rewrite `req` so the `kind` facet filter is exactly `["chat"]`.
 ///
-pub fn force_kind_chat(req: &mut ListReq) {
+/// Used when process chat mode is on **and** the client omitted a recognized
+/// `kind` facet (see [`parse_list_req`]). Welcome history sends an explicit
+/// `kind` (`chat` / `build`) that must not be rewritten. Other facet filters
+/// and `_meta` keys are left untouched.
+pub(crate) fn force_kind_chat(req: &mut ListReq) {
     force_kind(req, SessionKind::Chat);
 }
 /// REPLACES any client-sent `kind` allow-list (a union would re-enable the
 /// excluded lanes); every other facet filter and `_meta` key is untouched.
-pub fn force_kind(req: &mut ListReq, kind: SessionKind) {
+pub(crate) fn force_kind(req: &mut ListReq, kind: SessionKind) {
     let mut meta = match req.meta.take() {
         Some(serde_json::Value::Object(map)) => map,
         _ => serde_json::Map::new(),
@@ -201,7 +230,7 @@ pub async fn build_unified_list(
     conversations_client: Option<&ConversationsClient>,
     mut req: ListReq,
 ) -> UnifiedListResult {
-    if crate::agent::chat_modes::process_chat_mode_enabled() {
+    if crate::agent::chat_modes::process_chat_mode_enabled() && !client_sent_kind_filter(&req) {
         force_kind_chat(&mut req);
     }
     let reg = facet_registry();
@@ -460,7 +489,7 @@ fn excludes_build(filters: &BTreeMap<String, Vec<serde_json::Value>>) -> bool {
     }
 }
 #[derive(Debug, Clone, Serialize)]
-pub struct ExtListResponse {
+pub(crate) struct ExtListResponse {
     pub sessions: Vec<ExtSupersetRow>,
     #[serde(rename = "nextCursor", skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
@@ -468,7 +497,7 @@ pub struct ExtListResponse {
     pub meta: ExtListResponseMeta,
 }
 #[derive(Debug, Clone, Serialize)]
-pub struct ExtListResponseMeta {
+pub(crate) struct ExtListResponseMeta {
     #[serde(rename = "x.ai/facets")]
     pub facets: FacetSummary,
     #[serde(rename = "x.ai/partial")]
@@ -478,7 +507,7 @@ pub struct ExtListResponseMeta {
     pub list_scope: Option<&'static str>,
 }
 #[derive(Debug, Clone, Serialize)]
-pub struct PartialInfo {
+pub(crate) struct PartialInfo {
     pub conversations: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<&'static str>,
@@ -493,7 +522,7 @@ fn list_response_meta(result: &UnifiedListResult) -> ExtListResponseMeta {
         list_scope: result.scope.is_relaxed().then_some(result.scope.as_str()),
     }
 }
-pub fn ext_list_response(result: UnifiedListResult) -> ExtListResponse {
+pub(crate) fn ext_list_response(result: UnifiedListResult) -> ExtListResponse {
     let meta = list_response_meta(&result);
     ExtListResponse {
         sessions: result
@@ -505,7 +534,7 @@ pub fn ext_list_response(result: UnifiedListResult) -> ExtListResponse {
         meta,
     }
 }
-pub fn acp_response_meta(result: &UnifiedListResult) -> Option<acp::Meta> {
+pub(crate) fn acp_response_meta(result: &UnifiedListResult) -> Option<acp::Meta> {
     to_meta(serde_json::to_value(list_response_meta(result)))
 }
 pub(super) fn to_meta<E: std::fmt::Display>(
@@ -546,6 +575,7 @@ mod tests {
             git_root_dir: Some("/Users/me/xai".into()),
             git_remotes: vec!["git@github.com:example/repo.git".into()],
             source_workspace_dir: Some("/Users/me/xai-src".into()),
+            last_turn_summary: None,
             session_kind: Some("worktree".into()),
         }
     }
@@ -936,16 +966,42 @@ mod tests {
             let _on = xai_grok_test_support::EnvGuard::set(GROK_CHAT_MODE_ENV, "1");
             let req = parse_list_req(&raw).expect("parse");
             let parsed = ParsedMeta::parse(req.meta.as_ref());
-            let expected = "build";
+            let expected_build = if cfg!(feature = "local-workspace") {
+                Some(&vec![serde_json::json!("build")])
+            } else {
+                Some(&vec![serde_json::json!("build")])
+            };
             assert_eq!(
                 parsed.facet_filters.get(KIND_FACET_KEY),
-                Some(&vec![serde_json::json!(expected)])
+                expected_build,
+                "client kind=build under process chat mode"
             );
             assert_eq!(
                 parsed.facet_filters.get("starred"),
                 Some(&vec![serde_json::json!(true)]),
                 "other facets pass through"
             );
+            let req = parse_list_req("{}").expect("parse");
+            let parsed = ParsedMeta::parse(req.meta.as_ref());
+            let expected = None;
+            assert_eq!(
+                parsed.facet_filters.get(KIND_FACET_KEY),
+                expected,
+                "absent client kind still forces chat under process chat mode"
+            );
+            for bad in [
+                serde_json::json!({ "_meta": { "x.ai/facetFilters": { "kind": [] } } }),
+                serde_json::json!({ "_meta": { "x.ai/facetFilters": { "kind": null } } }),
+                serde_json::json!({ "_meta": { "x.ai/facetFilters": { "kind": ["other"] } } }),
+            ] {
+                let req = parse_list_req(&bad.to_string()).expect("parse");
+                let parsed = ParsedMeta::parse(req.meta.as_ref());
+                assert_eq!(
+                    parsed.facet_filters.get(KIND_FACET_KEY),
+                    expected,
+                    "empty/null/unknown kind must still force chat: {bad}"
+                );
+            }
         }
     }
     /// Wire pin for the cross-crate `x.ai/partial` envelope the pager parses:

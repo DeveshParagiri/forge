@@ -294,18 +294,15 @@ impl ToolServerBuilder {
     }
 
     /// Override the inbound-liveness deadline on a freshly-opened
-    /// connection: if no inbound WebSocket frame of any kind arrives within
-    /// this window, the connection is declared dead and reconnected. This
-    /// catches silently dead transports (e.g. a VM snapshot restore or
-    /// NAT/LB flow expiry) that a send-only keepalive never notices.
+    /// connection: if no RTT proof (WS/app pong) arrives within this
+    /// window, the connection is declared dead and reconnected.
+    /// Hub→client pings and one-way data do not re-arm.
     ///
-    /// Default (also used for a zero value): 2.5× the effective ping
-    /// interval — 75s at the default 30s ping — which guarantees at least
-    /// two keepalive pings fit in every window, so a healthy-but-idle
-    /// connection (one pong per ping) can never trip it. Explicit values
-    /// are honored verbatim; keep them comfortably above the ping interval
-    /// for the same reason (a value at or below the ping interval churns
-    /// healthy idle connections and is logged as a warning at connect).
+    /// Default (also used for a zero value): `min(4× ping, 120s)` — 120s
+    /// at the default 30s ping, still under the hub's ~150s idle. Explicit
+    /// values are honored verbatim; keep them comfortably above the ping
+    /// interval (a value at or below the ping interval churns healthy idle
+    /// connections and is logged as a warning at connect).
     pub fn with_ws_liveness_deadline(mut self, deadline: std::time::Duration) -> Self {
         self.ws_liveness_deadline = Some(deadline);
         self
@@ -313,12 +310,24 @@ impl ToolServerBuilder {
 
     /// Override the reconnect backoff schedule on a freshly-opened
     /// connection (default: the built-in exponential table capped at 10s).
-    /// Each attempt uses the next slot, clamping at the last; an empty
-    /// schedule falls back to the default. Not setting it preserves the
-    /// default.
+    /// Each wait is `Uniform(0, min(last_slot, max(slot, 1s)))`, not the
+    /// literal slot — a single-element `[25ms]` table is jittered in
+    /// `[0, 25ms)`. An empty schedule falls back to the default.
     pub fn with_reconnect_backoff(mut self, schedule: Vec<std::time::Duration>) -> Self {
         self.reconnect_backoff = Some(schedule.into());
         self
+    }
+
+    /// Connection knobs handed to [`HubConnection::connect`].
+    /// `reconnect_attempt_reset_after` is left `None` so the SDK applies
+    /// the 10 s production dwell — not zero, not "never".
+    pub(crate) fn connection_tuning(&self) -> ConnectionTuning {
+        ConnectionTuning {
+            ws_ping_interval: self.ws_ping_interval,
+            ws_liveness_deadline: self.ws_liveness_deadline,
+            reconnect_backoff: self.reconnect_backoff.clone(),
+            reconnect_attempt_reset_after: None,
+        }
     }
 
     /// Connection pool to attach to. Required.
@@ -398,8 +407,9 @@ impl ToolServerBuilder {
         self
     }
 
-    /// Optional callback fired once on the initial successful connect, before
-    /// the actor starts (so it happens-before any disconnect/reconnect).
+    /// Optional callback fired once on the initial successful connect, after
+    /// the writer task enters its loop and before the reader actor starts.
+    /// The first keepalive may still be in flight.
     pub fn on_connect<F>(mut self, cb: F) -> Self
     where
         F: Fn() + Send + Sync + 'static,
@@ -450,6 +460,7 @@ impl ToolServerBuilder {
     /// every successfully-bound session before returning the original
     /// error, so a failed `build()` does not leak server-side state.
     pub async fn build(self) -> Result<ToolServer, ClientError> {
+        let tuning = self.connection_tuning();
         let pool = self
             .pool
             .ok_or_else(|| ClientError::InvalidConfig("missing pool".to_owned()))?;
@@ -495,11 +506,6 @@ impl ToolServerBuilder {
             }
         }));
 
-        let tuning = ConnectionTuning {
-            ws_ping_interval: self.ws_ping_interval,
-            ws_liveness_deadline: self.ws_liveness_deadline,
-            reconnect_backoff: self.reconnect_backoff,
-        };
         let borrow = ConnectionBorrow::acquire(
             pool,
             url,
@@ -2340,6 +2346,19 @@ mod tests {
 
     fn call_id() -> ToolCallId {
         ToolCallId::new_v7()
+    }
+
+    #[test]
+    fn tool_server_tuning_does_not_override_attempt_reset_dwell() {
+        let tuning = ToolServerBuilder::default().connection_tuning();
+        assert_eq!(
+            tuning.reconnect_attempt_reset_after, None,
+            "builder must pass None so connect() applies the 10s default"
+        );
+        assert_eq!(
+            crate::connection::resolve_attempt_reset_after(tuning.reconnect_attempt_reset_after),
+            std::time::Duration::from_secs(10),
+        );
     }
 
     // ── build_error_response: wire fidelity ─────────────────────────

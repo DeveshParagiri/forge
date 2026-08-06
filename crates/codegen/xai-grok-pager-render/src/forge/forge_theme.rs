@@ -100,7 +100,6 @@ impl Theme {
 
             accent_plan: rgb(255, 219, 141),
             accent_verify: BRAND_SHIMMER,
-            accent_feedback: GREEN1,
             accent_remember: Color::Rgb(139, 195, 74),
 
             selection_border: rgb(60, 60, 65),

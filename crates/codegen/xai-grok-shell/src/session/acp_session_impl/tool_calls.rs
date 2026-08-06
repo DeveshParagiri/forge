@@ -702,10 +702,11 @@ impl SessionActor {
                         .clone()
                         .or_else(|| prepared.dispatch_target_name.clone())
                         .unwrap_or_else(|| prepared.tool_name.clone());
+                    let drained = DrainedToolSuccess::new(tool_result);
                     post_tool_use_result = self
                         .hook_event_active(xai_grok_hooks::event::HookEventName::PostToolUse)
                         .then(|| {
-                            serde_json::to_value(&tool_result.output)
+                            serde_json::to_value(drained.output())
                                 .unwrap_or(serde_json::Value::Null)
                         });
                     let followups = self
@@ -714,7 +715,7 @@ impl SessionActor {
                             &prepared.call_id,
                             &prepared.tool_name,
                             &effective_tool_name,
-                            tool_result,
+                            drained,
                             prepared.concatenated_json_count,
                             &prepared.model_id,
                             &prepared.parsed_args,
@@ -1225,16 +1226,14 @@ impl SessionActor {
                     self.permissions.set_classifier_transcript(turns);
                 }
             }
-            let edit_path_context = matches!(&access_kind, AccessKind::Edit(_)).then(|| {
-                xai_grok_workspace::permission::types::EditPathContext {
-                    real_cwd: std::path::PathBuf::from(self.session_info.cwd.as_str()),
-                    display_cwd: self
-                        .display_cwd
-                        .get()
-                        .map(|cwd| std::path::PathBuf::from(cwd.as_str())),
-                }
+            let path_context = Some(xai_grok_workspace::permission::types::RequestPathContext {
+                real_cwd: std::path::PathBuf::from(self.session_info.cwd.as_str()),
+                display_cwd: self
+                    .display_cwd
+                    .get()
+                    .map(|cwd| std::path::PathBuf::from(cwd.as_str())),
             });
-            let decision = {
+            let resolution = {
                 let _pending_guard =
                     crate::session::pending_interaction::PendingInteractionGuard::new(
                         self.pending_interactions.clone(),
@@ -1244,16 +1243,18 @@ impl SessionActor {
                         crate::session::pending_interaction::PendingKind::Permission,
                     );
                 self.permissions
-                    .request_with_edit_path_context(
+                    .request_with_path_context_resolved(
                         access_kind.clone(),
                         tool_call_update,
-                        edit_path_context,
+                        path_context,
                         Some(self.session_info.id.0.to_string()),
                         None,
                         None,
                     )
                     .await
             };
+            let manager_event = resolution.event;
+            let decision = resolution.decision;
             self.events.permission_resolved(
                 &call.function.name,
                 match &decision {
@@ -1272,53 +1273,33 @@ impl SessionActor {
                 },
                 perm_start,
             );
-            let wait_ms = perm_start.elapsed().as_millis() as u64;
-            let (decision_outcome, _reject_reason) = match &decision {
-                Decision::Allow | Decision::Ask => {
-                    (xai_grok_telemetry::events::PermissionOutcome::Allow, None)
-                }
-                Decision::Reject(reason) | Decision::PolicyDeny(reason) => (
-                    xai_grok_telemetry::events::PermissionOutcome::Deny,
-                    Some(reason.to_string()),
-                ),
-                Decision::Cancelled => (
-                    xai_grok_telemetry::events::PermissionOutcome::Cancelled,
-                    None,
-                ),
-                Decision::FollowupMessage(_) => (
-                    xai_grok_telemetry::events::PermissionOutcome::Followup,
-                    None,
-                ),
-            };
+            let shell_wait_ms = perm_start.elapsed().as_millis() as u64;
+            let decision_outcome = crate::session::telemetry::permission_outcome(&decision);
+            let resolved = crate::session::telemetry::resolved_decision_telemetry(
+                manager_event.as_ref(),
+                &decision,
+                perm_mode,
+                shell_wait_ms,
+                self.permissions.is_yolo_mode(),
+            );
             tracing::info_span!(
                 "tool.decision",
                 tool_name = %call.function.name,
                 tool_use_id = %call.id,
                 decision = decision_outcome.as_str(),
-                source = crate::session::telemetry::permission_decision_source(
-                    &decision,
-                    self.permissions.is_yolo_mode(),
-                ),
-                wait_ms = wait_ms as i64,
+                source = resolved.source.as_deref().unwrap_or(""),
+                wait_ms = resolved.wait_ms as i64,
             )
             .in_scope(|| {});
             xai_grok_telemetry::session_ctx::log_event(
-                xai_grok_telemetry::events::PermissionDecisionPayload {
-                    tool_name: call.function.name.clone(),
-                    access_kind: telemetry_access_kind,
-                    decision: decision_outcome,
-                    wait_ms,
-                    permission_mode: perm_mode,
-                    source: Some(
-                        crate::session::telemetry::permission_decision_source(
-                            &decision,
-                            self.permissions.is_yolo_mode(),
-                        )
-                        .to_owned(),
-                    ),
-                    subagent_session_id: subagent_session_id.clone(),
-                    subagent_type: None,
-                },
+                crate::session::telemetry::permission_decision_payload(
+                    call.function.name.clone(),
+                    telemetry_access_kind,
+                    &decision,
+                    subagent_session_id.clone(),
+                    manager_event.as_ref(),
+                    resolved,
+                ),
             );
             match decision {
                 Decision::PolicyDeny(ref reason) | Decision::Reject(ref reason) => {
@@ -1690,24 +1671,14 @@ impl SessionActor {
         let prompt_id = format!("plan-resume-{}", chrono::Utc::now().timestamp_millis());
         let prompt_blocks = vec![acp::ContentBlock::Text(acp::TextContent::new(text))];
         let (respond_to, _rx) = oneshot::channel();
-        self.queue_input(
-            prompt_blocks,
-            prompt_id,
-            mode,
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
-            false,
-            None,
-            None,
-            respond_to,
-            None,
-            None,
-        )
-        .await;
+        let _ = self
+            .queue_input(QueueInputRequest::new(
+                prompt_blocks,
+                prompt_id,
+                mode,
+                respond_to,
+            ))
+            .await;
         SessionActor::maybe_start_running_task(self.clone(), completion_tx).await;
     }
     /// Refine the initial (minimal) ToolCall that was registered during
@@ -1772,8 +1743,11 @@ impl SessionActor {
                 self.tool_context.cwd.as_path(),
             ),
             ToolInput::ReadFile(read_file) => {
+                if let Some(skill) = self.skill_for_read_path(&read_file.path).await {
+                    self.emit_skill_md_read(skill);
+                }
                 (
-                    format!("Read `{}`", read_file.path.clone()),
+                    format!("Read `{}`", read_file.path),
                     acp::ToolKind::Read,
                     vec![
                         acp::ToolCallLocation::new(read_file.path)
@@ -1866,6 +1840,7 @@ impl SessionActor {
                     xai_grok_telemetry::events::SkillDispatched {
                         skill_name: skill.skill.clone(),
                         plugin_source: None,
+                        trigger: xai_grok_telemetry::events::SkillTrigger::SkillTool,
                     },
                 );
                 tracing::info_span!(
@@ -2066,6 +2041,52 @@ impl SessionActor {
             .await;
         Ok((title, kind, raw_input))
     }
+    /// Resolves the path the way the read tool does, so `~` paths and forked sessions still match.
+    async fn skill_for_read_path(
+        &self,
+        path: &str,
+    ) -> Option<xai_grok_tools::implementations::skills::types::SkillInfo> {
+        if self.is_chat_kind {
+            return None;
+        }
+        let read_path = xai_grok_tools::types::resources::resolve_model_path(
+            self.tool_context.cwd.as_path(),
+            self.display_cwd.get().map(Path::new),
+            path,
+        );
+        if read_path.file_name().is_none_or(|name| name != "SKILL.md") {
+            return None;
+        }
+        let read_path = dunce::canonicalize(&read_path).unwrap_or(read_path);
+        self.slash_skills_for_resolve()
+            .await
+            .into_iter()
+            .find(|skill| {
+                crate::session::telemetry::is_same_skill_file(Path::new(&skill.path), &read_path)
+            })
+    }
+    fn emit_skill_md_read(&self, skill: xai_grok_tools::implementations::skills::types::SkillInfo) {
+        let skill_source = if skill.plugin_name.is_some() {
+            "plugin"
+        } else {
+            crate::session::telemetry::skill_source_label(
+                &skill.path,
+                self.session_info.cwd.as_str(),
+            )
+        };
+        tracing::info_span!(
+            "skill.activated",
+            skill_name = %skill.name,
+            invocation_trigger = "skill_md_read",
+            skill_source = skill_source,
+        )
+        .in_scope(|| {});
+        xai_grok_telemetry::session_ctx::log_event(xai_grok_telemetry::events::SkillDispatched {
+            skill_name: skill.name,
+            plugin_source: skill.plugin_name,
+            trigger: xai_grok_telemetry::events::SkillTrigger::SkillMdRead,
+        });
+    }
     async fn handle_tool_parse_error(
         &self,
         tool_call_id: &acp::ToolCallId,
@@ -2256,12 +2277,13 @@ impl SessionActor {
         call_id: &str,
         requested_tool_name: &str,
         effective_tool_name: &str,
-        result: ToolRunResult,
+        drained: DrainedToolSuccess,
         concatenated_json_count: usize,
         model_id: &str,
         tool_parsed_args: &serde_json::Value,
     ) -> Result<Vec<ConversationItem>, acp::Error> {
         use crate::session::acp_conversion::{acp_plan_update, acp_tool_update, maybe_rewrite};
+        let (mut result, mut tool_layer_images) = drained.into_parts();
         let consumed_ids =
             xai_grok_tools::reminders::task_completion::consumed_completion_ids(&result.output);
         if !consumed_ids.is_empty() {
@@ -2290,6 +2312,7 @@ impl SessionActor {
             let state = self.mcp_state.lock().await;
             state.mcp_tool_meta.get(effective_tool_name).cloned()
         };
+        tool_layer_images.extend(drain_tool_layer_extracted_images(&mut result.output));
         if let Some(mut tool_update) =
             acp_tool_update(&result.output, call_id, path_rewriter.as_ref(), tool_meta)
         {
@@ -2371,13 +2394,12 @@ impl SessionActor {
             }
         };
         let mut extracted_images = extraction.images;
-        let prompt_text = extraction.text;
-        if !self.is_cursor_harness()
-            && let ToolsToolOutput::ReadFile(ReadFileOutput::FileContent(ref fc)) = result.output
-        {
-            extracted_images.extend(fc.extracted_images.iter().cloned());
-        }
-        let mut prompt_text = maybe_rewrite(path_rewriter.as_ref(), prompt_text);
+        split_tool_layer_for_harness(
+            self.is_cursor_harness(),
+            &mut extracted_images,
+            tool_layer_images,
+        );
+        let mut prompt_text = maybe_rewrite(path_rewriter.as_ref(), extraction.text);
         if !self.is_cursor_harness()
             && let ToolsToolOutput::ReadFile(ReadFileOutput::ImageContent(ref image_content)) =
                 result.output

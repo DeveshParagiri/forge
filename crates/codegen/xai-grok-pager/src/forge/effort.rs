@@ -1,6 +1,7 @@
 //! Shift+Tab reasoning-effort cycle and quiet model-switch feedback.
 
 use crate::app::actions::Effect;
+use crate::app::agent::DeferredModelSwitch;
 use crate::app::app_view::{ActiveView, AppView};
 
 /// Shift+Tab cycles reasoning effort on the active model.
@@ -34,7 +35,11 @@ pub(crate) fn dispatch_cycle_effort(app: &mut AppView) -> Vec<Effect> {
     agent.show_toast(&format!("effort · {}", next.id));
     // Mirror Action::SwitchModel: defer until session exists.
     let Some(session_id) = agent.session.session_id.clone() else {
-        agent.session.deferred_model_switch = Some((model_id, Some(effort)));
+        agent.session.deferred_model_switch = Some(DeferredModelSwitch {
+            model_id,
+            effort: Some(effort),
+            prev_model_id: None,
+        });
         return vec![];
     };
     agent.session.model_switch_pending = true;
@@ -160,7 +165,11 @@ mod tests {
         assert!(dispatch_cycle_effort(&mut app).is_empty());
         assert_eq!(
             app.agents[&agent_id].session.deferred_model_switch,
-            Some((model_id, Some(ReasoningEffort::Low)))
+            Some(DeferredModelSwitch {
+                model_id,
+                effort: Some(ReasoningEffort::Low),
+                prev_model_id: None,
+            })
         );
         assert!(!app.agents[&agent_id].session.model_switch_pending);
     }

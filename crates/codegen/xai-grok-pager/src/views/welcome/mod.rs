@@ -24,6 +24,8 @@ mod menu;
 mod prompt;
 mod toast;
 mod top_bar;
+#[cfg(feature = "local-workspace")]
+pub(crate) mod workspace_mode;
 
 pub(crate) use logo::shimmer_frame;
 use logo::{logo_line_count, render_logo};
@@ -31,6 +33,11 @@ use menu::render_menu;
 pub(crate) use toast::paint_welcome_toast;
 pub(crate) use top_bar::location_line_at;
 use top_bar::render_top_bar;
+#[cfg(feature = "local-workspace")]
+pub use workspace_mode::{
+    WelcomeWorkspaceMode, WorkspaceModeHitRects, hit_test_workspace_mode,
+    render_workspace_mode_picker,
+};
 
 /// True for VS Code and xterm.js embeds (VS Code-family IDEs and Zed) where
 /// quit is `Ctrl+D` (canonical: [`TerminalName::is_vscode_family`]).
@@ -123,6 +130,9 @@ pub struct WelcomeRenderResult {
     pub privacy_banner_opt_out_rect: Option<Rect>,
     pub privacy_banner_terms_rect: Option<Rect>,
     pub privacy_banner_policy_rect: Option<Rect>,
+    /// Hit-test rects for the chat workspace-mode segmented control.
+    #[cfg(feature = "local-workspace")]
+    pub workspace_mode_rects: WorkspaceModeHitRects,
 }
 
 use hero_box::HERO_BOX_MIN_WIDTH;
@@ -405,8 +415,9 @@ pub(super) fn render_version_badge(
         width: version_rect.width.saturating_sub(h_margin),
         ..version_rect
     };
+    const SEP: &str = "  \u{2502}  ";
     let sep = Span::styled(
-        "  \u{2502}  ",
+        SEP,
         Style::default().fg(theme.gray).add_modifier(Modifier::DIM),
     );
     let mut spans = Vec::new();
@@ -456,15 +467,12 @@ pub(super) fn render_version_badge(
             ));
         }
         VersionBadgeMode::HeroFooter => {
-            let channel_display = if channel.is_empty() {
-                "Beta"
-            } else {
-                channel.trim()
-            };
-            spans.push(Span::styled(
-                channel_display,
-                Style::default().fg(theme.gray),
-            ));
+            if !channel.is_empty() {
+                spans.push(Span::styled(
+                    channel.trim(),
+                    Style::default().fg(theme.gray),
+                ));
+            }
         }
         VersionBadgeMode::HeroInline => {
             spans.push(Span::styled(
@@ -479,6 +487,11 @@ pub(super) fn render_version_badge(
                 Style::default().fg(theme.gray),
             ));
         }
+    }
+
+    // Only alpha and beta builds print a channel, so on stable the spans can end on a separator.
+    if spans.last().is_some_and(|s| s.content == SEP) {
+        spans.pop();
     }
 
     let version_line = Line::from(spans).alignment(align);
@@ -627,6 +640,7 @@ pub struct WelcomeRenderParams<'a> {
     pub session_picker_grouped: bool,
     /// Source filter for the session picker.
     pub session_picker_source_filter: crate::views::session_picker::SourceFilter,
+    pub session_picker_pending_delete: bool,
     /// Process-wide `--chat`: the picker lists backend conversations only, so
     /// the source filter and local deep search are hidden.
     pub chat_mode: bool,
@@ -654,6 +668,15 @@ pub struct WelcomeRenderParams<'a> {
     pub upgrade_cta: Option<&'a str>,
     /// Non-blocking welcome privacy banner above the prompt.
     pub privacy_banner: bool,
+    /// Chat-mode workspace picker selection (`local-workspace` feature).
+    #[cfg(feature = "local-workspace")]
+    pub workspace_mode: WelcomeWorkspaceMode,
+    /// CLI/env already stamped local workspace — picker is display-only.
+    #[cfg(feature = "local-workspace")]
+    pub workspace_mode_startup_locked: bool,
+    /// In-TUI ACK confirm pending for Local.
+    #[cfg(feature = "local-workspace")]
+    pub workspace_mode_ack_pending: bool,
 }
 
 /// Render the welcome screen.
@@ -718,22 +741,7 @@ pub fn render_welcome(
                 cursor_pos: None,
                 post_flush_escapes,
                 menu_rects,
-                prompt_rect: None,
-                session_picker_hit_areas: None,
-                import_banner_rect: None,
-                auth_url_rect: None,
-                auth_fallback_rect: None,
-                refresh_rect: None,
-                gate_url_rect: None,
-                changelog_action_present: false,
-                changelog_cta_rect: None,
-                announcement_truncated: false,
-                announcement_rect: None,
-                upgrade_cta_rect: None,
-                privacy_banner_opt_in_rect: None,
-                privacy_banner_opt_out_rect: None,
-                privacy_banner_terms_rect: None,
-                privacy_banner_policy_rect: None,
+                ..Default::default()
             }
         }
         AuthState::Authenticating { auth_url, mode, .. } => {
@@ -751,25 +759,9 @@ pub fn render_welcome(
                 params.show_raw_url,
             );
             WelcomeRenderResult {
-                cursor_pos: None,
-                post_flush_escapes: None,
-                menu_rects: vec![],
-                prompt_rect: None,
-                session_picker_hit_areas: None,
-                import_banner_rect: None,
                 auth_url_rect: url_rect,
                 auth_fallback_rect: fallback_rect,
-                refresh_rect: None,
-                gate_url_rect: None,
-                changelog_action_present: false,
-                changelog_cta_rect: None,
-                announcement_truncated: false,
-                announcement_rect: None,
-                upgrade_cta_rect: None,
-                privacy_banner_opt_in_rect: None,
-                privacy_banner_opt_out_rect: None,
-                privacy_banner_terms_rect: None,
-                privacy_banner_policy_rect: None,
+                ..Default::default()
             }
         }
         AuthState::Done if params.is_zdr_blocked => {
@@ -788,25 +780,9 @@ pub fn render_welcome(
                 params.compact,
             );
             WelcomeRenderResult {
-                cursor_pos: None,
                 post_flush_escapes,
                 menu_rects,
-                prompt_rect: None,
-                session_picker_hit_areas: None,
-                import_banner_rect: None,
-                auth_url_rect: None,
-                auth_fallback_rect: None,
-                refresh_rect: None,
-                gate_url_rect: None,
-                changelog_action_present: false,
-                changelog_cta_rect: None,
-                announcement_truncated: false,
-                announcement_rect: None,
-                upgrade_cta_rect: None,
-                privacy_banner_opt_in_rect: None,
-                privacy_banner_opt_out_rect: None,
-                privacy_banner_terms_rect: None,
-                privacy_banner_policy_rect: None,
+                ..Default::default()
             }
         }
         // Folder-trust question: shown after auth, before any session is
@@ -1794,10 +1770,25 @@ fn render_welcome_done(
         owned_menu.as_slice()
     };
 
+    #[cfg(feature = "local-workspace")]
+    // Keep the segmented control (and ACK y/N) visible when history is open
+    // if first-run Local ACK is pending — otherwise the confirm is unpainted
+    // while the ACK handler still swallows keys.
+    let show_workspace_picker =
+        p.chat_mode && p.has_access && (!show_picker || p.workspace_mode_ack_pending);
+    #[cfg(feature = "local-workspace")]
+    let workspace_picker_rows = if show_workspace_picker {
+        workspace_mode::WORKSPACE_MODE_MENU_ROWS
+    } else {
+        0
+    };
+    #[cfg(not(feature = "local-workspace"))]
+    let workspace_picker_rows = 0u16;
+
     let menu_height = if show_picker {
         0
     } else {
-        menu_items.len() as u16
+        menu_items.len() as u16 + workspace_picker_rows
     };
 
     // Session picker height: 1 row per entry (no dividers), scrollable.
@@ -1845,6 +1836,8 @@ fn render_welcome_done(
     let mut announcement_rect: Option<Rect> = None;
     let mut upgrade_cta_rect: Option<Rect> = None;
 
+    #[cfg(feature = "local-workspace")]
+    let mut workspace_mode_rects = WorkspaceModeHitRects::default();
     let (menu_rects, picker_close_button) = if show_picker {
         // Use the full area since logo/menu are hidden and shortcuts
         // are now rendered inside the picker content area.
@@ -1870,6 +1863,7 @@ fn render_welcome_done(
                 tick: p.welcome_tick,
                 grouped: p.session_picker_grouped,
                 source_filter: p.session_picker_source_filter,
+                pending_delete: p.session_picker_pending_delete,
                 chat_mode: p.chat_mode,
                 cwd: p.cwd,
             },
@@ -1889,11 +1883,21 @@ fn render_welcome_done(
             changelog_bullets,
             p.changelog_has_full_notes,
             upgrade_cta,
+            #[cfg(feature = "local-workspace")]
+            show_workspace_picker.then_some((
+                p.workspace_mode,
+                p.workspace_mode_startup_locked,
+                p.workspace_mode_ack_pending,
+            )),
         );
         changelog_cta_rect = rects.changelog_cta_rect;
         announcement_truncated = rects.announcement_truncated;
         announcement_rect = rects.announcement_rect;
         upgrade_cta_rect = rects.upgrade_cta_rect;
+        #[cfg(feature = "local-workspace")]
+        {
+            workspace_mode_rects = rects.workspace_mode_rects;
+        }
         (rects.menu_rects, None)
     } else {
         // Narrow layout: stacked logo above, menu below. Inset the menu the
@@ -1901,6 +1905,28 @@ fn render_welcome_done(
         // instead of touching the window edge on narrow terminals.
         render_logo(layout.logo, buf, theme, content_area.height);
         let menu_area = inset_horizontal(layout.menu, prompt::prompt_inset(p.compact));
+        #[cfg(feature = "local-workspace")]
+        let menu_area = if show_workspace_picker {
+            let picker_rect = workspace_mode::picker_area(menu_area);
+            workspace_mode_rects = render_workspace_mode_picker(
+                picker_rect,
+                buf,
+                theme,
+                p.workspace_mode,
+                p.mouse_pos,
+                p.workspace_mode_startup_locked,
+                p.workspace_mode_ack_pending,
+            );
+            Rect {
+                y: menu_area.y + workspace_mode::WORKSPACE_MODE_MENU_ROWS,
+                height: menu_area
+                    .height
+                    .saturating_sub(workspace_mode::WORKSPACE_MODE_MENU_ROWS),
+                ..menu_area
+            }
+        } else {
+            menu_area
+        };
         (
             render_menu(
                 menu_area,
@@ -2236,6 +2262,8 @@ fn render_welcome_done(
         privacy_banner_opt_out_rect,
         privacy_banner_terms_rect,
         privacy_banner_policy_rect,
+        #[cfg(feature = "local-workspace")]
+        workspace_mode_rects,
     }
 }
 
@@ -2260,6 +2288,7 @@ pub(crate) struct SessionPickerRenderCtx<'a> {
     pub(crate) grouped: bool,
     /// Source filter for filtering session entries.
     pub(crate) source_filter: crate::views::session_picker::SourceFilter,
+    pub(crate) pending_delete: bool,
     /// Process-wide `--chat`: hides the source-filter chip and the
     /// deep-search/filter footer hints (see `WelcomeRenderParams::chat_mode`).
     pub(crate) chat_mode: bool,
@@ -2456,11 +2485,34 @@ pub(crate) fn render_session_picker(
         description: None,
         pinned: false,
     });
-    if !ctx.chat_mode {
+    if ctx.pending_delete {
+        default_shortcuts.clear();
+        default_shortcuts.push(HintItem {
+            keys: vec![],
+            label: "confirm delete".into(),
+            custom_display: Some("y"),
+            description: None,
+            pinned: false,
+        });
+        default_shortcuts.push(HintItem {
+            keys: vec![],
+            label: "cancel".into(),
+            custom_display: Some("n"),
+            description: None,
+            pinned: false,
+        });
+    } else if !ctx.chat_mode {
         default_shortcuts.push(HintItem {
             keys: vec![],
             label: "filter".into(),
             custom_display: Some("f"),
+            description: None,
+            pinned: false,
+        });
+        default_shortcuts.push(HintItem {
+            keys: vec![],
+            label: "delete".into(),
+            custom_display: Some("d"),
             description: None,
             pinned: false,
         });
@@ -2482,7 +2534,11 @@ pub(crate) fn render_session_picker(
         filter_key_hint: (!ctx.chat_mode).then_some("f"),
         filter_active: !ctx.chat_mode && ctx.source_filter.is_active(),
         header_note: hidden_hint.as_deref(),
-        action_keys: &[],
+        action_keys: if ctx.chat_mode || ctx.pending_delete {
+            &[]
+        } else {
+            &[('d', "delete")]
+        },
         disable_search: false,
         compact_bottom_bar: false,
         search_only_on_slash: false,
@@ -2644,6 +2700,45 @@ mod tests {
     use crate::views::picker::PickerState;
     use crate::views::session_picker::{build_grouped_picker_entries, build_session_entry_data};
 
+    fn badge_text(mode: VersionBadgeMode<'_>, team: Option<&str>) -> String {
+        let area = Rect::new(0, 0, 80, 1);
+        let mut buf = Buffer::empty(area);
+        render_version_badge(area, &mut buf, &Theme::current(), team, 0, false, mode);
+        (0..area.width)
+            .map(|x| buf.cell((x, 0)).map_or(" ", |c| c.symbol()).to_string())
+            .collect::<String>()
+            .trim()
+            .to_string()
+    }
+
+    /// The badge carries the product name, the version, and the channel, and never a release label.
+    /// The hero footer prints a channel only on alpha and beta builds, so on stable it must not end on a separator.
+    #[test]
+    fn version_badge_carries_no_release_label() {
+        let full = badge_text(
+            VersionBadgeMode::Full {
+                subscription_tier: None,
+            },
+            Some("acme"),
+        );
+        let inline = badge_text(VersionBadgeMode::HeroInline, None);
+        let footer = badge_text(VersionBadgeMode::HeroFooter, Some("acme"));
+
+        for rendered in [&full, &inline, &footer] {
+            assert!(
+                !rendered.contains("Beta"),
+                "badge must not label the product: {rendered:?}"
+            );
+        }
+        assert!(full.contains("Grok Build"), "full badge: {full:?}");
+        assert!(inline.contains("Grok Build"), "inline badge: {inline:?}");
+        assert!(footer.contains("acme"), "footer keeps the team: {footer:?}");
+        assert!(
+            !footer.ends_with('\u{2502}'),
+            "footer must not end on a separator: {footer:?}"
+        );
+    }
+
     #[test]
     fn auth_copy_feedback_covers_delivery_states() {
         let theme = Theme::current();
@@ -2753,6 +2848,7 @@ mod tests {
             branch: None,
             repo_name: repo_name.into(),
             worktree_label: None,
+            last_turn_summary: None,
             card_detail: None,
         }
     }
@@ -2797,6 +2893,7 @@ mod tests {
             subscription_tier: None,
             session_picker_grouped: false,
             session_picker_source_filter: crate::views::session_picker::SourceFilter::default(),
+            session_picker_pending_delete: false,
             chat_mode: false,
             cwd: std::path::Path::new("/repo"),
             active_provider: None,
@@ -2808,6 +2905,12 @@ mod tests {
             welcome_announcement_expanded: false,
             upgrade_cta: None,
             privacy_banner: false,
+            #[cfg(feature = "local-workspace")]
+            workspace_mode: WelcomeWorkspaceMode::Sandbox,
+            #[cfg(feature = "local-workspace")]
+            workspace_mode_startup_locked: false,
+            #[cfg(feature = "local-workspace")]
+            workspace_mode_ack_pending: false,
         }
     }
 
@@ -2973,6 +3076,7 @@ mod tests {
                     tick: 0,
                     grouped: false,
                     source_filter: crate::views::session_picker::SourceFilter::default(),
+                    pending_delete: false,
                     chat_mode: true,
                 },
             );
@@ -3048,6 +3152,7 @@ mod tests {
                     tick: 0,
                     grouped: false,
                     source_filter: crate::views::session_picker::SourceFilter::default(),
+                    pending_delete: false,
                     chat_mode,
                 },
             );

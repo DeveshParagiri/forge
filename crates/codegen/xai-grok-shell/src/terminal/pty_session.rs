@@ -5,6 +5,10 @@
 //! on its own leaves them running, as a terminal does: their process groups are
 //! their own and nothing here holds a handle to them.
 
+// A panic here loses a shell: teardown paths run inside `Drop`, where an
+// unwind during another unwind aborts the process. Tests panic freely.
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
+
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::sync::{Arc, LazyLock};
@@ -25,7 +29,7 @@ const EXIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis
 /// Collecting a killed shell, not waiting on a live one.
 const REAP_GRACE: std::time::Duration = std::time::Duration::from_millis(100);
 
-pub struct PtySession {
+pub(crate) struct PtySession {
     master: Option<Box<dyn MasterPty + Send>>,
     /// Taken at teardown so the writer loop ends and releases its master dup.
     input_tx: Option<mpsc::Sender<Vec<u8>>>,
@@ -147,15 +151,64 @@ impl Shell {
     }
 }
 
+/// A shell not yet in the registry, where teardown would never find it.
+/// Dropping reaps it; [`Self::into_registered`] hands it to the registry
+/// instead.
+///
+/// Disarming leaves [`Shell::Reaped`] behind rather than an empty slot, so the
+/// guard has no state in which its own field is missing.
+struct UnregisteredShell(Shell);
+
+impl UnregisteredShell {
+    fn new(child: Box<dyn portable_pty::Child + Send + Sync>) -> Self {
+        Self(Shell::Running { child, group: None })
+    }
+
+    fn pid(&self) -> Option<u32> {
+        self.0.pid()
+    }
+
+    fn attach_group(&mut self, enrolled: Arc<xai_tty_utils::ProcessGroup>) {
+        self.0.attach_group(enrolled);
+    }
+
+    /// Disarms the guard. The caller must reach the registry without awaiting,
+    /// or it reopens the window this type closes.
+    fn into_registered(mut self) -> Shell {
+        self.disarm()
+    }
+
+    fn disarm(&mut self) -> Shell {
+        std::mem::replace(&mut self.0, Shell::Reaped(None))
+    }
+}
+
+impl Drop for UnregisteredShell {
+    fn drop(&mut self) {
+        let mut shell = self.disarm();
+        // `reap_now` blocks through its grace waits, so keep it off an async
+        // thread. Not the runtime's blocking pool though: a task still queued
+        // there at shutdown is dropped unrun, taking the group with it and
+        // leaving the scope holding a dead `Weak`.
+        if tokio::runtime::Handle::try_current().is_ok() {
+            std::thread::spawn(move || shell.reap_now());
+        } else {
+            shell.reap_now();
+        }
+    }
+}
+
 type PtyMap = HashMap<String, Arc<Mutex<PtySession>>>;
 
 static PTY_REGISTRY: LazyLock<Mutex<PtyMap>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
-pub async fn get_pty(pty_id: &str) -> Option<Arc<Mutex<PtySession>>> {
+pub(crate) async fn get_pty(pty_id: &str) -> Option<Arc<Mutex<PtySession>>> {
     PTY_REGISTRY.lock().await.get(pty_id).cloned()
 }
 
-pub async fn require_pty(terminal_id: &str) -> Result<Arc<Mutex<PtySession>>, TerminalExtError> {
+pub(crate) async fn require_pty(
+    terminal_id: &str,
+) -> Result<Arc<Mutex<PtySession>>, TerminalExtError> {
     get_pty(terminal_id)
         .await
         .ok_or_else(|| TerminalExtError::NotInteractive {
@@ -163,7 +216,7 @@ pub async fn require_pty(terminal_id: &str) -> Result<Arc<Mutex<PtySession>>, Te
         })
 }
 
-pub async fn create_pty(
+pub(crate) async fn create_pty(
     shell: Option<&str>,
     cwd: Option<&str>,
     env: HashMap<String, String>,
@@ -208,44 +261,34 @@ pub async fn create_pty(
     cmd.env("LANG", "en_US.UTF-8");
     cmd.env("LC_ALL", "en_US.UTF-8");
 
+    // Enrolled below, and reaped by the guard until it reaches the registry.
+    #[allow(clippy::disallowed_methods)]
     let child = pair
         .slave
         .spawn_command(cmd)
         .map_err(|e| TerminalExtError::Internal(format!("failed to spawn shell: {e}")))?;
 
-    // Until the session reaches the registry nothing else can reach this shell,
-    // so every failure below has to kill it here or it is orphaned.
-    let mut shell = Shell::Running { child, group: None };
+    let mut shell = UnregisteredShell::new(child);
     if let Some(pid) = shell.pid() {
-        match xai_tty_utils::global_process_scope().enroll_terminal_pid(pid) {
-            Ok(enrolled) => shell.attach_group(enrolled),
-            Err(e) => {
-                shell.reap_now();
-                return Err(TerminalExtError::Internal(format!(
-                    "failed to enroll shell: {e}"
-                )));
-            }
-        }
+        // `enroll_terminal_pid` reaps with a grace wait if it loses the close
+        // race, so run it off-task.
+        let enrolled = tokio::task::spawn_blocking(move || {
+            xai_tty_utils::global_process_scope().enroll_terminal_pid(pid)
+        })
+        .await
+        .map_err(|e| TerminalExtError::Internal(format!("enroll task failed: {e}")))?
+        .map_err(|e| TerminalExtError::Internal(format!("failed to enroll shell: {e}")))?;
+        shell.attach_group(enrolled);
     }
 
-    let reader = match pair.master.try_clone_reader() {
-        Ok(reader) => reader,
-        Err(e) => {
-            shell.reap_now();
-            return Err(TerminalExtError::Internal(format!(
-                "failed to clone pty reader: {e}"
-            )));
-        }
-    };
-    let writer = match pair.master.take_writer() {
-        Ok(writer) => writer,
-        Err(e) => {
-            shell.reap_now();
-            return Err(TerminalExtError::Internal(format!(
-                "failed to take pty writer: {e}"
-            )));
-        }
-    };
+    let reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|e| TerminalExtError::Internal(format!("failed to clone pty reader: {e}")))?;
+    let writer = pair
+        .master
+        .take_writer()
+        .map_err(|e| TerminalExtError::Internal(format!("failed to take pty writer: {e}")))?;
 
     let (input_tx, input_rx) = mpsc::channel(INPUT_CHANNEL_CAPACITY);
     spawn_pty_input_loop(writer, input_rx);
@@ -277,12 +320,24 @@ pub async fn create_pty(
             })
     });
 
-    let mut session = PtySession {
+    // Taking the lock first means nothing can await between disarming the guard
+    // and the insert that gives teardown another way to reach the shell.
+    let mut registry = PTY_REGISTRY.lock().await;
+
+    // The scope can close during the setup above, and teardown has already run
+    // by then: publishing here would advertise a shell it just killed.
+    if xai_tty_utils::global_process_scope().is_closed() {
+        return Err(TerminalExtError::Internal(
+            "process scope closed while the shell was starting".to_string(),
+        ));
+    }
+
+    let entry = Arc::new(Mutex::new(PtySession {
         master: Some(pair.master),
         input_tx: Some(input_tx),
         output_offset: 0,
         output_ring: VecDeque::with_capacity(OUTPUT_RING_BUFFER_SIZE),
-        shell,
+        shell: shell.into_registered(),
         cwd: resolved_cwd,
         name: resolved_name,
         created_at,
@@ -291,22 +346,9 @@ pub async fn create_pty(
         target_client_id,
         busy: false,
         gateway: gateway.clone(),
-    };
-
-    // The scope can close during the setup above, and teardown has already run
-    // by then: publishing here would advertise a shell it just killed.
-    if xai_tty_utils::global_process_scope().is_closed() {
-        session.shell.reap_now();
-        return Err(TerminalExtError::Internal(
-            "process scope closed while the shell was starting".to_string(),
-        ));
-    }
-
-    let entry = Arc::new(Mutex::new(session));
-    PTY_REGISTRY
-        .lock()
-        .await
-        .insert(pty_id.clone(), entry.clone());
+    }));
+    registry.insert(pty_id.clone(), entry.clone());
+    drop(registry);
 
     let pty_id_clone = pty_id.clone();
     tokio::task::spawn_local(run_pty_output_loop(reader, entry, pty_id_clone, gateway));
@@ -447,21 +489,11 @@ async fn run_pty_output_loop(
     );
 }
 
-/// Whether the PTY's controlling terminal has a foreground process group
-/// distinct from the shell itself — i.e. a command is actively running
-/// rather than the shell sitting idle at its prompt.
+/// Whether a command is running, rather than the shell sitting at its prompt.
 ///
-/// `process_group_leader()` issues `tcgetpgrp` on the master fd; an idle
-/// shell is its own foreground process group, so it matches the shell
-/// child's pid. When a command runs in the foreground the kernel reports
-/// that command's process group instead. Returns false when the value is
-/// unavailable (the shell exited or runs without job control).
-///
-/// Limitation: a shell that `exec`s a program in place keeps the same pid and
-/// pgid, so `tcgetpgrp` still matches the recorded child pid and the program
-/// reads as idle. Telling that apart from a real idle prompt needs per-OS
-/// process inspection, so a command launched the usual way (fork then exec) is
-/// detected while an `exec`-replaced shell is not.
+/// A shell that `exec`s a program in place keeps its pid and pgid, so that
+/// program reads as idle. Separating it from a real prompt needs per-OS
+/// process inspection.
 #[cfg(unix)]
 fn session_has_foreground_process(session: &PtySession) -> bool {
     let Some(foreground_pgid) = session
@@ -547,7 +579,7 @@ async fn flush_output(
     );
 }
 
-pub async fn write_pty_input(pty_id: &str, data: &[u8]) -> Result<(), TerminalExtError> {
+pub(crate) async fn write_pty_input(pty_id: &str, data: &[u8]) -> Result<(), TerminalExtError> {
     let entry = require_pty(pty_id).await?;
     let input_tx = entry.lock().await.input_tx.clone();
     input_tx
@@ -563,7 +595,7 @@ pub async fn write_pty_input(pty_id: &str, data: &[u8]) -> Result<(), TerminalEx
     Ok(())
 }
 
-pub async fn resize_pty(pty_id: &str, rows: u16, cols: u16) -> Result<(), TerminalExtError> {
+pub(crate) async fn resize_pty(pty_id: &str, rows: u16, cols: u16) -> Result<(), TerminalExtError> {
     let entry = require_pty(pty_id).await?;
     let mut session = entry.lock().await;
     let Some(master) = session.master.as_ref() else {
@@ -582,14 +614,14 @@ pub async fn resize_pty(pty_id: &str, rows: u16, cols: u16) -> Result<(), Termin
     Ok(())
 }
 
-pub async fn is_exited(pty_id: &str) -> bool {
+pub(crate) async fn is_exited(pty_id: &str) -> bool {
     match get_pty(pty_id).await {
         Some(entry) => entry.lock().await.shell.poll_exit(),
         None => true,
     }
 }
 
-pub async fn close_pty(pty_id: &str) -> Result<(), String> {
+pub(crate) async fn close_pty(pty_id: &str) -> Result<(), String> {
     let entry = { PTY_REGISTRY.lock().await.remove(pty_id) };
     if let Some(entry) = entry {
         tokio::task::spawn_blocking(move || reap(&entry))
@@ -632,7 +664,7 @@ fn wait_for_exit(entry: &Arc<Mutex<PtySession>>, budget: std::time::Duration) ->
 }
 
 /// Called on agent disconnect to clean up all PTYs.
-pub async fn close_all() {
+pub(crate) async fn close_all() {
     let entries: Vec<Arc<Mutex<PtySession>>> = {
         let mut reg = PTY_REGISTRY.lock().await;
         reg.drain().map(|(_, v)| v).collect()
@@ -642,12 +674,8 @@ pub async fn close_all() {
     }
 }
 
-/// Resolve the shell binary and arguments for an interactive PTY session.
-///
-/// Priority: explicit `shell` param > `$SHELL` env > platform default.
-/// On Windows falls back to the `detect_windows_shell` cascade
-/// (pwsh > powershell.exe > Git Bash > cmd.exe, overridable via
-/// `GROK_SHELL`) since `$SHELL` is absent.
+/// Explicit `shell` param, then `$SHELL`, then the platform default. Windows
+/// has no `$SHELL`, so it uses the `detect_windows_shell` cascade.
 fn resolve_pty_shell(shell: Option<&str>) -> (String, Vec<String>) {
     if let Some(s) = shell {
         return (s.to_string(), vec![]);
@@ -671,7 +699,7 @@ fn resolve_pty_shell(shell: Option<&str>) -> (String, Vec<String>) {
     }
 }
 
-pub async fn list_ptys() -> Vec<TerminalInfo> {
+pub(crate) async fn list_ptys() -> Vec<TerminalInfo> {
     let entries: Vec<(String, Arc<Mutex<PtySession>>)> = {
         let reg = PTY_REGISTRY.lock().await;
         reg.iter()
@@ -703,7 +731,7 @@ pub async fn list_ptys() -> Vec<TerminalInfo> {
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PtyLoadResult {
+pub(crate) struct PtyLoadResult {
     pub terminal_id: String,
     pub rows: u16,
     pub cols: u16,
@@ -712,13 +740,10 @@ pub struct PtyLoadResult {
     pub exit_code: Option<i32>,
 }
 
-/// Reconnect to a PTY. Replays the full ring buffer (with `isReplay: true`)
-/// so the client can reset its VTE emulator and feed all bytes from scratch.
-/// Exited PTYs are still loadable so the client can see final output.
-///
-/// Updates the stored `target_client_id` so that subsequent output
-/// notifications from the output loop are routed to the reconnecting client.
-pub async fn load(
+/// Reconnect to a PTY, replaying the ring buffer so the client can reset its
+/// VTE emulator and feed all bytes from scratch. An exited PTY still loads, so
+/// its final output stays readable.
+pub(crate) async fn load(
     pty_id: &str,
     gateway: &GatewaySender,
     target_client_id: TargetClientId,
@@ -1003,6 +1028,36 @@ mod tests {
                 close_pty(&pty_id).await.expect("close pty");
             })
             .await;
+    }
+
+    /// Covers the failure paths in [`create_pty`], which reap by returning.
+    #[tokio::test]
+    async fn dropping_an_unregistered_shell_reaps_it() {
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.arg("-c");
+        cmd.arg("sleep 300");
+        #[allow(clippy::disallowed_methods)]
+        let child = pair.slave.spawn_command(cmd).expect("spawn shell");
+        let pid = child.process_id().expect("shell pid") as i32;
+
+        drop(UnregisteredShell::new(child));
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "shell {pid} survived the guard drop"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     #[cfg(unix)]

@@ -4,6 +4,21 @@ This changelog tracks Forge releases independently from the synchronized upstrea
 Grok Build version. Forge release tags use `forge-vMAJOR.MINOR.PATCH`; the
 upstream base is recorded in each release entry.
 
+## [Unreleased]
+
+**Upstream base:** Grok Build 0.2.121
+
+### Changed
+
+- Forge is synchronized with Grok Build 0.2.121, including upstream session and
+  dashboard lifecycle improvements, background-task and compaction reliability,
+  prompt queue controls, authentication fixes, safer workspace permissions,
+  improved error handling, and terminal rendering updates.
+- The synchronization retains Forge’s narrow ChatGPT Codex compatibility,
+  fail-closed endpoint and credential isolation, session-scoped Fast Mode,
+  provider-aware controls, external Claude Code and Codex CLI sessions, Forge
+  branding, and the local and scheduled upstream-sync tooling.
+
 ## [0.3.1] - 2026-07-31
 
 **Upstream base:** Grok Build 0.2.116

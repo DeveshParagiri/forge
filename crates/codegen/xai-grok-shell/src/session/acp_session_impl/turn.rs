@@ -1,6 +1,7 @@
 //! Turn-execution concern for `SessionActor` (`handle_prompt`, turn-end,
 //! sampling loop).
 use super::*;
+use crate::util::dual_clock::DualClock;
 use xai_grok_tools::implementations::grok_build::LoopFireMode;
 /// Synthetic tool the model calls to return its schema-constrained final answer
 /// on backends that can't constrain output natively (Messages API). Intercepted
@@ -113,7 +114,7 @@ impl TurnSpanTotals {
 /// `updates.jsonl`.
 ///
 /// Every turn consumes a `prompt_index`, and rewind / fork truncation
-/// (`replay_to_prompt`, `updates_truncate_for_prompt`) recover turn
+/// (`replay_to_prompt`, `truncate_for_prompt_by`) recover turn
 /// boundaries by counting persisted `UserMessageChunk` runs — so every mode
 /// persists the echo. Turns whose content must not render as a user prompt
 /// (notification drain) are hidden by the *pager* via the
@@ -129,7 +130,7 @@ enum UserEchoMode {
     PersistOnly,
 }
 fn user_echo_mode(prompt_id: &str) -> UserEchoMode {
-    if prompt_id.starts_with(super::interjection::INTERJECT_FALLBACK_PROMPT_PREFIX) {
+    if super::interjection::is_interject_fallback(prompt_id) {
         return UserEchoMode::PersistOnly;
     }
     match super::super::PromptOrigin::from_prompt_id(prompt_id) {
@@ -277,12 +278,13 @@ impl SessionActor {
             }
         }
         if !origin.is_synthetic() {
-            self.cancel_pending_recap_for_new_prompt();
+            self.invalidate_side_calls_for_new_prompt();
         }
+        self.ensure_session_disk_writable().await?;
+        self.signals_handle().increment_turn();
+        let prompt_mode = self.resolve_turn_prompt_mode(&origin, prompt_mode);
         *self.turn_start_prompt_mode.lock() = prompt_mode;
         *self.turn_prompt_mode.lock() = prompt_mode;
-        self.signals_handle().increment_turn();
-        self.reconcile_plan_mode_with_prompt(prompt_mode);
         let _turn_active_guard =
             TurnActiveGuard::activate(self.tool_context.is_turn_active.as_ref());
         let _session_turn_active_guard = TurnActiveGuard::activate(Some(&self.session_turn_active));
@@ -373,6 +375,7 @@ impl SessionActor {
                             }
                             GoalResumeOutcome::Message(msg) => {
                                 self.persist_host_turn_user_echo(&original_prompt_text, prompt_id);
+                                self.mark_front_message_committed().await;
                                 self.send_host_turn_slash_command_output(&msg).await;
                                 return ok_end_turn(0, None);
                             }
@@ -380,6 +383,7 @@ impl SessionActor {
                     }
                     BuiltinAction::WorkflowLaunch { name, input } => {
                         self.persist_host_turn_user_echo(&original_prompt_text, prompt_id);
+                        self.mark_front_message_committed().await;
                         let msg = self
                             .launch_named_workflow(&workflow_registry, &name, &input)
                             .await;
@@ -420,6 +424,7 @@ impl SessionActor {
                         xai_grok_telemetry::events::SkillDispatched {
                             skill_name: sk.name.clone(),
                             plugin_source: sk.plugin_name.clone(),
+                            trigger: xai_grok_telemetry::events::SkillTrigger::SlashCommand,
                         },
                     );
                     let skill_source = if sk.plugin_name.is_some() {
@@ -791,6 +796,7 @@ impl SessionActor {
                     .await
                     .is_some()
                 {
+                    self.mark_front_message_committed().await;
                     let (flush_tx, flush_rx) = oneshot::channel();
                     if self
                         .notifications
@@ -799,7 +805,7 @@ impl SessionActor {
                             respond_to: flush_tx,
                         })
                         .is_ok()
-                        && flush_rx.await.is_ok()
+                        && matches!(flush_rx.await, Ok(Ok(())))
                     {
                         let _ = ack.send(());
                     } else {
@@ -818,6 +824,7 @@ impl SessionActor {
                 }
             } else {
                 self.chat_state_handle.push_user_message(user_chat);
+                self.mark_front_message_committed().await;
             }
         }
         self.dispatch_hook(
@@ -835,7 +842,7 @@ impl SessionActor {
         let turn_model_id = self.current_model_id().await;
         let doom_event_model = turn_model_id.clone();
         let turn_timer = std::time::Instant::now();
-        let result = {
+        let mut result = {
             let mut round_trace = trace_gcs_config;
             let mut round_artifact = artifact_tracker;
             let mut stop_continuations_this_turn: u32 = 0;
@@ -899,6 +906,37 @@ impl SessionActor {
                 }
             }
         };
+        if matches!(
+            result,
+            Ok(TurnOutcome::Cancelled { .. }) | Ok(TurnOutcome::MaxTurnsReached { .. })
+        ) {
+            self.cancel_running_turn_subagents(prompt_id);
+        }
+        let mut flush_error = self.flush_to_disk().await.err();
+        self.file_state_tracker
+            .end_prompt(&self.tool_context.fs, current_prompt_index)
+            .await;
+        if let Some(mut rewind_point) = self
+            .file_state_tracker
+            .get_rewind_point(current_prompt_index)
+            .await
+        {
+            rewind_point.normalize_to_relative(self.tool_context.cwd.as_ref());
+            let _ = self
+                .notifications
+                .persistence_tx
+                .send(PersistenceMsg::RewindPoint(rewind_point));
+            if flush_error.is_none() {
+                flush_error = self.flush_to_disk().await.err();
+            }
+        }
+        if matches!(
+            &result,
+            Ok(TurnOutcome::Completed { .. }) | Ok(TurnOutcome::StationarityEnded { .. })
+        ) && let Err(error) = self.disk_full_acp_error(flush_error.as_ref())
+        {
+            result = Err(error);
+        }
         let turn_duration_ms = turn_timer.elapsed().as_millis() as u64;
         let handle_prompt_elapsed_ms = handle_prompt_start.elapsed().as_millis() as u64;
         xai_grok_telemetry::unified_log::info(
@@ -1148,31 +1186,10 @@ impl SessionActor {
                 }
             }
         }
-        if matches!(
-            result,
-            Ok(TurnOutcome::Cancelled { .. }) | Ok(TurnOutcome::MaxTurnsReached { .. })
-        ) {
-            self.cancel_running_turn_subagents(prompt_id);
-        }
-        self.flush_to_disk().await;
-        self.file_state_tracker
-            .end_prompt(&self.tool_context.fs, current_prompt_index)
-            .await;
-        if let Some(mut rewind_point) = self
-            .file_state_tracker
-            .get_rewind_point(current_prompt_index)
-            .await
-        {
-            rewind_point.normalize_to_relative(self.tool_context.cwd.as_ref());
-            let _ = self
-                .notifications
-                .persistence_tx
-                .send(PersistenceMsg::RewindPoint(rewind_point));
-        }
+        let usage = self.freeze_prompt_usage(prompt_id).await;
+        drop(turn_scope_guard);
         match result {
             Ok(outcome) => {
-                let usage = self.freeze_prompt_usage(prompt_id).await;
-                drop(turn_scope_guard);
                 self.chat_state_handle.flush();
                 let total_tokens = self.chat_state_handle.get_total_tokens().await;
                 let (stop_reason, mut snapshot, completion_kind, structured_output) = match outcome
@@ -1230,11 +1247,7 @@ impl SessionActor {
                     tool_overrides: None,
                 })
             }
-            Err(e) => {
-                let usage = self.freeze_prompt_usage(prompt_id).await;
-                drop(turn_scope_guard);
-                Err(crate::sampling::error::attach_prompt_usage(e, usage))
-            }
+            Err(e) => Err(crate::sampling::error::attach_prompt_usage(e, usage)),
         }
     }
     /// Wait for turn-blocking subagents (up to 120s on the turn task),
@@ -1887,6 +1900,7 @@ impl SessionActor {
         json_schema: Option<serde_json::Value>,
     ) -> Result<TurnOutcome, acp::Error> {
         let conv_turn_start = std::time::Instant::now();
+        let conv_turn_clock = DualClock::now();
         self.maybe_refresh_model_metadata_on_resume().await;
         self.maybe_compact_on_model_switch().await?;
         self.chat_state_handle
@@ -2193,50 +2207,138 @@ impl SessionActor {
                     return Err(error);
                 }
                 Ok(SamplerTurnOutcome::CompactAndResubmit) => {
-                    auth_retry_schedule.reset();
+                    auth_retry_schedule.reset_on_success();
                     continue;
                 }
-                Ok(SamplerTurnOutcome::RefreshAuthAndResubmit) => {
-                    if let Some((attempt, delay)) = auth_retry_schedule.next_delay() {
-                        let delay_ms = delay.as_millis() as u64;
-                        tracing::warn!(
-                            attempt,
-                            delay_ms,
-                            "auth 401 retry: backing off before resubmit"
-                        );
-                        xai_grok_telemetry::unified_log::warn(
-                            "shell.turn.auth_retry_backoff",
+                Ok(SamplerTurnOutcome::RefreshAuthAndResubmit { credential, store }) => {
+                    if auth_retry_schedule.reset_if_incident_spans_suspend() {
+                        tracing::info!("auth 401 retry: incident spanned a suspend; budget reset");
+                        xai_grok_telemetry::unified_log::info(
+                            "shell.turn.auth_retry_reset_after_suspend",
                             Some(self.session_info.id.0.as_ref()),
-                            Some(serde_json::json!({
-                                "loop_index": loop_index,
-                                "attempt": attempt,
-                                "max_retries": AuthRetrySchedule::MAX_RETRIES,
-                                "delay_ms": delay_ms,
-                            })),
+                            Some(serde_json::json!({ "loop_index": loop_index })),
                         );
-                        self.send_xai_notification(XaiSessionUpdate::RetryState(
-                            crate::extensions::notification::RetryState::Retrying {
-                                attempt,
-                                max_retries: AuthRetrySchedule::MAX_RETRIES,
-                                reason: "Re-authenticated after 401; retrying request".to_string(),
-                            },
-                        ))
-                        .await;
-                        sleep(delay).await;
-                        continue;
                     }
-                    let msg = format!(
-                        "Auth recovery succeeded but inference request was \
-                         still rejected (401) after {} retries",
-                        AuthRetrySchedule::MAX_RETRIES
-                    );
-                    tracing::error!(msg);
-                    return Err(acp::Error::internal_error().data(
-                        crate::sampling::error::error_data_with_status(msg, Some(401)),
-                    ));
+                    match auth_retry_schedule.on_recovered_401(credential) {
+                        AuthRetryDecision::UnchargedResubmit { resubmit } => {
+                            tracing::warn!(
+                                resubmit,
+                                "auth 401 retry: no credential was sent; resubmitting uncharged"
+                            );
+                            xai_grok_telemetry::unified_log::warn(
+                                "shell.turn.auth_resubmit_uncharged",
+                                Some(self.session_info.id.0.as_ref()),
+                                Some(serde_json::json!({
+                                    "loop_index": loop_index,
+                                    "resubmit": resubmit,
+                                    "max_resubmits": AuthRetrySchedule::MAX_UNCHARGED_RESUBMITS,
+                                })),
+                            );
+                            self.send_xai_notification(XaiSessionUpdate::RetryState(
+                                crate::extensions::notification::RetryState::Retrying {
+                                    attempt: resubmit,
+                                    max_retries: AuthRetrySchedule::MAX_UNCHARGED_RESUBMITS,
+                                    reason: "Re-authenticated after 401 (request carried no \
+                                             credential); retrying request"
+                                        .to_string(),
+                                },
+                            ))
+                            .await;
+                            pace_uncharged_resubmit(store, self.auth_manager.as_ref()).await;
+                            continue;
+                        }
+                        AuthRetryDecision::Backoff { attempt, delay } => {
+                            let delay_ms = delay.as_millis() as u64;
+                            tracing::warn!(
+                                attempt,
+                                delay_ms,
+                                "auth 401 retry: backing off before resubmit"
+                            );
+                            xai_grok_telemetry::unified_log::warn(
+                                "shell.turn.auth_retry_backoff",
+                                Some(self.session_info.id.0.as_ref()),
+                                Some(serde_json::json!({
+                                    "loop_index": loop_index,
+                                    "attempt": attempt,
+                                    "max_retries": AuthRetrySchedule::MAX_RETRIES,
+                                    "delay_ms": delay_ms,
+                                })),
+                            );
+                            self.send_xai_notification(XaiSessionUpdate::RetryState(
+                                crate::extensions::notification::RetryState::Retrying {
+                                    attempt,
+                                    max_retries: AuthRetrySchedule::MAX_RETRIES,
+                                    reason: "Re-authenticated after 401; retrying request"
+                                        .to_string(),
+                                },
+                            ))
+                            .await;
+                            sleep(delay).await;
+                            continue;
+                        }
+                        decision @ (AuthRetryDecision::Exhausted
+                        | AuthRetryDecision::RunawayGuard { .. }) => {
+                            let (awake, wall, suspended) = conv_turn_clock.elapsed_split();
+                            let duration_note = if suspended >= std::time::Duration::from_secs(1) {
+                                format!(
+                                    " Turn ran {} wall-clock, {} of it suspended.",
+                                    human_duration(wall),
+                                    human_duration(suspended)
+                                )
+                            } else {
+                                format!(" Turn ran {} wall-clock.", human_duration(wall))
+                            };
+                            let (rejections, authenticated) = auth_retry_schedule.incident_counts();
+                            let uncharged = auth_retry_schedule.uncharged_rejections();
+                            let msg = match decision {
+                                AuthRetryDecision::RunawayGuard { rejections } => {
+                                    format!(
+                                        "Auth recovery kept succeeding but {rejections} requests \
+                                     were rejected (401) before a credential could be sent, \
+                                     with no successful response in between; stopping as a \
+                                     runaway guard.{duration_note}"
+                                    )
+                                }
+                                _ if authenticated == rejections => {
+                                    format!(
+                                        "Auth recovery succeeded but {rejections} authenticated \
+                                     inference requests were still rejected (401); giving up \
+                                     after {} retries.{duration_note}",
+                                        AuthRetrySchedule::MAX_RETRIES
+                                    )
+                                }
+                                _ => {
+                                    format!(
+                                        "Auth retry budget exhausted after {rejections} \
+                                     post-recovery 401s ({authenticated} provably carried a \
+                                     credential).{duration_note}"
+                                    )
+                                }
+                            };
+                            tracing::error!(msg);
+                            xai_grok_telemetry::unified_log::error(
+                                "shell.turn.auth_retry_exhausted",
+                                Some(self.session_info.id.0.as_ref()),
+                                Some(serde_json::json!({
+                                    "loop_index": loop_index,
+                                    "decision": match decision {
+                                        AuthRetryDecision::RunawayGuard { .. } => "runaway_guard",
+                                        _ => "exhausted",
+                                    },
+                                    "rejections": rejections,
+                                    "authenticated": authenticated,
+                                    "uncharged": uncharged,
+                                    "wall_secs": wall.as_secs(),
+                                    "awake_secs": awake.as_secs(),
+                                    "suspended_secs": suspended.as_secs(),
+                                })),
+                            );
+                            return Err(self.fail_turn_auth_budget_exhausted(msg).await);
+                        }
+                    }
                 }
             };
-            auth_retry_schedule.reset();
+            auth_retry_schedule.reset_on_success();
             let model_elapsed_ms = model_timer.elapsed().as_millis() as u64;
             let usage = response.usage.as_ref();
             let prompt_tokens = usage.map(|u| u.prompt_tokens);
@@ -2745,87 +2847,6 @@ mod identical_tool_call_run_tests {
         assert_eq!(run.observe("other", "bash", false), 1);
         assert!(!run.nudged);
         assert!(!run.take_nudge());
-    }
-}
-/// Backoff schedule for resubmits after a *successful* 401 auth recovery
-/// (fresh token minted, request to be re-sent).
-///
-/// Two hard-won invariants, both regressions from the silent-hang incident
-/// where a turn froze 16m40s and then 11.6 days (user-cancelled at 27min):
-///
-/// - **Delays must be 1s/2s/4s.** `tokio_retry::ExponentialBackoff::
-///   from_millis(base)` raises `base` to the attempt number, so the base must
-///   stay small: `from_millis(1000)` yields 1000ⁿ ms = 1s → 16m40s → 11.57
-///   days. `from_millis(2).factor(500)` yields 2ⁿ × 500ms = 1s, 2s, 4s.
-/// - **The schedule is per-incident, not per-turn.** A long turn can span
-///   several hourly gateway token rotations; each rotation is an independent
-///   401→refresh→retry event. Without `reset()` after a successful response,
-///   the third rotation of one turn would land on the last (largest) delay
-///   and the fourth would fail the turn outright.
-struct AuthRetrySchedule {
-    delays: std::iter::Take<ExponentialBackoff>,
-    attempt: u32,
-}
-impl AuthRetrySchedule {
-    /// Consecutive post-recovery 401s tolerated before the turn fails.
-    const MAX_RETRIES: u32 = 3;
-    fn new() -> Self {
-        Self {
-            delays: ExponentialBackoff::from_millis(2)
-                .factor(500)
-                .max_delay(std::time::Duration::from_secs(10))
-                .take(Self::MAX_RETRIES as usize),
-            attempt: 0,
-        }
-    }
-    /// Next `(attempt_number, delay)` (1-indexed), or `None` once exhausted.
-    fn next_delay(&mut self) -> Option<(u32, std::time::Duration)> {
-        let delay = self.delays.next()?;
-        self.attempt += 1;
-        Some((self.attempt, delay))
-    }
-    /// A successful model response closes the incident: restart the schedule
-    /// so the next token rotation starts back at the shortest delay.
-    fn reset(&mut self) {
-        *self = Self::new();
-    }
-}
-#[cfg(test)]
-mod auth_retry_schedule_tests {
-    use super::AuthRetrySchedule;
-    use std::time::Duration;
-    /// Pins the exact schedule. Guards against the `from_millis(1000)`
-    /// footgun (baseⁿ semantics): that spelling produced sleeps of 1s,
-    /// 16m40s, and 11.57 days, observed in the field as a silent
-    /// ~27-minute hang in `waiting_model` that the user had to cancel.
-    #[test]
-    fn schedule_is_one_two_four_seconds_then_exhausted() {
-        let mut schedule = AuthRetrySchedule::new();
-        let steps: Vec<_> = std::iter::from_fn(|| schedule.next_delay()).collect();
-        assert_eq!(
-            steps,
-            vec![
-                (1, Duration::from_secs(1)),
-                (2, Duration::from_secs(2)),
-                (3, Duration::from_secs(4)),
-            ],
-        );
-        assert_eq!(
-            schedule.next_delay(),
-            None,
-            "must exhaust after MAX_RETRIES"
-        );
-    }
-    /// Each successful response must restart the schedule: hourly token
-    /// rotations within one long turn are independent incidents, so they
-    /// must not escalate toward exhaustion (turn failure).
-    #[test]
-    fn reset_restarts_delays_and_attempt_numbering() {
-        let mut schedule = AuthRetrySchedule::new();
-        schedule.next_delay();
-        schedule.next_delay();
-        schedule.reset();
-        assert_eq!(schedule.next_delay(), Some((1, Duration::from_secs(1))));
     }
 }
 #[cfg(test)]
