@@ -34,7 +34,7 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.92.0
+          toolchain: 1.94.0
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
       - name: Install protoc
