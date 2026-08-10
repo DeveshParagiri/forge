@@ -29,11 +29,10 @@ synchronized with upstream Grok Build.
 
 ## Current release
 
-The latest published release is **Forge 0.3.2**, synchronized with **Grok Build
-0.2.121**. The `dev` branch is synchronized with **Grok Build 1.0.0** for the
-next Forge release. Forge versions are independent of upstream versions:
-release tags use `forge-vMAJOR.MINOR.PATCH`, while synchronized development and
-release bases are recorded in [`CHANGELOG.md`](CHANGELOG.md) and release notes.
+The latest published release is **Forge 0.4.0**, synchronized with **Grok Build
+1.0.0**. Forge versions are independent of upstream versions: release tags use
+`forge-vMAJOR.MINOR.PATCH`, while synchronized development and release bases are
+recorded in [`CHANGELOG.md`](CHANGELOG.md) and release notes.
 
 ## Install Forge
 
@@ -71,7 +70,7 @@ Source-mode installations use their configured checkout and toolchain instead
 Pass a Forge version with or without the `forge-v` prefix:
 
 ```sh
-FORGE_VERSION=0.3.2 \
+FORGE_VERSION=0.4.0 \
   curl -fsSL https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install | sh
 ```
 

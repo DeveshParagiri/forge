@@ -6,7 +6,9 @@ upstream base is recorded in each release entry.
 
 ## [Unreleased]
 
-**Development upstream base:** Grok Build 1.0.0
+## [0.4.0] - 2026-08-10
+
+**Upstream base:** Grok Build 1.0.0
 
 ### Changed
 
