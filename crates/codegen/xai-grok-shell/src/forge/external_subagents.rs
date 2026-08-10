@@ -103,10 +103,14 @@ pub(crate) struct CompositeSubagentBackend {
 }
 
 impl CompositeSubagentBackend {
-    pub(crate) fn new(native: Arc<dyn SubagentBackend>, ui: Option<ExternalSubagentUi>) -> Self {
+    pub(crate) fn new(
+        native: Arc<dyn SubagentBackend>,
+        ui: Option<ExternalSubagentUi>,
+        process_scope: Option<xai_tty_utils::ProcessScope>,
+    ) -> Self {
         Self {
             native,
-            external: ExternalSubagentBackend::new(ui),
+            external: ExternalSubagentBackend::new(ui, process_scope),
         }
     }
 
@@ -220,13 +224,18 @@ fn external_type_summary() -> SubagentTypeSummary {
 struct ExternalSubagentBackend {
     tasks: Arc<Mutex<HashMap<String, Arc<ExternalTask>>>>,
     ui: Option<ExternalSubagentUi>,
+    process_scope: Option<xai_tty_utils::ProcessScope>,
 }
 
 impl ExternalSubagentBackend {
-    fn new(ui: Option<ExternalSubagentUi>) -> Self {
+    fn new(
+        ui: Option<ExternalSubagentUi>,
+        process_scope: Option<xai_tty_utils::ProcessScope>,
+    ) -> Self {
         Self {
             tasks: Arc::default(),
             ui,
+            process_scope,
         }
     }
 
@@ -322,8 +331,15 @@ impl ExternalSubagentBackend {
             ui.progress(&request.id, 0, 0, 0, 0, 0, 0, Vec::new(), 0);
         }
 
-        let result =
-            run_external_process(&request, &mut spec, &task, started, self.ui.as_ref()).await;
+        let result = run_external_process(
+            &request,
+            &mut spec,
+            &task,
+            started,
+            self.ui.as_ref(),
+            self.process_scope.as_ref(),
+        )
+        .await;
         let result = match result {
             Ok(result) => result,
             Err(error) => SubagentResult {
@@ -538,6 +554,7 @@ async fn run_external_process(
     task: &Arc<ExternalTask>,
     started: Instant,
     ui: Option<&ExternalSubagentUi>,
+    process_scope: Option<&xai_tty_utils::ProcessScope>,
 ) -> Result<SubagentResult, ToolError> {
     let program = spec.session.program();
     let args = spec.session.args().to_vec();
@@ -565,23 +582,33 @@ async fn run_external_process(
             format!("Cannot create a process group for {program}: {error}"),
         )
     })?;
-    let mut child = command
-        .spawn()
-        .map_err(|error| {
-            ToolError::custom(
-                "external_cli_unavailable",
-                format!(
-                    "Cannot start {program} for subagent '{}': {error}. Ensure the CLI is installed and authenticated.",
-                    request.subagent_type
-                ),
-            )
-        })?;
+    #[allow(clippy::disallowed_methods)]
+    // This site owns an explicit ProcessGroup so cancellation can terminate
+    // wrapper descendants; it is registered with the session scope below.
+    let mut child = command.spawn().map_err(|error| {
+        ToolError::custom(
+            "external_cli_unavailable",
+            format!(
+                "Cannot start {program} for subagent '{}': {error}. Ensure the CLI is installed and authenticated.",
+                request.subagent_type
+            ),
+        )
+    })?;
     if let Err(error) = process_group.attach(&child) {
         let _ = child.kill().await;
         let _ = child.wait().await;
         return Err(ToolError::custom(
             "external_cli_unavailable",
             format!("Cannot attach {program} to its process group: {error}"),
+        ));
+    }
+    let process_group = Arc::new(process_group);
+    if process_scope.is_some_and(|scope| !scope.register(&process_group)) {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        return Err(ToolError::custom(
+            "external_cli_unavailable",
+            format!("Cannot start {program}: the owning session is closing"),
         ));
     }
     let mut stdin = child.stdin.take();

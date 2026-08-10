@@ -84,6 +84,8 @@ pub(crate) struct AgentRebuildSpec {
     pub tools_notification_handle: ToolNotificationHandle,
     /// Forge-owned bridge for external CLI subagent lifecycle events.
     pub forge_subagent_ui: Option<crate::forge::subagent_ui::ExternalSubagentUi>,
+    /// Session-owned child-process reaper shared with external CLI harnesses.
+    pub process_scope: Option<xai_tty_utils::ProcessScope>,
     pub bridge_state_path: PathBuf,
     pub session_env: Arc<HashMap<String, String>>,
     pub models_manager: crate::agent::models::ModelsManager,
@@ -188,6 +190,7 @@ impl AgentRebuildSpec {
             fs_backend,
             tools_notification_handle,
             forge_subagent_ui,
+            process_scope,
             bridge_state_path,
             session_env,
             models_manager,
@@ -348,6 +351,7 @@ impl AgentRebuildSpec {
                 crate::forge::external_subagents::CompositeSubagentBackend::new(
                     native_backend,
                     forge_subagent_ui.clone(),
+                    process_scope.clone(),
                 ),
             ));
             agent.tool_bridge().update_resource(backend).await;
@@ -425,6 +429,7 @@ pub(crate) fn test_rebuild_spec_default() -> Arc<AgentRebuildSpec> {
         fs_backend: Arc::new(xai_grok_tools::computer::local::LocalFs),
         tools_notification_handle: ToolNotificationHandle::noop(),
         forge_subagent_ui: None,
+        process_scope: None,
         bridge_state_path: std::env::temp_dir().join("test_tool_state.json"),
         session_env: Arc::new(HashMap::new()),
         models_manager: crate::agent::models::ModelsManager::default(),

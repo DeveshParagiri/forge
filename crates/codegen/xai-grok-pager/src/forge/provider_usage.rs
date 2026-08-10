@@ -7,6 +7,14 @@ use crate::app::actions::Effect;
 use crate::app::app_view::AppView;
 use crate::scrollback::block::RenderBlock;
 
+/// The dashboard header's subscription CTA belongs only to xAI accounts.
+///
+/// Unknown and external providers must not inherit a remote xAI upsell merely
+/// because the announcement payload is globally available.
+pub(crate) fn dashboard_upgrade_cta_visible(provider: Option<ProviderId>) -> bool {
+    provider == Some(ProviderId::Spacexai)
+}
+
 /// Plan the provider-account follow-up after upstream session token/cost usage.
 ///
 /// Keeping this branch in Forge lets every provider share upstream's session
@@ -37,11 +45,13 @@ pub(crate) fn account_follow_up(app: &mut AppView, id: crate::app::agent::AgentI
             vec![Effect::FetchBilling {
                 agent_id: id,
                 silent: false,
+                nonce: 0,
             }]
         }
         ProviderId::OpenaiCodex => vec![Effect::FetchProviderUsage {
             agent_id: id,
             provider,
+            nonce: 0,
         }],
         ProviderId::Openrouter => {
             push_system(
@@ -162,6 +172,16 @@ fn title_case(value: &str) -> String {
 mod tests {
     use super::*;
     use xai_grok_shell::agent::provider_auth::{UsageCredits, UsageWindow};
+
+    #[test]
+    fn dashboard_upgrade_cta_is_xai_only() {
+        assert!(dashboard_upgrade_cta_visible(Some(ProviderId::Spacexai)));
+        assert!(!dashboard_upgrade_cta_visible(Some(
+            ProviderId::OpenaiCodex
+        )));
+        assert!(!dashboard_upgrade_cta_visible(Some(ProviderId::Openrouter)));
+        assert!(!dashboard_upgrade_cta_visible(None));
+    }
 
     #[test]
     fn strips_unsafe_provider_text() {

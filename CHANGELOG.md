@@ -6,6 +6,23 @@ upstream base is recorded in each release entry.
 
 ## [Unreleased]
 
+**Development upstream base:** Grok Build 1.0.0
+
+### Changed
+
+- Synchronized `dev` with Grok Build 1.0.0, preserving Forge's provider,
+  credential-isolation, Fast Mode, external-harness, session, branding, and
+  upstream-sync extensions.
+- Integrated upstream's nonce-protected usage modal with Forge's provider-aware
+  account usage. SpaceXAI sessions use native billing, while ChatGPT Codex
+  sessions fetch Codex quota without calling xAI billing APIs.
+
+### Fixed
+
+- The dashboard header no longer displays the remote xAI subscription upgrade
+  CTA for ChatGPT Codex, OpenRouter, custom, or not-yet-resolved providers.
+  SpaceXAI sessions retain the upstream upgrade surface.
+
 ## [0.3.2] - 2026-08-09
 
 **Upstream base:** Grok Build 0.2.121

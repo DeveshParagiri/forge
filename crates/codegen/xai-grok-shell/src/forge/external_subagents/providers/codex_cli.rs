@@ -244,15 +244,14 @@ impl CodexAppServerSession {
             }
             Some("item/started") => {
                 if let Some(item) = params.get("item") {
-                    match item.get("type").and_then(Value::as_str) {
-                        // A Codex turn can contain multiple model loops around
-                        // tools. Each reasoning/message item start is therefore
-                        // a native stream boundary, like Grok's per-loop
-                        // `streamStartMs` reset.
-                        Some("reasoning" | "agentMessage") => {
-                            events.push(ChildEvent::StreamStarted);
-                        }
-                        _ => {}
+                    // A Codex turn can contain multiple model loops around
+                    // tools. Each reasoning/message item start is therefore
+                    // a native stream boundary, like Grok's per-loop
+                    // `streamStartMs` reset.
+                    if let Some("reasoning" | "agentMessage") =
+                        item.get("type").and_then(Value::as_str)
+                    {
+                        events.push(ChildEvent::StreamStarted);
                     }
                     if let Some((id, title, kind, raw_input)) = tool(item) {
                         self.state.record_tool(&id, &title);

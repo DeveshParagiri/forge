@@ -29,10 +29,11 @@ synchronized with upstream Grok Build.
 
 ## Current release
 
-**Forge 0.3.2** is synchronized with **Grok Build 0.2.121**. Forge versions are
-independent of upstream versions: release tags use `forge-vMAJOR.MINOR.PATCH`,
-while the synchronized Grok Build version is recorded in the
-[`CHANGELOG.md`](CHANGELOG.md) and release notes.
+The latest published release is **Forge 0.3.2**, synchronized with **Grok Build
+0.2.121**. The `dev` branch is synchronized with **Grok Build 1.0.0** for the
+next Forge release. Forge versions are independent of upstream versions:
+release tags use `forge-vMAJOR.MINOR.PATCH`, while synchronized development and
+release bases are recorded in [`CHANGELOG.md`](CHANGELOG.md) and release notes.
 
 ## Install Forge
 
