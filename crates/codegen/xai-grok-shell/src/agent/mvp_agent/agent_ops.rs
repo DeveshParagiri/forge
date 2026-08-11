@@ -48,7 +48,7 @@ impl MvpAgent {
         if self.is_resident(session_id) {
             self.gateway
                 .forward_fire_and_forget(
-                    crate::session::summary::session_info_update(
+                    crate::session::summary::session_info_update_manual(
                         session_id.clone(),
                         title,
                     ),

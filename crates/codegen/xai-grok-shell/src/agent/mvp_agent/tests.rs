@@ -1973,6 +1973,7 @@ async fn ensure_plugin_registry_lazily_populates_snapshot() {
 }
 #[cfg(unix)]
 mod process_scope_reclaim;
+mod session_rename_tests;
 mod session_resume_close_tests;
 mod subagent_spawn_context_tests;
 /// No load in flight and no session → the wait returns immediately
