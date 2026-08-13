@@ -2,6 +2,64 @@
 
 use super::*;
 
+#[test]
+fn rc_opens_transient_modal_and_completion_never_enters_scrollback() {
+    let mut app = test_app_with_agent();
+    let agent_id = AgentId(0);
+    let before = agent_scrollback_len(&app);
+    let (session_id, session_binding_epoch) = {
+        let agent = &app.agents[&agent_id];
+        (
+            agent.session.session_id.clone().unwrap(),
+            agent.session_binding_epoch,
+        )
+    };
+
+    let effects = dispatch(
+        Action::ForgeRemoteControl(crate::forge::remote_control::RemoteControlCommand::Start),
+        &mut app,
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::ForgeRemoteControl {
+            command: crate::forge::remote_control::RemoteControlCommand::Start,
+            ..
+        }]
+    ));
+    let Some(crate::views::modal::ActiveModal::ForgeRemote { state }) =
+        app.agents[&agent_id].active_modal.as_ref()
+    else {
+        panic!("/rc must open its transient modal immediately");
+    };
+    assert!(state.status.is_none());
+
+    let url = format!(
+        "https://forge-mac.example-tailnet.ts.net/forge/{}/",
+        "ab".repeat(32)
+    );
+    dispatch(
+        Action::TaskComplete(TaskResult::ForgeRemoteControlComplete {
+            agent_id,
+            session_id,
+            session_binding_epoch,
+            command: crate::forge::remote_control::RemoteControlCommand::Start,
+            result: Ok(crate::forge::remote_control::RemoteControlStatus::live(
+                url.clone(),
+                std::time::Instant::now() + std::time::Duration::from_secs(8 * 60 * 60),
+            )),
+        }),
+        &mut app,
+    );
+
+    assert_eq!(agent_scrollback_len(&app), before);
+    let Some(crate::views::modal::ActiveModal::ForgeRemote { state }) =
+        app.agents[&agent_id].active_modal.as_ref()
+    else {
+        panic!("completion must update the existing remote modal");
+    };
+    assert_eq!(state.remote_url(), Some(url.as_str()));
+}
+
 /// Regression (leader-mode turn-end race): when this client is briefly Idle
 /// (`is_turn_running() == false`, `current_prompt_id` cleared) but the server
 /// still has queued prompts — visible as a non-empty `shared_queue` mirror —

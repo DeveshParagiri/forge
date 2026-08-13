@@ -8,7 +8,7 @@ MODE="${FORGE_INSTALL_MODE:-binary}"
 INSTALL_BIN="${GROK_INSTALL_BIN:-$HOME/.grok/bin/grok}"
 UPDATER="${GROK_UPDATER:-$HOME/bin/grok-update-from-source}"
 SOURCE_DIR="${GROK_SRC:-$HOME/Projects/forge}"
-BRANCH="${GROK_BRANCH:-dev}"
+BRANCH="${GROK_BRANCH:-main}"
 REPO_URL="${GROK_REPO_URL:-https://github.com/$REPO.git}"
 
 fail() {

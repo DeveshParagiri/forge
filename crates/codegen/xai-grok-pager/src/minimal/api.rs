@@ -413,6 +413,7 @@ pub fn minimal_btw_surface_available(v: &AgentView) -> bool {
 /// Start a correlated minimal `/btw` loading panel on this agent.
 pub fn start_minimal_btw(v: &mut AgentView, question: String) -> uuid::Uuid {
     let request_id = uuid::Uuid::new_v4();
+    v.btw_request_id = Some(request_id);
     v.minimal_btw_lifecycle = Some(MinimalBtwLifecycle::Active {
         request_id: Some(request_id),
         revision: uuid::Uuid::new_v4(),
@@ -438,6 +439,9 @@ pub fn finish_minimal_btw(
     if active_id != request_id {
         return false;
     }
+    if v.btw_request_id != Some(request_id) {
+        return false;
+    }
     let Some(crate::views::btw_overlay::BtwOverlayState::Loading { question }) = v.btw_state.take()
     else {
         return false;
@@ -446,6 +450,7 @@ pub fn finish_minimal_btw(
         request_id: None,
         revision: uuid::Uuid::new_v4(),
     });
+    v.btw_request_id = None;
     match result {
         Ok(response) => {
             v.btw_state = Some(crate::views::btw_overlay::BtwOverlayState::done(
@@ -464,6 +469,7 @@ pub fn finish_minimal_btw(
 
 /// Invalidate and clear the complete minimal `/btw` lifecycle.
 pub fn clear_minimal_btw(v: &mut AgentView) {
+    v.btw_request_id = None;
     if v.minimal_btw_lifecycle.is_none() {
         return;
     }

@@ -360,6 +360,7 @@ impl AgentView {
         } else {
             self.btw_state = None;
         }
+        self.btw_request_id = None;
         self.minimal_btw_lifecycle = None;
         self.btw_focused = false;
         self.clear_btw_drag_state();

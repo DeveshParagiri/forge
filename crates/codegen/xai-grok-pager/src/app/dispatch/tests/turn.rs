@@ -1391,6 +1391,56 @@ fn always_continue_choice_sets_preference() {
 }
 
 #[test]
+fn remote_cancel_honors_always_continue_for_the_pinned_agent() {
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    {
+        let agent = app.agents.get_mut(&id).unwrap();
+        agent.session.state = AgentState::TurnRunning;
+        agent
+            .subagent_sessions
+            .insert("child-1".into(), make_test_subagent("child-1", "sa-1"));
+    }
+    app.current_ui.cancel_subagents_on_turn_cancel = Some("always_continue".into());
+
+    let effects = dispatch_remote_cancel(&mut app, id).expect("preference resolves the cancel");
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CancelTurn {
+            session_id,
+            cancel_subagents: false,
+            ..
+        }] if session_id.0.as_ref() == "test-session"
+    ));
+}
+
+#[test]
+fn remote_cancel_surfaces_the_same_subagent_choice_instead_of_escalating() {
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    {
+        let agent = app.agents.get_mut(&id).unwrap();
+        agent.session.state = AgentState::TurnRunning;
+        agent
+            .subagent_sessions
+            .insert("child-1".into(), make_test_subagent("child-1", "sa-1"));
+    }
+    app.current_ui.cancel_subagents_on_turn_cancel = None;
+
+    let error = dispatch_remote_cancel(&mut app, id).expect_err("choice must be explicit");
+    assert!(error.contains("Choose whether"));
+    assert_eq!(
+        app.agents[&id]
+            .cancel_turn_view
+            .as_ref()
+            .unwrap()
+            .running_count,
+        1
+    );
+    assert!(app.agents[&id].pending_cancel_resend.is_none());
+}
+
+#[test]
 fn prompt_response_clears_cancel_turn_panel() {
     let mut app = test_app_with_agent();
     let id = AgentId(0);

@@ -38,6 +38,7 @@ impl AgentView {
             self.last_seen_event_id = None;
             self.last_applied_event_seq = None;
             self.last_applied_xai_event_seq = None;
+            self.remote_usage.clear();
             self.clear_minimal_btw_lifecycle();
         }
         self.session.session_id = Some(session_id);
@@ -46,6 +47,7 @@ impl AgentView {
     pub(crate) fn unbind_session_id(&mut self) {
         if self.session.session_id.take().is_some() {
             self.session_binding_epoch = self.session_binding_epoch.wrapping_add(1);
+            self.remote_usage.clear();
             self.clear_minimal_btw_lifecycle();
         }
     }
@@ -125,6 +127,7 @@ impl AgentView {
             modal_buttons: Vec::new(),
             modal_hovered_key: None,
             context_state: None,
+            remote_usage: Default::default(),
             chat_kind: false,
             app_chat_mode: false,
             #[cfg(feature = "local-workspace")]
@@ -250,6 +253,7 @@ impl AgentView {
             agents_modal: None,
             persona_detail: None,
             btw_state: None,
+            btw_request_id: None,
             minimal_btw_lifecycle: None,
             btw_focused: false,
             hit_btw_close: Default::default(),
@@ -403,7 +407,14 @@ impl AgentView {
     }
     /// Invalidate and clear a minimal `/btw` lifecycle at a session boundary.
     pub(crate) fn clear_minimal_btw_lifecycle(&mut self) {
+        self.btw_request_id = None;
         crate::minimal_api::clear_minimal_btw(self);
+        // Fullscreen BTW does not own a minimal lifecycle, but a session
+        // boundary invalidates that request and overlay just as strictly.
+        if self.minimal_btw_lifecycle.is_none() {
+            self.btw_state = None;
+            self.btw_focused = false;
+        }
     }
     /// Accept leftover `isReplay` after `loading_replay` clears. Long enough
     /// for FIFO drain of a foreign ACP head after the Unrelated firehose timeout.

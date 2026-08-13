@@ -21,6 +21,7 @@ xai-grok-pager-render = { path = "../xai-grok-pager-render" }
 ratatui = { workspace = true, features = ["crossterm", "unstable-widget-ref"] }
 xai-grok-announcements = { workspace = true }
 crossterm = { workspace = true, features = ["event-stream", "bracketed-paste"] }
+qrcodegen = { workspace = true }
 textwrap = { workspace = true }
 regex = { workspace = true }
 unicode-width = { workspace = true }

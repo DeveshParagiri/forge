@@ -1638,6 +1638,7 @@ pub(in crate::app::dispatch) fn set_default_model_inner(
         // ACP roundtrip.
         //
         // `set_current(_, None)` resets `reasoning_effort` to model default.
+        agent.remote_usage.clear();
         agent.session.models.set_current(id.clone(), None);
     }
     // Mirror the new default into the app-level model state too. A later `/new`

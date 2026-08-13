@@ -352,8 +352,33 @@ pub(super) fn dispatch_send_btw(app: &mut AppView, question: String) -> Vec<Effe
     let ActiveView::Agent(id) = app.active_view else {
         return vec![];
     };
+    dispatch_send_btw_for_agent(app, id, question, true)
+}
+
+/// Send a side question for the session pinned by Forge Remote without
+/// clearing a laptop draft in a background tab.
+pub(crate) fn dispatch_remote_btw(
+    app: &mut AppView,
+    id: crate::app::agent::AgentId,
+    question: String,
+) -> Result<Vec<Effect>, String> {
+    let Some(agent) = app.agents.get(&id) else {
+        return Err("The armed Forge session is no longer available.".into());
+    };
+    if agent.btw_state.is_some() {
+        return Err("Finish or dismiss the current BTW answer before asking another.".into());
+    }
+    Ok(dispatch_send_btw_for_agent(app, id, question, false))
+}
+
+fn dispatch_send_btw_for_agent(
+    app: &mut AppView,
+    id: crate::app::agent::AgentId,
+    question: String,
+    clear_composer: bool,
+) -> Vec<Effect> {
     let minimal = app.screen_mode.is_minimal();
-    let (session_id, minimal_request_id) = {
+    let (session_id, session_binding_epoch, request_id, minimal_request_id) = {
         let Some(agent) = app.agents.get_mut(&id) else {
             return vec![];
         };
@@ -370,26 +395,35 @@ pub(super) fn dispatch_send_btw(app: &mut AppView, question: String) -> Vec<Effe
             return vec![];
         };
 
-        agent.prompt.set_text("");
-        let minimal_request_id = if minimal {
-            Some(crate::minimal_api::start_minimal_btw(
-                agent,
-                question.clone(),
-            ))
+        if clear_composer {
+            agent.prompt.set_text("");
+        }
+        let (request_id, minimal_request_id) = if minimal {
+            let request_id = crate::minimal_api::start_minimal_btw(agent, question.clone());
+            (request_id, Some(request_id))
         } else {
+            let request_id = uuid::Uuid::new_v4();
+            agent.btw_request_id = Some(request_id);
             agent.btw_state = Some(crate::views::btw_overlay::BtwOverlayState::Loading {
                 question: question.clone(),
             });
             // Prompt keeps focus while the answer is in flight (panel focuses on Done).
             agent.btw_focused = false;
-            None
+            (request_id, None)
         };
-        (session_id, minimal_request_id)
+        (
+            session_id,
+            agent.session_binding_epoch,
+            request_id,
+            minimal_request_id,
+        )
     };
 
     vec![Effect::SendBtw {
         agent_id: id,
         session_id,
+        session_binding_epoch,
+        request_id,
         question,
         minimal_request_id,
     }]
@@ -530,19 +564,29 @@ pub(super) fn handle_memory_note_saved(
 pub(super) fn handle_btw_response(
     app: &mut AppView,
     agent_id: AgentId,
+    session_id: agent_client_protocol::SessionId,
+    session_binding_epoch: u32,
+    request_id: uuid::Uuid,
     result: Result<String, String>,
     minimal_request_id: Option<uuid::Uuid>,
 ) -> Vec<Effect> {
     if let Some(agent) = app.agents.get_mut(&agent_id) {
+        if agent.session.session_id.as_ref() != Some(&session_id)
+            || agent.session_binding_epoch != session_binding_epoch
+            || agent.btw_request_id != Some(request_id)
+        {
+            return vec![];
+        }
         use crate::views::btw_overlay::BtwOverlayState;
         if let Some(request_id) = minimal_request_id {
             crate::minimal_api::finish_minimal_btw(agent, request_id, result);
             return vec![];
         }
-        let question = match &agent.btw_state {
-            Some(BtwOverlayState::Loading { question }) => question.clone(),
-            _ => String::new(),
+        let Some(BtwOverlayState::Loading { question }) = &agent.btw_state else {
+            return vec![];
         };
+        let question = question.clone();
+        agent.btw_request_id = None;
         match result {
             Ok(response) => {
                 // Answer arrived: show it (until Esc) and focus the panel

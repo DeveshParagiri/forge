@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1>Forge (<code>grok</code>)</h1>
+<h1>Forge</h1>
 
 **Forge** is an independent, upstream-friendly extension of
 [Grok Build](https://github.com/xai-org/grok-build), the terminal coding agent.
@@ -12,7 +12,6 @@ harnesses.
 [Configure](#authentication-and-models) ·
 [Features](#extended-features) ·
 [Build](#requirements-and-source-builds) ·
-[Architecture](#extension-architecture) ·
 [Develop](#maintainer-workflow)
 
 ![Forge TUI](docs/assets/forge-tui.jpg)
@@ -26,13 +25,6 @@ synchronized with upstream Grok Build.
 </div>
 
 ---
-
-## Current release
-
-The latest published release is **Forge 0.4.0**, synchronized with **Grok Build
-1.0.0**. Forge versions are independent of upstream versions: release tags use
-`forge-vMAJOR.MINOR.PATCH`, while synchronized development and release bases are
-recorded in [`CHANGELOG.md`](CHANGELOG.md) and release notes.
 
 ## Install Forge
 
@@ -60,17 +52,15 @@ grok update
 ```
 
 Configuration, authentication, sessions, and memory remain under `~/.grok/`.
-For installs made with the release command above, the installed updater downloads
-another packaged release; it does not rebase a source checkout or require Rust.
-Source-mode installations use their configured checkout and toolchain instead
-(see [Requirements and source builds](#requirements-and-source-builds)).
+`grok update` installs another packaged release. It does not need Rust or alter
+a source checkout.
 
 ### Install a specific release
 
 Pass a Forge version with or without the `forge-v` prefix:
 
 ```sh
-FORGE_VERSION=0.4.0 \
+FORGE_VERSION=0.5.0 \
   curl -fsSL https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install | sh
 ```
 
@@ -82,9 +72,9 @@ FORGE_VERSION=0.4.0 \
 | **Fast Mode and usage** | Toggle session-scoped Codex Fast Mode with `/fast` on models that advertise support. `/usage` follows the active provider's supported accounting path. |
 | **Multi-model subagents** | Delegate independent implementation, research, planning, and verification work to native roles with explicit model and reasoning-effort choices. |
 | **External harnesses** | Run Claude Code and Codex CLI as subagent harnesses through their own installations, authentication, model defaults, and tools. |
-| **Unified sessions** | Optionally browse Forge, Claude Code, and Codex sessions together in `/sessions`; importing an external row creates a new Forge session. |
-| **Adaptive memory** | When memory is enabled, the existing memory flow can retain durable model and harness preferences from explicit feedback and clear outcomes. Current instructions always win. |
-| **Forge interface** | A compact Forge theme, capability-aware model labels, and consistent `Shift+Tab` reasoning-effort cycling in the agent prompt. |
+| **Unified sessions** | Browse Forge, Claude Code, and Codex sessions together in `/sessions`. Importing an external row creates a new Forge session with its context. |
+| **Private phone remote** | Open the current Forge session on a phone with `/rc`. Use the bundled browser client or a locally built iOS app over Tailscale Serve. `/rc stop` revokes that session's pairing. |
+| **Adaptive memory** | When enabled, memory retains durable model and harness preferences from explicit feedback and clear outcomes. Current instructions always win. |
 
 ## Authentication and models
 
@@ -147,6 +137,49 @@ default_reasoning_effort = "high"
 active model declares `supports_fast_mode = true`. `/usage` uses the ChatGPT
 account usage endpoint for this provider. Missing or expired Codex credentials
 are repaired with `codex login`, not Forge's `/login` flow.
+
+## Private phone remote
+
+Forge Remote opens the current live session in the bundled browser client or
+the optional Forge iOS app. It does not start another agent session and does
+not require T3 Code or a T3 account.
+
+1. Install Tailscale and sign in to the same tailnet on the laptop and phone.
+   MagicDNS and Tailscale HTTPS must be available for the laptop.
+2. In the active Forge session, run `/rc`. Forge checks Tailscale, creates a
+   short-lived local pairing gateway, and enables one tailnet-private HTTPS
+   route. `/rc enable` is a compatibility alias; no second command is needed.
+   Forge never uses Funnel or public sharing.
+3. Scan the QR code or open the displayed URL on the phone. The page offers the
+   pairing to the Forge iOS app, if installed, and retains a browser option.
+   Either client attaches to that session and shows its transcript and current
+   interactions. Available controls include prompts, stop, `/btw`, model and
+   reasoning changes, usage refresh, and interaction responses when the active
+   session advertises those capabilities.
+4. Use the laptop and phone together. Inputs from either are sent to the same
+   live session and updates appear on both. Run `/rc stop` in that session to
+   revoke only its URL and remove only its Forge route.
+
+The QR/link contains a fresh 256-bit pairing secret and expires after eight
+hours. Forge then revokes the pairing and removes its own route. Running `/rc`
+in other live sessions creates independent links, and `/rc status` reports the
+pairing for the current terminal session.
+
+Each pairing has one active phone surface. The visible browser or visible iOS
+app owns the phone connection, and opening one transfers ownership from the
+other. The terminal remains connected and usable. Both clients keep a local
+list of scanned pairings so you can switch between remote sessions.
+
+The composer has one trailing action. It sends while idle, changes in place to
+Stop while the current turn can be cancelled, and recognizes `/btw <question>`
+as a side question without exposing a separate BTW mode or button.
+
+The browser source is under `crates/codegen/xai-grok-shell/remote-ui`. The
+native client under [`clients/forge-mobile`](clients/forge-mobile/README.md)
+uses the pinned MIT-licensed T3 Code React Native presentation source with a
+Forge protocol controller. The iOS client is a local source build. There is no
+public App Store build, universal IPA, or free TestFlight link; its README has
+the Xcode installation command and exact license provenance.
 
 ### Other OpenAI-compatible providers
 
@@ -260,34 +293,6 @@ FORGE_INSTALL_MODE=source GROK_BRANCH=main \
   curl -fsSL https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install | sh
 ```
 
-## Extension architecture
-
-Fork-specific behavior belongs in additive, crate-local `forge/` modules.
-Upstream-owned code contains narrow hooks only where Forge must enter an existing
-request, session, lifecycle, prompt, or rendering path.
-
-| Extension | Where it belongs | Integration rule |
-|---|---|---|
-| Provider/model capability | Shell or sampler `forge/` modules plus upstream `[model_providers.*]` metadata | Declare capabilities explicitly; do not infer security or behavior from model-name substrings. |
-| Codex request behavior | Sampler endpoint policy and Responses adapter | Positively identify the canonical HTTPS endpoint and strip xAI-private metadata from every untrusted request shape. |
-| Session importer | Pager/session `forge/` policy over existing discovery and normalization | Keep foreign IDs out of native ACP loading; import context into a fresh Forge session. |
-| External harness | A harness-specific adapter behind provider-neutral lifecycle handling | Keep CLI flags, authentication, session IDs, and output parsing inside the adapter. |
-| Prompt or shortcut behavior | Action/command registry with a narrow dispatch/render hook | Generate visible hints from the same action state so documentation and runtime behavior do not drift. |
-| Theme and product UI | Pager-render and pager `forge/` modules | Keep palette and branding policy additive; preserve upstream layout contracts. |
-
-When adding a provider, use upstream generic provider configuration first and add
-Forge code only for genuinely provider-specific capability or safety behavior.
-When adding a harness, implement availability, launch/resume, structured event
-handling, cancellation, and cleanup behind the shared adapter boundary. New
-session sources should reuse normalized session metadata and explicit import
-handoffs rather than branching throughout the picker.
-
-See [`FORK-MAINTENANCE.md`](FORK-MAINTENANCE.md) for current module ownership,
-integration points, security invariants, focused tests, branch conventions, and
-upstream synchronization guidance. See the
-[Forge additions guide](crates/codegen/xai-grok-pager/docs/user-guide/25-forge-additions.md)
-for detailed user-facing behavior.
-
 ## Maintainer workflow
 
 Forge uses three principal refs:
@@ -319,22 +324,6 @@ The publisher runs formatting, compilation, and focused Forge tests by default.
 It refuses dirty trees, the wrong source branch, and non-fast-forward updates.
 Create immutable Forge release tags only after `dev` and `main` point to the same
 validated commit.
-
-## Development
-
-Target individual crates because full-workspace builds and test suites are slow:
-
-```sh
-cargo fmt --all -- --check
-git diff --check
-cargo check -p <crate>
-cargo test -p <crate> <relevant-test-filter>
-cargo clippy -p <crate>
-```
-
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for contribution policy and
-[`FORK-MAINTENANCE.md`](FORK-MAINTENANCE.md) for the focused Forge verification
-matrix.
 
 ## License
 

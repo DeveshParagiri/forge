@@ -95,10 +95,11 @@ use super::settings::ui::{
     dispatch_toggle_vim_mode,
 };
 use super::status::{
-    dispatch_copy_session_id, dispatch_manage_billing, dispatch_open_gboom, dispatch_open_tutorial,
-    dispatch_privacy_banner_opt_in, dispatch_privacy_banner_opt_out, dispatch_share_session,
-    dispatch_show_context_info, dispatch_show_queue, dispatch_show_release_notes,
-    dispatch_show_session_info, dispatch_show_tasks, dispatch_show_usage, set_coding_data_sharing,
+    dispatch_copy_session_id, dispatch_forge_remote_control, dispatch_manage_billing,
+    dispatch_open_gboom, dispatch_open_tutorial, dispatch_privacy_banner_opt_in,
+    dispatch_privacy_banner_opt_out, dispatch_share_session, dispatch_show_context_info,
+    dispatch_show_queue, dispatch_show_release_notes, dispatch_show_session_info,
+    dispatch_show_tasks, dispatch_show_usage, set_coding_data_sharing,
 };
 use super::task_result::{dispatch_task_result, unregister_all_active_sessions};
 use super::transcript::{
@@ -117,6 +118,43 @@ use crate::app::agent_view::ActivePane;
 use crate::app::app_view::{ActiveView, AppView, AuthState};
 use crate::scrollback::types::DisplayMode;
 use crate::views::session_picker::CONTENT_EXPAND_OFFSET;
+
+pub(crate) fn dispatch_remote_switch_model(
+    app: &mut AppView,
+    id: crate::app::agent::AgentId,
+    requested_model: &str,
+    requested_effort: Option<&str>,
+) -> Result<Vec<Effect>, String> {
+    let Some(agent) = app.agents.get_mut(&id) else {
+        return Err("The armed Forge session is no longer available.".into());
+    };
+    let Some(model_id) = agent.session.models.resolve_by_name_or_id(requested_model) else {
+        return Err("That model is not available in this session.".into());
+    };
+    let effort = requested_effort
+        .map(|token| {
+            agent
+                .session
+                .models
+                .resolve_effort_for_model(&model_id, token)
+                .map_err(|error| error.message())
+        })
+        .transpose()?;
+    let Some(session_id) = agent.session.session_id.clone() else {
+        return Err("The armed Forge session is no longer available.".into());
+    };
+    // Context thresholds and provider/account limits are model scoped. Clear
+    // both cached data and any pending refresh before the canonical switch.
+    agent.remote_usage.clear();
+    agent.session.model_switch_pending = true;
+    Ok(vec![Effect::SwitchModel {
+        agent_id: id,
+        session_id,
+        model_id,
+        effort,
+        prev_model_id: None,
+    }])
+}
 use xai_grok_telemetry::session_ctx::log_event;
 pub(super) fn dispatch_copy_auth_url(
     app: &mut AppView,
@@ -937,6 +975,7 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
                     }]
                 };
             };
+            agent.remote_usage.clear();
             agent.session.model_switch_pending = true;
             vec![Effect::SwitchModel {
                 agent_id: id,
@@ -1012,6 +1051,7 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         // Themes affect presentation only, never the resolved action behavior.
         Action::CycleEffort => crate::forge::shortcuts::dispatch_cycle_effort(app),
         Action::ShareSession => dispatch_share_session(app),
+        Action::ForgeRemoteControl(command) => dispatch_forge_remote_control(app, command),
         Action::ShowSessionInfo => dispatch_show_session_info(app),
         Action::ShowReleaseNotes { title, content } => {
             dispatch_show_release_notes(app, title, content)

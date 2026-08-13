@@ -18,6 +18,64 @@ pub(super) fn dispatch_share_session(app: &mut AppView) -> Vec<Effect> {
     vec![]
 }
 
+/// Start, inspect, or stop the private Forge Remote browser gateway.
+pub(super) fn dispatch_forge_remote_control(
+    app: &mut AppView,
+    command: crate::forge::remote_control::RemoteControlCommand,
+) -> Vec<Effect> {
+    let ActiveView::Agent(agent_id) = app.active_view else {
+        app.show_toast("`/rc` needs an active Forge session");
+        return vec![];
+    };
+    let Some(agent) = app.agents.get_mut(&agent_id) else {
+        return vec![];
+    };
+    let Some(session_id) = agent.session.session_id.clone() else {
+        app.show_toast("`/rc` needs an active Forge session");
+        return vec![];
+    };
+    if !matches!(
+        command,
+        crate::forge::remote_control::RemoteControlCommand::Stop
+    ) {
+        let title = agent
+            .display_name
+            .as_deref()
+            .or(agent.generated_session_title.as_deref())
+            .unwrap_or("Current session");
+        let session_text = session_id.0.to_string();
+        let short_id = session_text
+            .char_indices()
+            .rev()
+            .nth(7)
+            .map(|(index, _)| &session_text[index..])
+            .unwrap_or(session_text.as_str());
+        agent.active_modal = Some(crate::views::modal::ActiveModal::ForgeRemote {
+            state: Box::new(
+                crate::views::remote_control_modal::RemoteControlModalState::loading(
+                    command,
+                    format!("Session: {title} · {short_id}"),
+                ),
+            ),
+        });
+    }
+    if !matches!(
+        command,
+        crate::forge::remote_control::RemoteControlCommand::Status
+    ) {
+        // Invalidate before the async stop/re-arm lifecycle starts. A usage
+        // completion already queued for this exact AgentView can no longer
+        // match after the gateway generation changes.
+        agent.remote_usage.clear();
+    }
+    vec![Effect::ForgeRemoteControl {
+        agent_id,
+        command,
+        session_id,
+        session_binding_epoch: agent.session_binding_epoch,
+    }]
+}
+
 /// Monotonic generation for usage-modal fetches. Each open stamps the modal
 /// and its effects with a fresh value so a reply from a previous open (same
 /// session, modal closed and reopened) can't overwrite newer results. `0` is

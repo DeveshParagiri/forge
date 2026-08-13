@@ -273,6 +273,18 @@ pub(super) fn sync_active_auto_flag(app: &mut AppView) {
 /// State-only `permission_mode` (YOLO) mutation; also called from rollback.
 /// Flips to ON are refused while the pin is set.
 pub(super) fn set_yolo_mode_inner(app: &mut AppView, new: bool) {
+    let target = match app.active_view {
+        ActiveView::Agent(id) => Some(id),
+        _ => None,
+    };
+    set_yolo_mode_inner_for_agent(app, target, new);
+}
+
+fn set_yolo_mode_inner_for_agent(
+    app: &mut AppView,
+    target: Option<crate::app::agent::AgentId>,
+    new: bool,
+) {
     if yolo_enable_blocked(app, new).is_some() {
         tracing::warn!("always-approve enable blocked by managed policy");
         return;
@@ -284,7 +296,7 @@ pub(super) fn set_yolo_mode_inner(app: &mut AppView, new: bool) {
     // Write-only mirror — see fn doc-comment.
     app.current_ui.permission_mode = Some(if new { "always-approve" } else { "ask" }.to_string());
 
-    let ActiveView::Agent(id) = app.active_view else {
+    let Some(id) = target else {
         return;
     };
     let Some(agent) = app.agents.get_mut(&id) else {
@@ -364,6 +376,20 @@ pub(super) fn set_yolo_mode(app: &mut AppView, new: bool) -> Vec<Effect> {
     let ActiveView::Agent(id) = app.active_view else {
         return vec![];
     };
+    set_yolo_mode_for_agent(app, id, new)
+}
+
+/// Apply the normal always-approve persistence and queue-drain semantics to an
+/// explicitly targeted session, used by a Forge Remote permission card while
+/// another terminal tab may be active.
+pub(crate) fn set_yolo_mode_for_agent(
+    app: &mut AppView,
+    id: crate::app::agent::AgentId,
+    new: bool,
+) -> Vec<Effect> {
+    if let Some(blocked) = refuse_if_yolo_locked(app, new) {
+        return blocked;
+    }
     // Capture LIVE yolo + plan state and session_id atomically for rollback.
     let (prev_yolo, session_id, effective_plan) = app
         .agents
@@ -378,13 +404,17 @@ pub(super) fn set_yolo_mode(app: &mut AppView, new: bool) -> Vec<Effect> {
         .unwrap_or((false, None, false));
     let prev_canonical = capture_prev_permission_canonical(app, prev_yolo);
 
-    set_yolo_mode_inner(app, new);
+    set_yolo_mode_inner_for_agent(app, Some(id), new);
 
     // Refresh modal snapshots so the indicator reflects the new value.
     refresh_open_settings_modals(app);
     // Toggling yolo always lands on ask/always-approve (never auto); keep the
     // per-session auto display flag in sync (clears it).
-    sync_active_auto_flag(app);
+    let is_auto = app.current_ui.permission_mode.as_deref() == Some("auto");
+    if let Some(agent) = app.agents.get_mut(&id) {
+        agent.session.auto_mode = effective_auto(agent.session.is_yolo(), is_auto);
+    }
+    app.sync_permission_mode_slash_gate();
 
     // Toast on every save. YOLO ON gets a weightier visual; under an active
     // plan mode, say the plan edit gate stays binding — "all tool actions

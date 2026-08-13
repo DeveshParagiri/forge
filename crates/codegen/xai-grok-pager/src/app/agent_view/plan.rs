@@ -221,6 +221,88 @@ impl AgentView {
         self.close_plan_review(pav, "abandon");
         InputOutcome::Changed
     }
+
+    /// Resolve the currently pending plan review from the paired browser.
+    /// The tool-call id and response sender are checked before teardown so a
+    /// terminal-first reply produces a stable already-resolved result.
+    pub(crate) fn resolve_remote_plan(
+        &mut self,
+        expected_tool_call_id: &str,
+        outcome: &str,
+        feedback: Option<String>,
+    ) -> Result<Option<String>, String> {
+        let Some(current) = self.plan_approval_view.as_ref() else {
+            return Err("This interaction was already resolved.".into());
+        };
+        if current.tool_call_id != expected_tool_call_id || current.response_tx.is_none() {
+            return Err("This interaction was already resolved.".into());
+        }
+        let mut pav = self
+            .plan_approval_view
+            .take()
+            .expect("plan approval was validated above");
+        // Backward-compatible guard for clients that encoded "request
+        // changes" as abandoned + feedback. Feedback always means revise;
+        // abandoned is reserved for an actual abandon decision.
+        let outcome = if outcome == "abandoned"
+            && feedback
+                .as_deref()
+                .is_some_and(|text| !text.trim().is_empty())
+        {
+            "cancelled"
+        } else {
+            outcome
+        };
+        match outcome {
+            "approved" => {
+                let formatted = pav.format_feedback(feedback.as_deref());
+                let review_comments = (!formatted.trim().is_empty()).then(|| {
+                    format!(
+                        "The user approved the plan with the following review comments:\n\n{formatted}"
+                    )
+                });
+                if !pav.send_approved() {
+                    self.plan_approval_view = Some(pav);
+                    return Err("This interaction was already resolved.".into());
+                }
+                self.close_plan_review(pav, "build");
+                Ok(review_comments)
+            }
+            "abandoned" => {
+                if !pav.send_abandoned() {
+                    self.plan_approval_view = Some(pav);
+                    return Err("This interaction was already resolved.".into());
+                }
+                self.close_plan_review(pav, "abandon");
+                Ok(None)
+            }
+            "cancelled" => {
+                let formatted = pav.format_feedback(feedback.as_deref());
+                let to_send = if formatted.trim().is_empty() {
+                    feedback.filter(|text| !text.trim().is_empty())
+                } else {
+                    Some(formatted)
+                };
+                if !pav.send_cancelled(to_send) {
+                    self.plan_approval_view = Some(pav);
+                    return Err("This interaction was already resolved.".into());
+                }
+                if pav.source == PlanReviewSource::Inline {
+                    self.latest_inline_plan_content = None;
+                }
+                self.plan_next_comment_id = pav.next_comment_id;
+                self.prompt.restore(pav.stashed_prompt);
+                self.line_viewer = None;
+                self.prompt.textarea.cancel_undo_group();
+                log_plan_submit("revise");
+                Ok(None)
+            }
+            _ => {
+                self.plan_approval_view = Some(pav);
+                Err("That plan response is not available.".into())
+            }
+        }
+    }
     /// Shared teardown for the two plan-review decisions that end the
     /// review (approve and abandon). The shell leaves plan mode as a
     /// result, but its confirming `CurrentModeUpdate("default")` is
@@ -686,6 +768,71 @@ impl AgentView {
         InputOutcome::Action(Action::SendPrompt(text))
     }
 }
+#[cfg(test)]
+mod remote_plan_resolution_tests {
+    use super::test_fixtures::make_agent;
+
+    fn attach_plan(
+        agent: &mut super::AgentView,
+    ) -> tokio::sync::oneshot::Receiver<xai_acp_lib::AcpResult<agent_client_protocol::ExtResponse>>
+    {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let request = crate::views::plan_approval_view::ExitPlanModeExtRequest {
+            session_id: "test-session".into(),
+            tool_call_id: "remote-plan".into(),
+            plan_content: Some("# Plan\n\nDo it".into()),
+        };
+        agent.plan_approval_view = Some(
+            crate::views::plan_approval_view::PlanApprovalViewState::new(
+                request,
+                agent.prompt.stash(),
+                tx,
+            ),
+        );
+        rx
+    }
+
+    #[test]
+    fn terminal_first_plan_resolution_rejects_the_phone() {
+        let mut agent = make_agent();
+        let mut rx = attach_plan(&mut agent);
+        let _ = agent.approve_plan();
+        assert!(rx.try_recv().is_ok());
+        assert_eq!(
+            agent
+                .resolve_remote_plan("remote-plan", "approved", None)
+                .unwrap_err(),
+            "This interaction was already resolved."
+        );
+    }
+
+    #[test]
+    fn phone_first_plan_resolution_uses_the_canonical_sender_once() {
+        let mut agent = make_agent();
+        let mut rx = attach_plan(&mut agent);
+        agent
+            .resolve_remote_plan("remote-plan", "approved", None)
+            .unwrap();
+        assert!(rx.try_recv().is_ok());
+        assert!(agent.plan_approval_view.is_none());
+        let _ = agent.approve_plan();
+        assert!(agent.plan_approval_view.is_none());
+    }
+
+    #[test]
+    fn dropped_plan_receiver_is_reported_as_already_resolved() {
+        let mut agent = make_agent();
+        drop(attach_plan(&mut agent));
+        assert_eq!(
+            agent
+                .resolve_remote_plan("remote-plan", "approved", None)
+                .unwrap_err(),
+            "This interaction was already resolved."
+        );
+        assert!(agent.plan_approval_view.is_some());
+    }
+}
+
 #[cfg(test)]
 mod prompt_flag_tests {
     use super::test_fixtures::make_agent;

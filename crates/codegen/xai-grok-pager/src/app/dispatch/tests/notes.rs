@@ -15,6 +15,24 @@ fn send_minimal_btw(app: &mut AppView, question: &str) -> uuid::Uuid {
     }
 }
 
+fn btw_response(
+    app: &AppView,
+    agent_id: AgentId,
+    request_id: uuid::Uuid,
+    result: Result<String, String>,
+    minimal_request_id: Option<uuid::Uuid>,
+) -> TaskResult {
+    let agent = &app.agents[&agent_id];
+    TaskResult::BtwResponse {
+        agent_id,
+        session_id: agent.session.session_id.clone().unwrap(),
+        session_binding_epoch: agent.session_binding_epoch,
+        request_id,
+        result,
+        minimal_request_id,
+    }
+}
+
 fn esc() -> crossterm::event::Event {
     crossterm::event::Event::Key(crossterm::event::KeyEvent::new(
         crossterm::event::KeyCode::Esc,
@@ -225,11 +243,13 @@ fn minimal_btw_response_after_esc_is_ignored() {
     assert!(app.agents[&id].btw_state.is_none());
 
     dispatch(
-        Action::TaskComplete(TaskResult::BtwResponse {
-            agent_id: id,
-            result: Ok("late".into()),
-            minimal_request_id: Some(request_id),
-        }),
+        Action::TaskComplete(btw_response(
+            &app,
+            id,
+            request_id,
+            Ok("late".into()),
+            Some(request_id),
+        )),
         &mut app,
     );
 
@@ -244,11 +264,13 @@ fn minimal_done_dismisses_to_exactly_one_btw_block() {
     app.agents.get_mut(&id).unwrap().active_pane = ActivePane::Prompt;
     let request_id = send_minimal_btw(&mut app, "original question");
     dispatch(
-        Action::TaskComplete(TaskResult::BtwResponse {
-            agent_id: id,
-            result: Ok("original answer".into()),
-            minimal_request_id: Some(request_id),
-        }),
+        Action::TaskComplete(btw_response(
+            &app,
+            id,
+            request_id,
+            Ok("original answer".into()),
+            Some(request_id),
+        )),
         &mut app,
     );
 
@@ -283,11 +305,13 @@ fn minimal_btw_requests_stay_independent_across_two_agents() {
 
     // Deliver the background first-agent responses while the second agent is active.
     dispatch(
-        Action::TaskComplete(TaskResult::BtwResponse {
-            agent_id: first,
-            result: Ok("stale first answer".into()),
-            minimal_request_id: Some(first_old),
-        }),
+        Action::TaskComplete(btw_response(
+            &app,
+            first,
+            first_old,
+            Ok("stale first answer".into()),
+            Some(first_old),
+        )),
         &mut app,
     );
     assert!(matches!(
@@ -296,11 +320,13 @@ fn minimal_btw_requests_stay_independent_across_two_agents() {
             if question == "first new"
     ));
     dispatch(
-        Action::TaskComplete(TaskResult::BtwResponse {
-            agent_id: first,
-            result: Ok("current first answer".into()),
-            minimal_request_id: Some(first_current),
-        }),
+        Action::TaskComplete(btw_response(
+            &app,
+            first,
+            first_current,
+            Ok("current first answer".into()),
+            Some(first_current),
+        )),
         &mut app,
     );
     assert!(matches!(
@@ -318,11 +344,13 @@ fn minimal_btw_requests_stay_independent_across_two_agents() {
     app.agents.get_mut(&second).unwrap().active_pane = ActivePane::Prompt;
     let _ = app.handle_input(&esc());
     dispatch(
-        Action::TaskComplete(TaskResult::BtwResponse {
-            agent_id: second,
-            result: Ok("late second answer".into()),
-            minimal_request_id: Some(second_request),
-        }),
+        Action::TaskComplete(btw_response(
+            &app,
+            second,
+            second_request,
+            Ok("late second answer".into()),
+            Some(second_request),
+        )),
         &mut app,
     );
     assert!(app.agents[&second].btw_state.is_none());
@@ -340,19 +368,23 @@ fn minimal_btw_requests_stay_independent_across_two_agents() {
     switch_to_agent(&mut app, second, SwitchCause::Picker);
     let second_request = send_minimal_btw(&mut app, "second reverse");
     dispatch(
-        Action::TaskComplete(TaskResult::BtwResponse {
-            agent_id: second,
-            result: Ok("second reverse answer".into()),
-            minimal_request_id: Some(second_request),
-        }),
+        Action::TaskComplete(btw_response(
+            &app,
+            second,
+            second_request,
+            Ok("second reverse answer".into()),
+            Some(second_request),
+        )),
         &mut app,
     );
     dispatch(
-        Action::TaskComplete(TaskResult::BtwResponse {
-            agent_id: first,
-            result: Ok("first reverse answer".into()),
-            minimal_request_id: Some(first_request),
-        }),
+        Action::TaskComplete(btw_response(
+            &app,
+            first,
+            first_request,
+            Ok("first reverse answer".into()),
+            Some(first_request),
+        )),
         &mut app,
     );
     assert!(matches!(
@@ -368,33 +400,49 @@ fn minimal_btw_requests_stay_independent_across_two_agents() {
 }
 
 #[test]
-fn fullscreen_btw_response_after_dismiss_keeps_existing_behavior() {
+fn fullscreen_btw_response_from_a_rebound_session_is_ignored() {
     let mut app = test_app_with_agent();
     let id = AgentId(0);
     let effects = dispatch(Action::SendBtw("side question".into()), &mut app);
-    assert!(matches!(
-        effects.as_slice(),
-        [Effect::SendBtw {
-            minimal_request_id: None,
-            ..
-        }]
-    ));
-    app.agents.get_mut(&id).unwrap().btw_state = None;
+    let (old_session, old_epoch, request_id) = match effects.as_slice() {
+        [
+            Effect::SendBtw {
+                session_id,
+                session_binding_epoch,
+                request_id,
+                minimal_request_id: None,
+                ..
+            },
+        ] => (session_id.clone(), *session_binding_epoch, *request_id),
+        other => panic!("expected fullscreen BTW request, got {other:?}"),
+    };
+    app.agents
+        .get_mut(&id)
+        .unwrap()
+        .bind_session_id("replacement-session".into());
 
     dispatch(
         Action::TaskComplete(TaskResult::BtwResponse {
             agent_id: id,
+            session_id: old_session,
+            session_binding_epoch: old_epoch,
+            request_id,
             result: Ok("late".into()),
             minimal_request_id: None,
         }),
         &mut app,
     );
-
-    assert!(matches!(
-        app.agents[&id].btw_state,
-        Some(crate::views::btw_overlay::BtwOverlayState::Done { ref question, .. })
-            if question.is_empty()
-    ));
+    assert!(app.agents[&id].btw_state.is_none());
+    assert_eq!(
+        app.agents[&id]
+            .session
+            .session_id
+            .as_ref()
+            .unwrap()
+            .0
+            .as_ref(),
+        "replacement-session"
+    );
 }
 
 #[test]

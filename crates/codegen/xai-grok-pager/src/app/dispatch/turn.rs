@@ -216,6 +216,102 @@ pub(super) fn do_cancel_turn(app: &mut AppView, cancel_subagents: bool) -> Vec<E
     let ActiveView::Agent(id) = app.active_view else {
         return vec![];
     };
+    do_cancel_turn_for_agent(app, id, cancel_subagents)
+}
+
+/// Cancel the turn owned by an explicitly pinned agent view.
+///
+/// The remote browser can remain attached while the terminal views another
+/// tab, so this path must never infer its target from `active_view`.  It shares
+/// the same cancellation reducer and wire effect as the terminal path.
+pub(crate) fn dispatch_remote_cancel(
+    app: &mut AppView,
+    id: AgentId,
+) -> Result<Vec<Effect>, String> {
+    let ui_pref = effective_cancel_subagents_preference(None, &app.current_ui);
+    let preferred_cancel_subagents = {
+        let Some(agent) = app.agents.get_mut(&id) else {
+            return Err("The armed Forge session is no longer available.".into());
+        };
+        let resolved_pref = agent.cancel_subagents_preference.or(ui_pref);
+        let resolve_cancel_subagents = |agent: &crate::app::agent_view::AgentView| {
+            let target = agent
+                .running_wake_turn
+                .as_ref()
+                .map(|wake| wake.prompt_id.clone())
+                .or_else(|| agent.session.current_prompt_id.clone());
+            agent
+                .pending_cancel_resend
+                .as_ref()
+                .filter(|pending| pending.prompt_id == target)
+                .map(|pending| pending.cancel_subagents)
+                .or(resolved_pref)
+                .unwrap_or(true)
+        };
+        if agent.session.state.is_cancelling() {
+            let Some(session_id) = agent.session.session_id.clone() else {
+                return Err("The armed Forge session is no longer available.".into());
+            };
+            agent.clear_send_now_expectation();
+            let cancel_subagents = resolve_cancel_subagents(agent);
+            return Ok(vec![emit_cancel_turn(
+                agent,
+                session_id,
+                cancel_subagents,
+                false,
+            )]);
+        }
+        if agent.session.state.is_compact_running() {
+            resolved_pref.or(Some(true))
+        } else if agent.running_wake_turn.is_some() {
+            let Some(session_id) = agent.session.session_id.clone() else {
+                return Err("The armed Forge session is no longer available.".into());
+            };
+            agent.clear_send_now_expectation();
+            let cancel_subagents = resolve_cancel_subagents(agent);
+            agent.mark_wake_cancel_sent();
+            return Ok(vec![emit_cancel_turn(
+                agent,
+                session_id,
+                cancel_subagents,
+                false,
+            )]);
+        } else if !agent.session.state.is_turn_running() {
+            return Ok(Vec::new());
+        } else if let Some(stop) = resolved_pref {
+            Some(stop)
+        } else {
+            let running_count = agent
+                .subagent_sessions
+                .values()
+                .filter(|session| session.is_running() && session.workflow_run_id.is_none())
+                .count();
+            if running_count > 0 {
+                if agent.cancel_turn_view.is_none() {
+                    agent.cancel_turn_view = Some(crate::views::modal::CancelTurnViewState {
+                        active_idx: 0,
+                        running_count,
+                    });
+                    if agent.active_pane == ActivePane::Scrollback {
+                        agent.active_pane = ActivePane::Prompt;
+                    }
+                }
+                return Err(
+                    "Choose whether the running subagents should stop from the Forge TUI.".into(),
+                );
+            }
+            None
+        }
+    };
+
+    Ok(do_cancel_turn_for_agent(
+        app,
+        id,
+        preferred_cancel_subagents.unwrap_or(true),
+    ))
+}
+
+fn do_cancel_turn_for_agent(app: &mut AppView, id: AgentId, cancel_subagents: bool) -> Vec<Effect> {
     let Some(agent) = app.agents.get_mut(&id) else {
         return vec![];
     };

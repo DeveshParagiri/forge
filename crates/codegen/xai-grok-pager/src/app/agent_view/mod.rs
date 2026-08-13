@@ -913,6 +913,8 @@ pub struct AgentView {
     pub(crate) modal_hovered_key: Option<char>,
     /// Cached server-reported context state.
     pub context_state: Option<xai_grok_shell::session::ContextInfo>,
+    /// Structured usage cache for the exact Forge Remote session binding.
+    pub(crate) remote_usage: crate::forge::remote_usage::RemoteUsageState,
     /// Gateway light-frontend session (`kind: "chat"` / `--chat` / conversation
     /// resume). Suppresses Build credits / local sampler context telemetry so the
     /// status bar and prompt never imply remote usage from wrong metrics.
@@ -1247,6 +1249,9 @@ pub struct AgentView {
     /// Active /btw side question overlay. When `Some`, renders as a dismissible
     /// overlay and captures keyboard input (Esc/Enter/Space to dismiss).
     pub btw_state: Option<crate::views::btw_overlay::BtwOverlayState>,
+    /// Correlates the one live BTW request with its async response across tab
+    /// switches, dismissal, and session rebinds.
+    pub(crate) btw_request_id: Option<uuid::Uuid>,
     /// Minimal-only ownership/correlation for `btw_state`; absent in fullscreen.
     pub(crate) minimal_btw_lifecycle: Option<crate::minimal_api::MinimalBtwLifecycle>,
     /// Whether the /btw panel holds keyboard focus. The panel is non-blocking,

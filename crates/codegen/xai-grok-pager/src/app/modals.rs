@@ -463,6 +463,35 @@ impl AgentView {
             }
         }
 
+        // ForgeRemote: shared modal chrome owns Esc/close; content owns copy.
+        if let ActiveModal::ForgeRemote { state } = modal {
+            let chrome_cfg = mw::ModalWindowConfig {
+                title: "",
+                tabs: None,
+                shortcuts: &[],
+                sizing: mw::ModalSizing::default(),
+                fold_info: None,
+            };
+            match mw::handle_modal_key(&mut state.window, key, &chrome_cfg) {
+                ModalWindowOutcome::CloseRequested => {
+                    // Presentation only: closing must not stop the remote route.
+                    self.active_modal = None;
+                    return InputOutcome::Changed;
+                }
+                ModalWindowOutcome::Unhandled => {
+                    use crate::views::remote_control_modal::{self, RemoteControlModalOutcome};
+                    return match remote_control_modal::handle_remote_control_modal_key(state, key) {
+                        RemoteControlModalOutcome::CopyUrl => {
+                            self.copy_remote_control_url();
+                            InputOutcome::Changed
+                        }
+                        RemoteControlModalOutcome::Unchanged => InputOutcome::Unchanged,
+                    };
+                }
+                _ => return InputOutcome::Changed,
+            }
+        }
+
         // ResetSettingsConfirm: y/n routing. Handled before generic
         // char-match so Esc/F2/Ctrl+, route to Cancel (not modal close).
         if let Some(ActiveModal::ResetSettingsConfirm { modal, .. }) = self.active_modal.as_ref() {
@@ -514,6 +543,7 @@ impl AgentView {
             | ActiveModal::MemoryBrowser { .. }
             | ActiveModal::Settings { .. }
             | ActiveModal::UsageInfo { .. }
+            | ActiveModal::ForgeRemote { .. }
             | ActiveModal::ResetSettingsConfirm { .. }
             | ActiveModal::RememberNoteReview { .. } => unreachable!(),
         }
@@ -1641,6 +1671,43 @@ impl AgentView {
             }
         }
 
+        // ForgeRemote: chrome close/copy, then URL click-to-copy.
+        if let Some(ActiveModal::ForgeRemote { state }) = &mut self.active_modal {
+            use crate::views::remote_control_modal::{
+                self, COPY_REMOTE_URL_SHORTCUT, RemoteControlModalOutcome,
+            };
+            let outcome =
+                mw::handle_modal_mouse(&mut state.window, mouse.kind, mouse.column, mouse.row);
+            match outcome {
+                ModalWindowOutcome::CloseRequested => {
+                    self.active_modal = None;
+                    return InputOutcome::Changed;
+                }
+                ModalWindowOutcome::ShortcutActivated(id) => {
+                    if id == COPY_REMOTE_URL_SHORTCUT {
+                        self.copy_remote_control_url();
+                    }
+                    return InputOutcome::Changed;
+                }
+                ModalWindowOutcome::Handled => return InputOutcome::Changed,
+                ModalWindowOutcome::Unhandled => {
+                    return match remote_control_modal::handle_remote_control_modal_mouse(
+                        state,
+                        mouse.kind,
+                        mouse.column,
+                        mouse.row,
+                    ) {
+                        RemoteControlModalOutcome::CopyUrl => {
+                            self.copy_remote_control_url();
+                            InputOutcome::Changed
+                        }
+                        RemoteControlModalOutcome::Unchanged => InputOutcome::Unchanged,
+                    };
+                }
+                _ => return InputOutcome::Changed,
+            }
+        }
+
         // ResetSettingsConfirm: route mouse events through the
         // modal-window chrome.
         if let Some(ActiveModal::ResetSettingsConfirm { settings_state, .. }) =
@@ -1715,6 +1782,19 @@ impl AgentView {
             return;
         };
         let delivery = crate::clipboard::copy_text_or_file(&id);
+        self.show_toast(delivery.toast_message().as_ref());
+    }
+
+    /// Copy the exact secret-bearing pairing URL without persisting it in the
+    /// conversation. Clipboard delivery owns its standard success/error toast.
+    fn copy_remote_control_url(&mut self) {
+        let Some(ActiveModal::ForgeRemote { state }) = self.active_modal.as_ref() else {
+            return;
+        };
+        let Some(url) = state.remote_url().map(str::to_owned) else {
+            return;
+        };
+        let delivery = crate::clipboard::copy_text_or_file(&url);
         self.show_toast(delivery.toast_message().as_ref());
     }
 
@@ -2417,6 +2497,10 @@ impl AgentView {
                     self.credit_balance.as_ref(),
                     compact,
                     &theme,
+                );
+            } else if let modal::ActiveModal::ForgeRemote { state } = active_modal {
+                crate::views::remote_control_modal::render_remote_control_modal(
+                    buf, area, state, compact, &theme,
                 );
             } else if let modal::ActiveModal::MemoryBrowser { state: mem_state } = active_modal {
                 crate::views::memory_modal::render_memory_modal(buf, area, mem_state, compact);

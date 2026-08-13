@@ -1171,15 +1171,19 @@ fn duplicate_load_unbind_invalidates_old_minimal_btw_response() {
         }),
         &mut app,
     );
-    let request_id = match dispatch(Action::SendBtw("old question".into()), &mut app).as_slice() {
-        [
-            Effect::SendBtw {
-                minimal_request_id: Some(id),
-                ..
-            },
-        ] => *id,
-        other => panic!("expected correlated minimal /btw effect, got {other:?}"),
-    };
+    let (old_session, old_epoch, request_id) =
+        match dispatch(Action::SendBtw("old question".into()), &mut app).as_slice() {
+            [
+                Effect::SendBtw {
+                    session_id,
+                    session_binding_epoch,
+                    request_id,
+                    minimal_request_id: Some(id),
+                    ..
+                },
+            ] if id == request_id => (session_id.clone(), *session_binding_epoch, *request_id),
+            other => panic!("expected correlated minimal /btw effect, got {other:?}"),
+        };
     dispatch(
         Action::LoadSession("shared-id".into(), None, true),
         &mut app,
@@ -1190,6 +1194,9 @@ fn duplicate_load_unbind_invalidates_old_minimal_btw_response() {
     dispatch(
         Action::TaskComplete(TaskResult::BtwResponse {
             agent_id: old_owner,
+            session_id: old_session,
+            session_binding_epoch: old_epoch,
+            request_id,
             result: Ok("old answer".into()),
             minimal_request_id: Some(request_id),
         }),

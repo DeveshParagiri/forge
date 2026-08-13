@@ -1570,3 +1570,43 @@ fn billing_error_surfaces_in_usage_modal_without_scrollback() {
     assert_eq!(state.billing_error.as_deref(), Some("billing boom"));
     assert_eq!(agent_scrollback_len(&app), before);
 }
+
+#[test]
+fn rc_stop_or_rearm_invalidates_a_pending_remote_usage_result() {
+    let mut app = test_app_with_agent();
+    let agent_id = AgentId(0);
+    let identity = {
+        let agent = app.agents.get_mut(&agent_id).unwrap();
+        let identity = crate::forge::remote_usage::RemoteUsageRequestIdentity {
+            agent_id,
+            session_id: agent.session.session_id.clone().unwrap(),
+            session_binding_epoch: agent.session_binding_epoch,
+            bridge_generation: 100,
+            gateway_generation: 200,
+            request_id: "old-refresh".to_owned(),
+            refresh_generation: 300,
+            provider: agent.session.models.current_provider_id(),
+        };
+        agent.remote_usage.begin_refresh(identity.clone(), None);
+        identity
+    };
+
+    for command in [
+        crate::forge::remote_control::RemoteControlCommand::Stop,
+        crate::forge::remote_control::RemoteControlCommand::Start,
+    ] {
+        if app.agents[&agent_id].remote_usage.snapshot().is_none() {
+            app.agents
+                .get_mut(&agent_id)
+                .unwrap()
+                .remote_usage
+                .begin_refresh(identity.clone(), None);
+        }
+        let effects = dispatch(Action::ForgeRemoteControl(command), &mut app);
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::ForgeRemoteControl { command: actual, .. }] if *actual == command
+        ));
+        assert!(app.agents[&agent_id].remote_usage.snapshot().is_none());
+    }
+}

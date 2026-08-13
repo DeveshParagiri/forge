@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "sourceRepository": "https://github.com/exaforge/website.git",
+  "sourceRevision": "38706ebf060ad4379ff9365c7aaa4276fb866322",
+  "brandFiles": [
+    {
+      "sourcePath": "src/assets/fonts/Basier Square Regular.woff2",
+      "currentPath": "brand/Basier Square Regular.woff2",
+      "relation": "source",
+      "sourceSha256": "03ba9f4f16e19439a8fcfd45baaa82c5c119ff0610931cba166d3f5a8fea2706",
+      "currentSha256": "03ba9f4f16e19439a8fcfd45baaa82c5c119ff0610931cba166d3f5a8fea2706"
+    },
+    {
+      "sourcePath": "src/assets/fonts/Basier Square SemiBold.woff2",
+      "currentPath": "brand/Basier Square SemiBold.woff2",
+      "relation": "source",
+      "sourceSha256": "e8822db64f02e851302a7539c21e15eb48673795d6d754bd21e8540af31252e2",
+      "currentSha256": "e8822db64f02e851302a7539c21e15eb48673795d6d754bd21e8540af31252e2"
+    },
+    {
+      "sourcePath": "src/assets/fonts/basiersquaremono-regular-webfont.woff2",
+      "currentPath": "brand/basiersquaremono-regular-webfont.woff2",
+      "relation": "source",
+      "sourceSha256": "0190079d16d0c8d88ecddf0ec83f35201e62a3bfcb70c332eda6b04381eb91bf",
+      "currentSha256": "0190079d16d0c8d88ecddf0ec83f35201e62a3bfcb70c332eda6b04381eb91bf"
+    },
+    {
+      "sourcePath": "public/apple-icon.png",
+      "currentPath": "brand/apple-icon.png",
+      "relation": "source",
+      "sourceSha256": "002cb5e372d5e8c8175530738793ee8ac3dc60f0ebc2d277aadedefe90800d25",
+      "currentSha256": "002cb5e372d5e8c8175530738793ee8ac3dc60f0ebc2d277aadedefe90800d25"
+    },
+    {
+      "sourcePath": "public/icon.svg",
+      "currentPath": "brand/icon.svg",
+      "relation": "source",
+      "sourceSha256": "263f117c0c69a44d3206a5702105c178ebaa164bca325f3c3973a13bd948f1bf",
+      "currentSha256": "263f117c0c69a44d3206a5702105c178ebaa164bca325f3c3973a13bd948f1bf"
+    },
+    {
+      "sourcePath": "public/logo.png",
+      "currentPath": "brand/logo.png",
+      "relation": "source",
+      "sourceSha256": "ae4ef23e9d1e5a8ae20fc70401d48d2ec13a04f602e55ea237fd70a6db7fb28a",
+      "currentSha256": "ae4ef23e9d1e5a8ae20fc70401d48d2ec13a04f602e55ea237fd70a6db7fb28a"
+    },
+    {
+      "sourcePath": null,
+      "currentPath": "brand/native/BasierSquare-Regular.otf",
+      "relation": "fontTools-4.59.1/brotli-1.2.0-derived",
+      "currentSha256": "bc1a8ec98e33a88f74b8f27c1cfb6a954d32938689cd916fbef09752ddd9c628"
+    },
+    {
+      "sourcePath": null,
+      "currentPath": "brand/native/BasierSquare-Semibold.otf",
+      "relation": "fontTools-4.59.1/brotli-1.2.0-derived",
+      "currentSha256": "0a7f0a8ee4442ddcd897ba606e685451f66078b2a65d925ee0f6e10e5825a290"
+    },
+    {
+      "sourcePath": null,
+      "currentPath": "brand/native/BasierSquareMono-Regular.ttf",
+      "relation": "fontTools-4.59.1/brotli-1.2.0-derived",
+      "currentSha256": "d49ade909708a7ef010140b1d5c189a4e5ec4487302d37e717fe190d4b1e6649"
+    },
+    {
+      "sourcePath": null,
+      "currentPath": "apps/mobile/assets/forge/icon.png",
+      "relation": "1024x1024-derived-from-brand/apple-icon.png",
+      "currentSha256": "623069c5189dbd9473f8b35f2755b4741d2a15b11d762aa4a95e5b2bf1cecce7"
+    },
+    {
+      "sourcePath": null,
+      "currentPath": "apps/mobile/assets/forge/wordmark.png",
+      "relation": "copy-of-brand/logo.png",
+      "currentSha256": "ae4ef23e9d1e5a8ae20fc70401d48d2ec13a04f602e55ea237fd70a6db7fb28a"
+    },
+    {
+      "sourcePath": null,
+      "currentPath": "apps/mobile/assets/forge/BasierSquare-Regular.otf",
+      "relation": "copy-of-brand/native",
+      "currentSha256": "bc1a8ec98e33a88f74b8f27c1cfb6a954d32938689cd916fbef09752ddd9c628"
+    },
+    {
+      "sourcePath": null,
+      "currentPath": "apps/mobile/assets/forge/BasierSquare-Semibold.otf",
+      "relation": "copy-of-brand/native",
+      "currentSha256": "0a7f0a8ee4442ddcd897ba606e685451f66078b2a65d925ee0f6e10e5825a290"
+    },
+    {
+      "sourcePath": null,
+      "currentPath": "apps/mobile/assets/forge/BasierSquareMono-Regular.ttf",
+      "relation": "copy-of-brand/native",
+      "currentSha256": "d49ade909708a7ef010140b1d5c189a4e5ec4487302d37e717fe190d4b1e6649"
+    }
+  ]
+}

@@ -898,6 +898,37 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
         TaskResult::SkillsToggleDone { agent_id, result } => {
             handle_skills_toggle_done(app, agent_id, result)
         }
+        TaskResult::ForgeRemoteControlComplete {
+            agent_id,
+            session_id,
+            session_binding_epoch,
+            command,
+            result,
+        } => {
+            if let Some(agent) = app.agents.get_mut(&agent_id)
+                && agent.session.session_id.as_ref() == Some(&session_id)
+                && agent.session_binding_epoch == session_binding_epoch
+            {
+                let status = result.unwrap_or_else(|error| {
+                    crate::forge::remote_control::RemoteControlStatus::message(
+                        "error",
+                        format!("Forge Remote failed: {error}"),
+                    )
+                });
+                if matches!(
+                    command,
+                    crate::forge::remote_control::RemoteControlCommand::Stop
+                ) {
+                    agent.show_toast(&status.message);
+                } else if let Some(crate::views::modal::ActiveModal::ForgeRemote { state }) =
+                    agent.active_modal.as_mut()
+                    && state.command == command
+                {
+                    state.apply_status(status);
+                }
+            }
+            vec![]
+        }
         TaskResult::ShareSessionComplete {
             agent_id,
             share_url,
@@ -1176,6 +1207,26 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             format!("Couldn't load session usage: {error}"),
             nonce,
         ),
+        TaskResult::RemoteUsageComplete {
+            identity,
+            outcome,
+            binding_current,
+        } => {
+            if !binding_current {
+                return vec![];
+            }
+            let Some(agent) = app.agents.get_mut(&identity.agent_id) else {
+                return vec![];
+            };
+            if agent.session.session_id.as_ref() != Some(&identity.session_id)
+                || agent.session_binding_epoch != identity.session_binding_epoch
+                || agent.session.models.current_provider_id() != identity.provider
+            {
+                return vec![];
+            }
+            agent.remote_usage.apply_result(&identity, *outcome);
+            vec![]
+        }
         TaskResult::FeedbackComplete { .. } => vec![],
         TaskResult::FeedbackFailed { agent_id, error } => {
             if let Some(agent) = app.agents.get_mut(&agent_id) {
@@ -1262,9 +1313,20 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
         }
         TaskResult::BtwResponse {
             agent_id,
+            session_id,
+            session_binding_epoch,
+            request_id,
             result,
             minimal_request_id,
-        } => handle_btw_response(app, agent_id, result, minimal_request_id),
+        } => handle_btw_response(
+            app,
+            agent_id,
+            session_id,
+            session_binding_epoch,
+            request_id,
+            result,
+            minimal_request_id,
+        ),
         TaskResult::InterjectQueued { .. } => vec![],
         TaskResult::RecapRequested {
             session_id,

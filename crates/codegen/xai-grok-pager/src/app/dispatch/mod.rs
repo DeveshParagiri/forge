@@ -40,12 +40,17 @@ mod voice;
 pub(crate) use auth::scrollback_has_recent_disk_full;
 pub(in crate::app) use auth::scrollback_has_recent_error_banner;
 pub(crate) use billing::{UPSELL_URL_PAYG, UPSELL_URL_UPGRADE, is_credit_limit_error};
+pub(crate) use interject::dispatch_remote_interject;
 pub(crate) use modes::{downgrade_displayed_auto_if_gated, effective_auto};
 #[cfg(test)]
 pub(crate) use notes::FEEDBACK_QUESTION_LABEL;
+pub(crate) use notes::dispatch_remote_btw;
 pub(crate) use notes::{recap_unavailable_toast, scrollback_has_user_messages};
-pub(crate) use permissions::resolve_permission_queue_transition;
-pub(crate) use prompt::dispatch_initial_prompt;
+pub(crate) use permissions::{
+    dispatch_remote_permission_cancel, dispatch_remote_permission_followup,
+    dispatch_remote_permission_select, resolve_permission_queue_transition,
+};
+pub(crate) use prompt::{dispatch_initial_prompt, dispatch_remote_prompt};
 pub(in crate::app) use prompt::{show_small_screen_tip, show_ssh_wrap_tip};
 pub(super) use queue::{
     apply_turn_start_shim, arm_send_now_and_paint, maybe_drain_queue_and_note_peek,
@@ -53,8 +58,10 @@ pub(super) use queue::{
 };
 pub(in crate::app) use rewind::{find_user_prompt_entry_for_shell_index, shell_prompt_index_at};
 pub(crate) use router::dispatch;
+pub(crate) use router::dispatch_remote_switch_model;
 pub(crate) use settings::ui::refresh_open_settings_modals;
 pub(crate) use status::commit_minimal_update_notice;
+pub(crate) use turn::dispatch_remote_cancel;
 pub(crate) use turn::{reconcile_overdue_cancels, reconcile_overdue_turn_ends};
 
 // Test-only consumers (cfg(test) mods elsewhere in the crate); a plain

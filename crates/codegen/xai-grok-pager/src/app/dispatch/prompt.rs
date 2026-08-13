@@ -421,6 +421,31 @@ pub(super) fn dispatch_send_prompt_inner(
     literal: bool,
     is_follow_up: bool,
 ) -> Vec<Effect> {
+    dispatch_send_prompt_inner_for_agent(app, None, text, consume_input, literal, is_follow_up)
+}
+
+/// Submit a literal, text-only prompt to a specific live agent view.
+///
+/// Forge Remote is pinned to the session that armed it, even if the laptop
+/// switches tabs.  Keeping the target explicit here lets the remote surface
+/// reuse the normal prompt/queue reducer without mutating `active_view` or
+/// touching the target view's terminal composer draft.
+pub(crate) fn dispatch_remote_prompt(
+    app: &mut AppView,
+    agent_id: crate::app::agent::AgentId,
+    text: String,
+) -> Vec<Effect> {
+    dispatch_send_prompt_inner_for_agent(app, Some(agent_id), text, false, true, false)
+}
+
+fn dispatch_send_prompt_inner_for_agent(
+    app: &mut AppView,
+    target_agent_id: Option<crate::app::agent::AgentId>,
+    text: String,
+    consume_input: bool,
+    literal: bool,
+    is_follow_up: bool,
+) -> Vec<Effect> {
     // Submitting is a fresh intent that retires any armed double-press. The
     // AppView pending-action check only resets on KEY events, so a submit with
     // no intervening key (mouse send, follow-up chip click `SubmitFollowUp`,
@@ -429,9 +454,16 @@ pub(super) fn dispatch_send_prompt_inner(
     // ClearPrompt|Rewind instead of the mid-turn Esc policy until TTL. Cleared in
     // the common funnel so every submit path is covered, before any early-return
     // guard below.
-    app.pending_action = None;
-    // Promote interim + hard-reset; merge only when consuming the composer.
-    let interim = voice_stop_on_submit(app);
+    if target_agent_id.is_none() {
+        app.pending_action = None;
+    }
+    // Remote input is independent of the laptop's voice/composer state.  Only
+    // a submit originating from the active TUI may stop or merge voice input.
+    let interim = if target_agent_id.is_none() {
+        voice_stop_on_submit(app)
+    } else {
+        None
+    };
     let text = if consume_input {
         merge_prompt_with_voice_interim(text, interim)
     } else {
@@ -443,8 +475,14 @@ pub(super) fn dispatch_send_prompt_inner(
         return vec![];
     }
 
-    let ActiveView::Agent(id) = app.active_view else {
-        return vec![];
+    let id = match target_agent_id {
+        Some(id) => id,
+        None => {
+            let ActiveView::Agent(id) = app.active_view else {
+                return vec![];
+            };
+            id
+        }
     };
     // Capture app-level fields before the mut-borrow on `agent`.
     let coding_data_sharing_opt_out_from_app = app.coding_data_retention_opt_out;
@@ -780,8 +818,11 @@ pub(super) fn dispatch_send_prompt_inner(
             .slash_controller
             .recognized_token_ranges(&text, &agent.session.models);
 
+        // The phone command is deliberately text-only and must not inherit a
+        // pasted image sitting in the laptop composer for this session.
+        let has_composer_images = target_agent_id.is_none() && !agent.prompt.images.is_empty();
         let immediate_server_send =
-            immediate_server_send_eligible(agent, leader_mode) && agent.prompt.images.is_empty();
+            immediate_server_send_eligible(agent, leader_mode) && !has_composer_images;
         tracing::debug!(
             target: "qtrace",
             pid = std::process::id(),
@@ -804,7 +845,7 @@ pub(super) fn dispatch_send_prompt_inner(
         // Images can't ride immediate server-send; empty-held park still send-nows.
         if !immediate_server_send
             && immediate_server_send_eligible(agent, leader_mode)
-            && !agent.prompt.images.is_empty()
+            && has_composer_images
             && parked_sendable_wait
             && !hold_behind_existing_queue
         {
@@ -866,7 +907,7 @@ pub(super) fn dispatch_send_prompt_inner(
                 Some(&sid_str),
                 Some(serde_json::json!({ "kind": "prompt", "len": text.len() })),
             );
-            if queued_while_running && !parked_sendable_wait {
+            if target_agent_id.is_none() && queued_while_running && !parked_sendable_wait {
                 maybe_show_send_now_tip(app);
             }
             return vec![Effect::SendPrompt {
@@ -893,7 +934,7 @@ pub(super) fn dispatch_send_prompt_inner(
 
     // Mid-turn local queue: advertise send-now via the ephemeral tip (skip during
     // a sendable wait — the inline hint already says it).
-    if tip_send_now_after_queue {
+    if target_agent_id.is_none() && tip_send_now_after_queue {
         let inline_hint_shown = app
             .agents
             .get(&id)

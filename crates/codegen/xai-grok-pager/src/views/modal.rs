@@ -293,6 +293,11 @@ pub enum ActiveModal {
     UsageInfo {
         state: Box<crate::views::usage_modal::UsageInfoModalState>,
     },
+    /// Session-pinned Forge Remote pairing overlay (`/rc`, `/rc status`).
+    /// Closing this presentation never revokes the underlying gateway.
+    ForgeRemote {
+        state: Box<crate::views::remote_control_modal::RemoteControlModalState>,
+    },
     /// Reset-settings confirmation, stacked above Settings.
     ///
     /// The underlying `SettingsModalState` is moved in/out so cancel
@@ -653,6 +658,7 @@ impl ActiveModal {
             | ActiveModal::MemoryBrowser { .. }
             | ActiveModal::Settings { .. }
             | ActiveModal::UsageInfo { .. }
+            | ActiveModal::ForgeRemote { .. }
             | ActiveModal::RememberNoteReview { .. } => vec![],
         }
     }
@@ -685,6 +691,7 @@ impl ActiveModal {
             ActiveModal::ResetSettingsConfirm { .. } => "Reset setting?",
             ActiveModal::RememberNoteReview { .. } => "Memory Note",
             ActiveModal::UsageInfo { .. } => "Usage",
+            ActiveModal::ForgeRemote { .. } => "Forge Remote",
         }
     }
 }

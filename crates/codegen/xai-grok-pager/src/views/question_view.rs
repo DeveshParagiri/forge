@@ -988,8 +988,7 @@ impl QuestionViewState {
         let raw = serde_json::value::to_raw_value(&response)
             .expect("AskUserQuestionExtResponse serialization should not fail");
         tx.send(Ok(agent_client_protocol::ExtResponse::new(raw.into())))
-            .ok();
-        true
+            .is_ok()
     }
 }
 

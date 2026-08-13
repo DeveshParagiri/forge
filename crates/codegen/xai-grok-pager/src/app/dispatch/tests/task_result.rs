@@ -1001,13 +1001,29 @@ fn switch_model_complete_success_updates_model_and_pushes_message() {
         .available
         .insert(
             model_id.clone(),
-            acp::ModelInfo::new(model_id.clone(), "Grok 4.5".to_string()),
+            acp::ModelInfo::new(model_id.clone(), "Grok 4.5".to_string()).meta(
+                serde_json::json!({"providerId": "openai-codex"})
+                    .as_object()
+                    .cloned(),
+            ),
         );
-    app.agents
-        .get_mut(&id)
-        .unwrap()
-        .session
-        .model_switch_pending = true;
+    {
+        let agent = app.agents.get_mut(&id).unwrap();
+        agent.session.model_switch_pending = true;
+        agent.remote_usage.begin_refresh(
+            crate::forge::remote_usage::RemoteUsageRequestIdentity {
+                agent_id: id,
+                session_id: agent.session.session_id.clone().unwrap(),
+                session_binding_epoch: agent.session_binding_epoch,
+                bridge_generation: 1,
+                gateway_generation: 2,
+                request_id: "provider-change".to_owned(),
+                refresh_generation: 3,
+                provider: Some(xai_grok_shell::agent::provider_auth::ProviderId::Spacexai),
+            },
+            None,
+        );
+    }
 
     let initial_scrollback = app.agents[&id].scrollback.len();
 
@@ -1029,6 +1045,7 @@ fn switch_model_complete_success_updates_model_and_pushes_message() {
         app.agents[&id].session.models.current,
         Some(model_id.clone())
     );
+    assert!(app.agents[&id].remote_usage.snapshot().is_none());
     // Success message pushed to scrollback.
     assert_eq!(app.agents[&id].scrollback.len(), initial_scrollback + 1);
     // PersistPreferredModel effect emitted.
@@ -1036,6 +1053,57 @@ fn switch_model_complete_success_updates_model_and_pushes_message() {
     assert!(matches!(
         &effects[0],
         Effect::PersistPreferredModel { model_id: mid, .. } if *mid == model_id.clone()
+    ));
+}
+
+#[test]
+fn same_provider_model_switch_invalidates_remote_usage_before_fetch() {
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    let first = acp::ModelId::new("codex-a");
+    let second = acp::ModelId::new("codex-b");
+    let provider_meta = || {
+        serde_json::json!({"providerId": "openai-codex"})
+            .as_object()
+            .cloned()
+    };
+    {
+        let agent = app.agents.get_mut(&id).unwrap();
+        agent.session.models.available.insert(
+            first.clone(),
+            acp::ModelInfo::new(first.clone(), "Codex A").meta(provider_meta()),
+        );
+        agent.session.models.available.insert(
+            second.clone(),
+            acp::ModelInfo::new(second.clone(), "Codex B").meta(provider_meta()),
+        );
+        agent.session.models.current = Some(first);
+        agent.remote_usage.begin_refresh(
+            crate::forge::remote_usage::RemoteUsageRequestIdentity {
+                agent_id: id,
+                session_id: agent.session.session_id.clone().unwrap(),
+                session_binding_epoch: agent.session_binding_epoch,
+                bridge_generation: 10,
+                gateway_generation: 20,
+                request_id: "same-provider".to_owned(),
+                refresh_generation: 30,
+                provider: Some(xai_grok_shell::agent::provider_auth::ProviderId::OpenaiCodex),
+            },
+            None,
+        );
+    }
+
+    let effects = dispatch(
+        Action::SwitchModel {
+            model_id: second.clone(),
+            effort: None,
+        },
+        &mut app,
+    );
+    assert!(app.agents[&id].remote_usage.snapshot().is_none());
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::SwitchModel { model_id, .. }] if model_id == &second
     ));
 }
 

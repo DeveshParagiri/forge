@@ -1,0 +1,6 @@
+{
+  "extends": "./tsconfig.json",
+  "files": ["index.ts", "assets.d.ts", "uniwind-types.d.ts"],
+  "include": [],
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
+}

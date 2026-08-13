@@ -1149,6 +1149,7 @@ pub(in crate::app::dispatch) fn handle_session_loaded(
             nonce: 0,
         });
         if let Some(switch) = deferred {
+            agent.remote_usage.clear();
             agent.session.model_switch_pending = true;
             effects.push(Effect::SwitchModel {
                 agent_id,

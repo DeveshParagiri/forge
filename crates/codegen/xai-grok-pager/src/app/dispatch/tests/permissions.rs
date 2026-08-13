@@ -2,6 +2,75 @@
 
 use super::*;
 
+#[test]
+fn remote_permission_is_first_answer_wins_when_terminal_resolves_first() {
+    let mut app = test_app_with_agent();
+    let _response_rx = enqueue_permission_with_enable_always_approve(&mut app);
+    let _ = dispatch(
+        Action::PermissionSelect(acp::PermissionOptionId::new("opt-allow-once")),
+        &mut app,
+    );
+
+    let result = dispatch_remote_permission_select(
+        &mut app,
+        AgentId(0),
+        "tc-enable-aa-1",
+        acp::PermissionOptionId::new("opt-reject-once"),
+    );
+    assert_eq!(
+        result.unwrap_err(),
+        "This interaction was already resolved."
+    );
+}
+
+#[test]
+fn remote_permission_is_first_answer_wins_when_phone_resolves_first() {
+    let mut app = test_app_with_agent();
+    let mut response_rx = enqueue_permission_with_enable_always_approve(&mut app);
+
+    let result = dispatch_remote_permission_select(
+        &mut app,
+        AgentId(0),
+        "tc-enable-aa-1",
+        acp::PermissionOptionId::new("opt-allow-once"),
+    );
+    assert!(result.is_ok());
+    let response = response_rx
+        .try_recv()
+        .expect("phone response must reach the canonical sender")
+        .expect("permission response must be successful");
+    assert!(matches!(
+        response.outcome,
+        acp::RequestPermissionOutcome::Selected(_)
+    ));
+    assert!(app.agents[&AgentId(0)].permission_queue.is_empty());
+
+    let terminal_effects = dispatch(
+        Action::PermissionSelect(acp::PermissionOptionId::new("opt-reject-once")),
+        &mut app,
+    );
+    assert!(terminal_effects.is_empty());
+}
+
+#[test]
+fn remote_permission_reports_external_receiver_won_the_race() {
+    let mut app = test_app_with_agent();
+    let response_rx = enqueue_permission_with_enable_always_approve(&mut app);
+    drop(response_rx);
+
+    let result = dispatch_remote_permission_select(
+        &mut app,
+        AgentId(0),
+        "tc-enable-aa-1",
+        acp::PermissionOptionId::new("opt-allow-once"),
+    );
+    assert_eq!(
+        result.unwrap_err(),
+        "This interaction was already resolved."
+    );
+    assert!(app.agents[&AgentId(0)].permission_queue.is_empty());
+}
+
 /// `ConfirmResetSetting
 /// { Reset }` on `permission_mode` (the security-critical SHELL Enum)
 /// dispatches `Action::SetPermissionMode(PermissionModeKind::Ask)`

@@ -4,7 +4,7 @@ use crate::app::agent_view::test_fixtures::{make_agent, make_followup_permission
 use crate::views::modal::{CancelTurnChoice, CancelTurnViewState};
 use crate::views::permission_view::PermissionFocus;
 use crate::views::prompt_widget::StashedPrompt;
-use crate::views::question_view::QuestionViewState;
+use crate::views::question_view::{LocalQuestionKind, QuestionViewState};
 use agent_client_protocol as acp;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::sync::Arc;
@@ -66,6 +66,17 @@ fn open_question(agent: &mut AgentView) {
         vec![question("Which?")],
         StashedPrompt::default(),
     ));
+}
+
+fn open_upsell(agent: &mut AgentView, kind: LocalQuestionKind) {
+    agent.prompt.set_text("keep this draft");
+    let stashed = agent.prompt.stash();
+    agent.question_view = Some(
+        QuestionViewState::new("local-upsell".into(), vec![question("Upgrade?")], stashed)
+            .with_local_kind(kind)
+            .with_no_freeform(),
+    );
+    agent.prompt.set_text("");
 }
 
 fn open_plan(agent: &mut AgentView) {
@@ -376,6 +387,47 @@ fn the_esc_hint_names_the_rung_the_key_takes() {
         agent.handle_question_key_for_test(&KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
     assert_eq!(agent.card_esc(), Some(EscStep::ClearSelection));
     assert!(hint_labels(&agent).contains(&"unselect".to_string()));
+}
+
+#[test]
+fn esc_dismisses_every_local_upsell_without_submitting_a_choice() {
+    let kinds = [
+        LocalQuestionKind::CreditLimitUpsell {
+            choices: vec![
+                xai_grok_telemetry::events::CreditLimitChoice::UpgradeTier,
+                xai_grok_telemetry::events::CreditLimitChoice::PurchaseCredits,
+            ],
+        },
+        LocalQuestionKind::FreeUsageUpsell {
+            source: xai_grok_telemetry::events::SuperGrokUpsell::FreeUsagePaywall,
+        },
+        LocalQuestionKind::FreeUsageUpsell {
+            source: xai_grok_telemetry::events::SuperGrokUpsell::RestrictedCommand,
+        },
+    ];
+
+    for kind in kinds {
+        let mut agent = make_agent();
+        open_upsell(&mut agent, kind);
+        agent
+            .question_view
+            .as_mut()
+            .expect("upsell open")
+            .select_option(0, 0);
+
+        assert_eq!(agent.card_esc(), Some(EscStep::DismissUpsell));
+        assert!(hint_labels(&agent).contains(&"dismiss".to_string()));
+        let outcome =
+            agent.handle_question_key_for_test(&KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        assert!(
+            matches!(outcome, crate::app::app_view::InputOutcome::Changed),
+            "Esc must not return an OpenUrl action: {outcome:?}"
+        );
+        assert!(agent.question_view.is_none());
+        assert_eq!(agent.prompt.text(), "keep this draft");
+        assert_eq!(agent.active_pane, AgentPane::Prompt);
+    }
 }
 
 #[test]

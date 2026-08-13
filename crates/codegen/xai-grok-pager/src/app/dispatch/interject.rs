@@ -29,6 +29,24 @@ pub(super) fn dispatch_interject(
     let ActiveView::Agent(id) = app.active_view else {
         return vec![];
     };
+    dispatch_interject_for_agent(app, id, text, images, true)
+}
+
+pub(crate) fn dispatch_remote_interject(
+    app: &mut AppView,
+    id: crate::app::agent::AgentId,
+    text: String,
+) -> Vec<Effect> {
+    dispatch_interject_for_agent(app, id, text, Vec::new(), false)
+}
+
+fn dispatch_interject_for_agent(
+    app: &mut AppView,
+    id: crate::app::agent::AgentId,
+    text: String,
+    images: Vec<crate::prompt_images::PastedImage>,
+    show_feedback: bool,
+) -> Vec<Effect> {
     let Some(agent) = app.agents.get_mut(&id) else {
         return vec![];
     };
@@ -58,7 +76,9 @@ pub(super) fn dispatch_interject(
     // text (the InterjectPrompt registry arm) clears it at the call site;
     // every other producer (Send now, edit-interject, plan review comments)
     // carries non-composer text and must keep the user's draft/stash.
-    agent.show_toast("Interjection sent");
+    if show_feedback {
+        agent.show_toast("Interjection sent");
+    }
 
     // Image-bearing interjection: build text + image content blocks via the
     // same helper as the queued-prompt drain path (orphan-placeholder

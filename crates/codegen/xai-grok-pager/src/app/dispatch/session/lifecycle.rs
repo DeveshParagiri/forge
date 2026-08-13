@@ -1069,6 +1069,7 @@ pub(in crate::app::dispatch) fn handle_session_created(
         let deferred_mode = agent.deferred_session_mode.take();
         let cwd = agent.session.cwd.clone();
         if deferred.is_some() {
+            agent.remote_usage.clear();
             agent.session.model_switch_pending = true;
         }
         let mut drain = if app.reconnect_pending {
@@ -1177,6 +1178,7 @@ pub(in crate::app::dispatch) fn handle_worktree_session_created(
         let deferred_mode = agent.deferred_session_mode.take();
         let cwd = agent.session.cwd.clone();
         if deferred.is_some() {
+            agent.remote_usage.clear();
             agent.session.model_switch_pending = true;
         }
         let mut drain = if app.reconnect_pending {
@@ -1399,6 +1401,9 @@ pub(in crate::app::dispatch) fn handle_switch_model_complete(
     prev_model_id: Option<acp::ModelId>,
 ) -> Vec<Effect> {
     if let Some(agent) = app.agents.get_mut(&agent_id) {
+        // Also invalidate on completion so switches initiated by deferred
+        // startup paths cannot retain a prior model's usage snapshot.
+        agent.remote_usage.clear();
         agent.session.model_switch_pending = false;
         let mut effects = match result {
             Ok(()) => {

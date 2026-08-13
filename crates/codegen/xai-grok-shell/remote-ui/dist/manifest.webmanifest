@@ -1,0 +1,20 @@
+{
+  "name": "Forge Remote",
+  "short_name": "Forge",
+  "description": "Private shared control for an active Forge session.",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#141414",
+  "theme_color": "#141414",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

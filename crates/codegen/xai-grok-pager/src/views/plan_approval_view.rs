@@ -150,7 +150,7 @@ pub fn send_exit_plan_response(
     tx: tokio::sync::oneshot::Sender<AcpResult<acp::ExtResponse>>,
     outcome: &str,
     feedback: Option<String>,
-) {
+) -> bool {
     let feedback = feedback.filter(|f| !f.trim().is_empty());
     let resp = ExitPlanModeExtResponse {
         outcome: outcome.into(),
@@ -158,7 +158,7 @@ pub fn send_exit_plan_response(
     };
     let raw = serde_json::value::to_raw_value(&resp)
         .expect("ExitPlanModeExtResponse serialization should not fail");
-    tx.send(Ok(acp::ExtResponse::new(raw.into()))).ok();
+    tx.send(Ok(acp::ExtResponse::new(raw.into()))).is_ok()
 }
 
 fn send_ext_response(
@@ -169,8 +169,7 @@ fn send_ext_response(
     let Some(tx) = tx.take() else {
         return false;
     };
-    send_exit_plan_response(tx, outcome, feedback);
-    true
+    send_exit_plan_response(tx, outcome, feedback)
 }
 
 impl PlanApprovalViewState {

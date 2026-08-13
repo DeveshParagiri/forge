@@ -1615,20 +1615,20 @@ pub(crate) async fn run(
     if matches!(app.auth_state, AuthState::Done) {
         let effs = dispatch::dispatch(Action::RequestBundleStatus, &mut app);
         if process_effects(effs, &mut tasks, &mut app, &progress_tx) {
-            return Ok(finish_run(&mut app));
+            return Ok(finish_run_with_remote_shutdown(&mut app).await);
         }
         // Fetch billing early so the welcome screen can show a credit warning.
         if app.usage_visible {
             let effs = vec![super::actions::Effect::FetchAppBilling];
             if process_effects(effs, &mut tasks, &mut app, &progress_tx) {
-                return Ok(finish_run(&mut app));
+                return Ok(finish_run_with_remote_shutdown(&mut app).await);
             }
         }
         // Fetch changelog off the render path so the welcome screen
         // can display bullets and /release-notes uses the cached result.
         let effs = vec![super::actions::Effect::FetchChangelog];
         if process_effects(effs, &mut tasks, &mut app, &progress_tx) {
-            return Ok(finish_run(&mut app));
+            return Ok(finish_run_with_remote_shutdown(&mut app).await);
         }
         if !app.has_access() {
             gate_poll_at = Some(Instant::now() + GATE_POLL_INTERVAL);
@@ -1638,7 +1638,7 @@ pub(crate) async fn run(
     if !post_render_effects.is_empty()
         && process_effects(post_render_effects, &mut tasks, &mut app, &progress_tx)
     {
-        return Ok(finish_run(&mut app));
+        return Ok(finish_run_with_remote_shutdown(&mut app).await);
     }
 
     // Session startup from pre-materialized CLI intent.
@@ -1730,7 +1730,7 @@ pub(crate) async fn run(
     if let Some(action) = startup_action {
         let effs = dispatch::dispatch(action, &mut app);
         if process_effects(effs, &mut tasks, &mut app, &progress_tx) {
-            return Ok(finish_run(&mut app));
+            return Ok(finish_run_with_remote_shutdown(&mut app).await);
         }
         presenter.request_presentation(&mut app, terminal, false);
     } else if args.worktree.is_some() {
@@ -1744,7 +1744,7 @@ pub(crate) async fn run(
             &mut app,
         );
         if process_effects(effs, &mut tasks, &mut app, &progress_tx) {
-            return Ok(finish_run(&mut app));
+            return Ok(finish_run_with_remote_shutdown(&mut app).await);
         }
         presenter.request_presentation(&mut app, terminal, false);
     } else if args.initial_prompt().is_none() && !minimal_will_open_session(&term_state, &app) {
@@ -1764,7 +1764,7 @@ pub(crate) async fn run(
         } else if !app.is_zdr_blocked() {
             let effs = dispatch::dispatch_initial_prompt(&mut app, initial_prompt.to_string());
             if process_effects(effs, &mut tasks, &mut app, &progress_tx) {
-                return Ok(finish_run(&mut app));
+                return Ok(finish_run_with_remote_shutdown(&mut app).await);
             }
             presenter.request_presentation(&mut app, terminal, false);
         } else {
@@ -1782,7 +1782,7 @@ pub(crate) async fn run(
         if app.session_startup_allowed() {
             let effs = dispatch::dispatch(Action::OpenDashboard, &mut app);
             if process_effects(effs, &mut tasks, &mut app, &progress_tx) {
-                return Ok(finish_run(&mut app));
+                return Ok(finish_run_with_remote_shutdown(&mut app).await);
             }
             presenter.request_presentation(&mut app, terminal, false);
         } else {
@@ -1807,7 +1807,7 @@ pub(crate) async fn run(
             // user lands directly at the prompt.
             let effs = dispatch::dispatch(Action::NewSession, &mut app);
             if process_effects(effs, &mut tasks, &mut app, &progress_tx) {
-                return Ok(finish_run(&mut app));
+                return Ok(finish_run_with_remote_shutdown(&mut app).await);
             }
             presenter.request_presentation(&mut app, terminal, false);
         } else {
@@ -1825,7 +1825,7 @@ pub(crate) async fn run(
     if let Some(effect) = app.begin_foreign_resume_detection()
         && process_effects(vec![effect], &mut tasks, &mut app, &progress_tx)
     {
-        return Ok(finish_run(&mut app));
+        return Ok(finish_run_with_remote_shutdown(&mut app).await);
     }
 
     // Schedule the first animation tick so live updates start immediately
@@ -1878,6 +1878,7 @@ pub(crate) async fn run(
     crate::app::signal_handler::set_quit_notify(quit_notify.clone());
 
     loop {
+        crate::forge::remote_bridge::publish_state(&app).await;
         if !session_load_barrier.is_empty() && acp_peek.is_none() {
             acp_peek = acp_rx.try_recv().ok();
         }
@@ -1927,6 +1928,10 @@ pub(crate) async fn run(
             &mut suspend_wait_reports,
         ) {
             app.finish_startup(xai_grok_telemetry::startup::StartupOutcome::Error);
+            let _ = crate::forge::remote_bridge::shutdown_all(
+                xai_grok_shell::remote_control::RemoteRevocationReason::Stopped,
+            )
+            .await;
             return Err(e);
         }
 
@@ -2153,6 +2158,10 @@ pub(crate) async fn run(
             writer_event = writer_event_rx.recv() => {
                 let Some(writer_event) = writer_event else {
                     app.finish_startup(xai_grok_telemetry::startup::StartupOutcome::Error);
+                    let _ = crate::forge::remote_bridge::shutdown_all(
+                        xai_grok_shell::remote_control::RemoteRevocationReason::Stopped,
+                    )
+                    .await;
                     return Err(anyhow::anyhow!("terminal writer stopped"));
                 };
                 let sequence = match writer_event_sequence(writer_event)
@@ -2161,10 +2170,28 @@ pub(crate) async fn run(
                     Ok(sequence) => sequence,
                     Err(e) => {
                         app.finish_startup(xai_grok_telemetry::startup::StartupOutcome::Error);
+                        let _ = crate::forge::remote_bridge::shutdown_all(
+                            xai_grok_shell::remote_control::RemoteRevocationReason::Stopped,
+                        )
+                        .await;
                         return Err(e);
                     }
                 };
                 presenter.acknowledge(sequence);
+            }
+
+            remote = crate::forge::remote_bridge::next_request() => {
+                let mut execution =
+                    crate::forge::remote_bridge::execute_request(&mut app, remote).await;
+                let effects = std::mem::take(&mut execution.effects);
+                let should_quit = process_effects(effects, &mut tasks, &mut app, &progress_tx);
+                crate::forge::remote_bridge::finish_execution(execution).await;
+                crate::forge::remote_bridge::publish_state(&app).await;
+                schedule_tick(&mut animation_tick_at, &app, tick_interval);
+                presenter.request(false);
+                if should_quit {
+                    break;
+                }
             }
 
             // Biased order: cancellation/quit, writer acks/failures, ACP,
@@ -2209,7 +2236,7 @@ pub(crate) async fn run(
                     if !app.pending_effects.is_empty() {
                         let effs = std::mem::take(&mut app.pending_effects);
                         if process_effects(effs, &mut tasks, &mut app, &progress_tx) {
-                            return Ok(finish_run(&mut app));
+                            return Ok(finish_run_with_remote_shutdown(&mut app).await);
                         }
                     }
                 }
@@ -2879,7 +2906,7 @@ pub(crate) async fn run(
                 if active_restored {
                     let drain_effects = dispatch::dispatch(Action::DrainQueue, &mut app);
                     if process_effects(drain_effects, &mut tasks, &mut app, &progress_tx) {
-                        return Ok(finish_run(&mut app));
+                        return Ok(finish_run_with_remote_shutdown(&mut app).await);
                     }
                 }
 
@@ -2939,7 +2966,15 @@ pub(crate) async fn run(
 
     app.notification_service.shutdown();
 
-    Ok(finish_run(&mut app))
+    Ok(finish_run_with_remote_shutdown(&mut app).await)
+}
+
+async fn finish_run_with_remote_shutdown(app: &mut AppView) -> RunResult {
+    let _ = crate::forge::remote_bridge::shutdown_all(
+        xai_grok_shell::remote_control::RemoteRevocationReason::Stopped,
+    )
+    .await;
+    finish_run(app)
 }
 
 /// Load `UiConfig` from the shell's layered config at startup.

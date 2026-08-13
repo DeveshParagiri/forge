@@ -1290,6 +1290,212 @@ impl AgentView {
         self.cleanup_question_state();
         PeekAnswerOutcome::Submitted
     }
+
+    /// Resolve a complete `AskUserQuestion` card from the session-pinned
+    /// browser. Validation happens before the response sender is consumed, and
+    /// taking the view makes the event-loop's serialized terminal/phone race
+    /// first-answer-wins.
+    pub(crate) fn resolve_remote_question(
+        &mut self,
+        expected_tool_call_id: &str,
+        answers: &[(usize, Vec<usize>, Option<String>)],
+        cancelled: bool,
+    ) -> Result<(), String> {
+        use crate::views::question_view::QuestionSelection;
+        use xai_grok_tools::implementations::grok_build::ask_user_question::AskUserQuestionExtResponse;
+
+        let Some(current) = self.question_view.as_ref() else {
+            return Err("This interaction was already resolved.".into());
+        };
+        if current.tool_call_id != expected_tool_call_id || current.response_tx.is_none() {
+            return Err("This interaction was already resolved.".into());
+        }
+        if current.local_kind.is_some() {
+            return Err("This local-only question cannot be answered remotely.".into());
+        }
+
+        if !cancelled {
+            if answers.is_empty() {
+                return Err("At least one question must be answered.".into());
+            }
+            let mut seen = std::collections::HashSet::new();
+            for (question_index, option_indices, freeform) in answers {
+                if !seen.insert(*question_index) {
+                    return Err("A question was answered more than once.".into());
+                }
+                let Some(question) = current.questions.get(*question_index) else {
+                    return Err("That question is no longer available.".into());
+                };
+                if option_indices
+                    .iter()
+                    .any(|idx| *idx >= question.options.len())
+                {
+                    return Err("That question option is not available.".into());
+                }
+                if option_indices
+                    .iter()
+                    .collect::<std::collections::HashSet<_>>()
+                    .len()
+                    != option_indices.len()
+                {
+                    return Err("A question option was selected more than once.".into());
+                }
+                if !question.multi_select.unwrap_or(false) && option_indices.len() > 1 {
+                    return Err("That question accepts only one option.".into());
+                }
+                if !question.multi_select.unwrap_or(false)
+                    && !option_indices.is_empty()
+                    && freeform
+                        .as_deref()
+                        .is_some_and(|text| !text.trim().is_empty())
+                {
+                    return Err(
+                        "Choose either an option or a free-form answer for this question.".into(),
+                    );
+                }
+                if current.no_freeform
+                    && freeform
+                        .as_deref()
+                        .is_some_and(|text| !text.trim().is_empty())
+                {
+                    return Err("That question does not accept a free-form answer.".into());
+                }
+                if option_indices.is_empty()
+                    && freeform
+                        .as_deref()
+                        .is_none_or(|text| text.trim().is_empty())
+                {
+                    return Err("An answer cannot be empty.".into());
+                }
+            }
+            if seen.len() != current.questions.len() {
+                return Err("Every question must be answered.".into());
+            }
+        }
+
+        let mut qv = self
+            .question_view
+            .take()
+            .expect("question view was validated above");
+        if !cancelled {
+            for (question_index, option_indices, freeform) in answers {
+                if qv.questions[*question_index].multi_select.unwrap_or(false) {
+                    qv.selections[*question_index] =
+                        QuestionSelection::Multi(option_indices.iter().copied().collect());
+                } else {
+                    qv.selections[*question_index] =
+                        QuestionSelection::Single(option_indices.first().copied());
+                }
+                if let Some(text) = freeform.as_ref().filter(|text| !text.trim().is_empty()) {
+                    qv.per_question_freeform[*question_index] = text.clone();
+                    qv.per_question_freeform_selected[*question_index] = true;
+                }
+            }
+        }
+
+        self.record_question_pause(&qv);
+        let response = if cancelled {
+            AskUserQuestionExtResponse::Cancelled
+        } else {
+            qv.build_accepted_response()
+        };
+        if !qv.send_ext_response(response) {
+            self.question_view = Some(qv);
+            return Err("This interaction was already resolved.".into());
+        }
+        self.prompt.restore(qv.stashed_prompt);
+        self.cleanup_question_state();
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod remote_question_resolution_tests {
+    use super::test_fixtures::make_agent;
+    use crate::views::prompt_widget::StashedPrompt;
+    use crate::views::question_view::{
+        AskUserQuestionMode, Question, QuestionOption, QuestionViewState,
+    };
+
+    fn attach_question(
+        agent: &mut super::AgentView,
+    ) -> tokio::sync::oneshot::Receiver<xai_acp_lib::AcpResult<agent_client_protocol::ExtResponse>>
+    {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        agent.question_view = Some(QuestionViewState::with_response_tx(
+            "remote-question".into(),
+            vec![Question {
+                question: "Pick one?".into(),
+                options: vec![QuestionOption {
+                    label: "A".into(),
+                    description: "First".into(),
+                    preview: None,
+                    id: None,
+                }],
+                multi_select: Some(false),
+                id: None,
+            }],
+            StashedPrompt::default(),
+            Some(tx),
+            AskUserQuestionMode::Default,
+        ));
+        rx
+    }
+
+    #[test]
+    fn terminal_first_question_resolution_rejects_the_phone() {
+        let mut agent = make_agent();
+        let mut rx = attach_question(&mut agent);
+        let _ = agent.submit_question_answers_for_test(true);
+        assert!(rx.try_recv().is_ok());
+        assert_eq!(
+            agent
+                .resolve_remote_question("remote-question", &[], true)
+                .unwrap_err(),
+            "This interaction was already resolved."
+        );
+    }
+
+    #[test]
+    fn phone_first_question_resolution_uses_the_canonical_sender_once() {
+        let mut agent = make_agent();
+        let mut rx = attach_question(&mut agent);
+        agent
+            .resolve_remote_question("remote-question", &[], true)
+            .unwrap();
+        assert!(rx.try_recv().is_ok());
+        assert!(agent.question_view.is_none());
+        let _ = agent.submit_question_answers_for_test(true);
+        assert!(agent.question_view.is_none());
+    }
+
+    #[test]
+    fn dropped_question_receiver_is_reported_as_already_resolved() {
+        let mut agent = make_agent();
+        drop(attach_question(&mut agent));
+        assert_eq!(
+            agent
+                .resolve_remote_question("remote-question", &[], true)
+                .unwrap_err(),
+            "This interaction was already resolved."
+        );
+        assert!(agent.question_view.is_some());
+    }
+
+    #[test]
+    fn remote_single_select_rejects_option_plus_freeform() {
+        let mut agent = make_agent();
+        let _rx = attach_question(&mut agent);
+        let error = agent
+            .resolve_remote_question(
+                "remote-question",
+                &[(0, vec![0], Some("also this".into()))],
+                false,
+            )
+            .unwrap_err();
+        assert!(error.contains("either an option or a free-form answer"));
+        assert!(agent.question_view.is_some());
+    }
 }
 #[cfg(test)]
 mod cancel_turn_mouse_tests {

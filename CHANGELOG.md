@@ -6,6 +6,49 @@ upstream base is recorded in each release entry.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-13
+
+**Upstream base:** Grok Build 1.0.0
+
+### Added
+
+- Forge Remote opens an exact live TUI session on a phone through a short-lived,
+  tailnet-private Tailscale HTTPS route. The bundled browser and optional native
+  iOS client support the live transcript, prompts, cancellation, `/btw`, model
+  and reasoning selection, usage, queues, plans, and interactive approvals.
+- Multiple terminal sessions can expose independent pairings at the same time.
+  Each pairing retains its own capability URL, gateway generation, expiration,
+  and session-bound command channel.
+- Forge Mobile provides a retained T3 Code native presentation layer backed by
+  Forge's typed remote protocol, with SecureStore pairings, native QR scanning,
+  Basier Square typography, and a verified local iPhone installation script for
+  free Apple personal-team signing.
+
+### Changed
+
+- `/rc` now starts the private route immediately and presents a compact,
+  dismissible QR modal. `/rc enable` remains a compatibility alias, `/rc status`
+  reports only the current session, and `/rc stop` revokes only that pairing.
+- The most recently foregrounded authenticated phone client owns a pairing.
+  Moving between Safari and Forge Mobile transfers control without revoking the
+  URL, duplicating commands, or allowing a superseded socket to mutate state.
+- Browser and native composers use one Send/Stop action, recognize
+  `/btw <question>` without a separate mode, and expose authoritative model,
+  reasoning, and usage controls from the active session.
+
+### Fixed
+
+- iOS keyboard and visual-viewport handling keeps the composer and entered text
+  visible, while the native composer grows only with actual content instead of
+  covering the transcript with an empty expanded panel.
+- Native scanner linkage now includes the Expo Camera barcode provider and
+  ZXing dependencies, so a valid Forge QR produces exactly one stored pairing.
+- Remote permission, question, plan, cancellation, model, usage, and BTW
+  responses are generation- and session-bound, reject stale results, and use
+  first-answer-wins semantics across the terminal and phone.
+- Local billing and free-usage cards can be dismissed with Escape without
+  submitting an upsell choice or losing the stashed prompt draft.
+
 ## [0.4.0] - 2026-08-10
 
 **Upstream base:** Grok Build 1.0.0

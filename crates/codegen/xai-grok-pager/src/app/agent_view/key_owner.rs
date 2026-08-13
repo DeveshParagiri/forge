@@ -83,6 +83,9 @@ pub(crate) enum EscStep {
     LeaveTextInput,
     /// Close the bare `/feedback` pane, which has no rows to leave the input for.
     DismissFeedbackPane,
+    /// Close a local billing upsell without opening a URL or recording a
+    /// choice. Unlike an ACP question, there is no remote request to preserve.
+    DismissUpsell,
     /// Throw away an in-progress always-allow pattern edit.
     DiscardPatternEdit,
     /// Unmark this question's answer.
@@ -102,6 +105,7 @@ impl EscStep {
             Self::DismissFileSearch => "dismiss",
             Self::LeaveTextInput => "back",
             Self::DismissFeedbackPane => "dismiss",
+            Self::DismissUpsell => "dismiss",
             Self::DiscardPatternEdit => "cancel",
             Self::ClearSelection => "unselect",
             Self::BackOutOverlay => "dashboard",
@@ -202,7 +206,15 @@ impl AgentView {
             BlockingCard::CancelTurn => EscStep::KeepRunning,
             BlockingCard::Question => {
                 let qv = self.question_view.as_ref()?;
-                if qv.focus == QuestionFocus::InputMode {
+                if matches!(
+                    qv.local_kind.as_ref(),
+                    Some(
+                        crate::views::question_view::LocalQuestionKind::CreditLimitUpsell { .. }
+                            | crate::views::question_view::LocalQuestionKind::FreeUsageUpsell { .. }
+                    )
+                ) {
+                    EscStep::DismissUpsell
+                } else if qv.focus == QuestionFocus::InputMode {
                     if self.prompt.file_search_visible() {
                         EscStep::DismissFileSearch
                     } else if qv.is_feedback() {
@@ -238,6 +250,7 @@ impl AgentView {
                 }
             }
             EscStep::DismissFeedbackPane => return self.submit_question_answers(true),
+            EscStep::DismissUpsell => return self.submit_question_answers(true),
             EscStep::DiscardPatternEdit => {
                 self.permission_pattern_edit = None;
                 self.permission_back_to_options();

@@ -26,6 +26,9 @@ pub(super) fn handle_models_update(notif: &acp::ExtNotification, app: &mut AppVi
         app.models = app_models;
 
         for agent in app.agents.values_mut() {
+            let previous_model = agent.session.models.current.clone();
+            let previous_effort = agent.session.models.reasoning_effort;
+            let previous_provider = agent.session.models.current_provider_id();
             // Log when an update drops the agent's active model — this is the
             // moment the status bar visibly "switches model mid-conversation"
             // (the agent falls back to the shell's current model below).
@@ -43,6 +46,12 @@ pub(super) fn handle_models_update(notif: &acp::ExtNotification, app: &mut AppVi
                 .session
                 .models
                 .update_catalog(new_models.available.clone(), shell_fallback_current.clone());
+            if agent.session.models.current != previous_model
+                || agent.session.models.reasoning_effort != previous_effort
+                || agent.session.models.current_provider_id() != previous_provider
+            {
+                agent.remote_usage.clear();
+            }
         }
         true
     } else {

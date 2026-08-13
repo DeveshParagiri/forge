@@ -1,6 +1,6 @@
 //! Permission request selection, follow-up, cancellation, and queue draining.
 
-use super::modes::set_yolo_mode;
+use super::modes::{set_yolo_mode, set_yolo_mode_for_agent};
 use crate::app::actions::Effect;
 use crate::app::agent_view::AgentView;
 use crate::app::app_view::{ActiveView, AppView};
@@ -131,14 +131,59 @@ pub(super) fn dispatch_permission_select(
     let ActiveView::Agent(id) = app.active_view else {
         return vec![];
     };
+    dispatch_permission_select_for_agent(app, id, None, option_id, true).unwrap_or_default()
+}
+
+/// Resolve the front permission card for a session-pinned remote client.
+/// The expected tool-call id is checked before consuming the response sender,
+/// which makes a terminal-first/phone-first race deterministic and harmless.
+pub(crate) fn dispatch_remote_permission_select(
+    app: &mut AppView,
+    id: crate::app::agent::AgentId,
+    expected_tool_call_id: &str,
+    option_id: acp::PermissionOptionId,
+) -> Result<Vec<Effect>, String> {
+    dispatch_permission_select_for_agent(app, id, Some(expected_tool_call_id), option_id, false)
+}
+
+fn dispatch_permission_select_for_agent(
+    app: &mut AppView,
+    id: crate::app::agent::AgentId,
+    expected_tool_call_id: Option<&str>,
+    option_id: acp::PermissionOptionId,
+    use_terminal_pattern: bool,
+) -> Result<Vec<Effect>, String> {
     let Some(agent) = app.agents.get_mut(&id) else {
-        return vec![];
+        return Err("The armed Forge session is no longer available.".into());
     };
+    let Some(front) = agent.permission_queue.front() else {
+        return Err("This interaction was already resolved.".into());
+    };
+    if let Some(expected) = expected_tool_call_id
+        && front.request.request.tool_call.tool_call_id.0.as_ref() != expected
+    {
+        return Err("This interaction was already resolved.".into());
+    }
+    if !front
+        .options
+        .iter()
+        .any(|option| option.option_id == option_id)
+    {
+        return Err("That permission option is not available.".into());
+    }
     let Some(perm) = agent.permission_queue.pop_front() else {
-        return vec![];
+        return Err("This interaction was already resolved.".into());
     };
 
-    let edited_pattern = take_edited_pattern(agent, &perm);
+    let edited_pattern = if use_terminal_pattern {
+        take_edited_pattern(agent, &perm)
+    } else {
+        // A phone choice must not accidentally consume a half-edited pattern
+        // from the laptop composer. The remote UI exposes only the advertised
+        // immutable options in its first implementation.
+        agent.permission_pattern_edit = None;
+        None
+    };
 
     // Detect the "enable always-approve mode" id BEFORE moving option_id
     // into the response. Cheap str compare on the `Arc<str>` interior.
@@ -174,16 +219,24 @@ pub(super) fn dispatch_permission_select(
 
     let meta = build_selection_meta(&perm, &option_id, edited_pattern);
 
-    perm.request
+    let response_sent = perm
+        .request
         .response_tx
         .send(Ok(acp::RequestPermissionResponse::new(
             acp::RequestPermissionOutcome::Selected(acp::SelectedPermissionOutcome::new(option_id)),
         )
         .meta(meta)))
-        .ok();
+        .is_ok();
 
     // Queue transition: restore prompt if queue is now empty, clear if next-front.
     resolve_permission_queue_transition(agent);
+    if !response_sent {
+        return if expected_tool_call_id.is_some() {
+            Err("This interaction was already resolved.".into())
+        } else {
+            Ok(vec![])
+        };
+    }
 
     // "Enable always-approve" side effect: flip YOLO + persist + notify.
     // Reuses the existing `set_yolo_mode` pipeline so telemetry, queue
@@ -202,11 +255,15 @@ pub(super) fn dispatch_permission_select(
             .map(|a| a.session.is_yolo())
             .unwrap_or(false);
         if !already_on {
-            return set_yolo_mode(app, true);
+            return Ok(if expected_tool_call_id.is_some() {
+                set_yolo_mode_for_agent(app, id, true)
+            } else {
+                set_yolo_mode(app, true)
+            });
         }
     }
 
-    vec![]
+    Ok(vec![])
 }
 
 /// Handle permission followup message (RejectOnce with user-typed text).
@@ -214,30 +271,48 @@ pub(super) fn dispatch_permission_followup(app: &mut AppView, text: String) -> V
     let ActiveView::Agent(id) = app.active_view else {
         return vec![];
     };
+    dispatch_permission_followup_for_agent(app, id, None, text).unwrap_or_default()
+}
+
+pub(crate) fn dispatch_remote_permission_followup(
+    app: &mut AppView,
+    id: crate::app::agent::AgentId,
+    expected_tool_call_id: &str,
+    text: String,
+) -> Result<Vec<Effect>, String> {
+    dispatch_permission_followup_for_agent(app, id, Some(expected_tool_call_id), text)
+}
+
+fn dispatch_permission_followup_for_agent(
+    app: &mut AppView,
+    id: crate::app::agent::AgentId,
+    expected_tool_call_id: Option<&str>,
+    text: String,
+) -> Result<Vec<Effect>, String> {
     let Some(agent) = app.agents.get_mut(&id) else {
-        return vec![];
+        return Err("The armed Forge session is no longer available.".into());
     };
-    let Some(perm) = agent.permission_queue.pop_front() else {
-        return vec![];
+    let Some(front) = agent.permission_queue.front() else {
+        return Err("This interaction was already resolved.".into());
     };
+    if let Some(expected) = expected_tool_call_id
+        && front.request.request.tool_call.tool_call_id.0.as_ref() != expected
+    {
+        return Err("This interaction was already resolved.".into());
+    }
 
     // Find the RejectOnce option.
-    let option_id = perm
+    let option_id = front
         .options
         .iter()
         .find(|o| o.kind == acp::PermissionOptionKind::RejectOnce)
         .map(|o| o.option_id.clone());
 
     let Some(option_id) = option_id else {
-        // No RejectOnce option — cancel instead.
-        perm.request
-            .response_tx
-            .send(Ok(acp::RequestPermissionResponse::new(
-                acp::RequestPermissionOutcome::Cancelled,
-            )))
-            .ok();
-        resolve_permission_queue_transition(agent);
-        return vec![];
+        return Err("This permission does not accept a follow-up message.".into());
+    };
+    let Some(perm) = agent.permission_queue.pop_front() else {
+        return Err("This interaction was already resolved.".into());
     };
 
     // Include followup message in meta.
@@ -251,16 +326,21 @@ pub(super) fn dispatch_permission_followup(app: &mut AppView, text: String) -> V
         None
     };
 
-    perm.request
+    let response_sent = perm
+        .request
         .response_tx
         .send(Ok(acp::RequestPermissionResponse::new(
             acp::RequestPermissionOutcome::Selected(acp::SelectedPermissionOutcome::new(option_id)),
         )
         .meta(meta)))
-        .ok();
+        .is_ok();
 
     resolve_permission_queue_transition(agent);
-    vec![]
+    if response_sent || expected_tool_call_id.is_none() {
+        Ok(vec![])
+    } else {
+        Err("This interaction was already resolved.".into())
+    }
 }
 
 /// Handle permission cancel (Ctrl-C / Esc — cancels front request only).
@@ -268,22 +348,51 @@ pub(super) fn dispatch_permission_cancel(app: &mut AppView) -> Vec<Effect> {
     let ActiveView::Agent(id) = app.active_view else {
         return vec![];
     };
+    dispatch_permission_cancel_for_agent(app, id, None).unwrap_or_default()
+}
+
+pub(crate) fn dispatch_remote_permission_cancel(
+    app: &mut AppView,
+    id: crate::app::agent::AgentId,
+    expected_tool_call_id: &str,
+) -> Result<Vec<Effect>, String> {
+    dispatch_permission_cancel_for_agent(app, id, Some(expected_tool_call_id))
+}
+
+fn dispatch_permission_cancel_for_agent(
+    app: &mut AppView,
+    id: crate::app::agent::AgentId,
+    expected_tool_call_id: Option<&str>,
+) -> Result<Vec<Effect>, String> {
     let Some(agent) = app.agents.get_mut(&id) else {
-        return vec![];
+        return Err("The armed Forge session is no longer available.".into());
     };
+    let Some(front) = agent.permission_queue.front() else {
+        return Err("This interaction was already resolved.".into());
+    };
+    if let Some(expected) = expected_tool_call_id
+        && front.request.request.tool_call.tool_call_id.0.as_ref() != expected
+    {
+        return Err("This interaction was already resolved.".into());
+    }
     let Some(perm) = agent.permission_queue.pop_front() else {
-        return vec![];
+        return Err("This interaction was already resolved.".into());
     };
 
-    perm.request
+    let response_sent = perm
+        .request
         .response_tx
         .send(Ok(acp::RequestPermissionResponse::new(
             acp::RequestPermissionOutcome::Cancelled,
         )))
-        .ok();
+        .is_ok();
 
     resolve_permission_queue_transition(agent);
-    vec![]
+    if response_sent || expected_tool_call_id.is_none() {
+        Ok(vec![])
+    } else {
+        Err("This interaction was already resolved.".into())
+    }
 }
 
 /// Drain all queued permission requests, sending `Cancelled` to each.

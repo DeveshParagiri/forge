@@ -3179,6 +3179,161 @@ pub(crate) fn execute(
                     }
                 });
         }
+        Effect::ForgeRemoteControl {
+            agent_id,
+            command,
+            session_id,
+            session_binding_epoch,
+        } => {
+            tasks.spawn(async move {
+                // Keep the pager binding and shell gateway one atomic lifecycle
+                // transaction across every await. A stale Start/Stop task must
+                // never replace or revoke a newer session's pairing.
+                let _remote_lifecycle = crate::forge::remote_bridge::lock_lifecycle().await;
+                let status = match command {
+                    crate::forge::remote_control::RemoteControlCommand::Start => {
+                        match xai_grok_shell::remote_control::check_tailscale().await {
+                            xai_grok_shell::remote_control::TailscalePrerequisite::Ready { dns_name } => {
+                                let transport = crate::forge::remote_bridge::arm(
+                                    agent_id,
+                                    session_id.clone(),
+                                    session_binding_epoch,
+                                ).await;
+                                let binding_generation = transport.binding_generation;
+                                match xai_grok_shell::remote_control::arm_active_gateway(
+                                    session_id.0.to_string(),
+                                    transport,
+                                ).await {
+                                    Ok(arm) if crate::forge::remote_bridge::bind_gateway_generation(
+                                        agent_id,
+                                        &session_id,
+                                        session_binding_epoch,
+                                        arm.gateway_generation,
+                                    ).await => match xai_grok_shell::remote_control::enable_private_tailscale_route(
+                                        binding_generation,
+                                        &dns_name,
+                                        &arm.session_id,
+                                        arm.gateway_generation,
+                                    ).await {
+                                        Ok(arm) => crate::forge::remote_control::RemoteControlStatus::live(
+                                            arm.remote_url.unwrap_or_default(),
+                                            arm.expires_at,
+                                        ),
+                                        Err(error) => crate::forge::remote_control::RemoteControlStatus::message(
+                                            "error",
+                                            error,
+                                        ),
+                                    },
+                                    Ok(arm) => {
+                                        crate::forge::remote_bridge::suspend_target(
+                                            agent_id,
+                                            &session_id,
+                                            session_binding_epoch,
+                                            xai_grok_shell::remote_control::RemoteRevocationReason::Stopped,
+                                        ).await;
+                                        if xai_grok_shell::remote_control::stop_gateway_generation_checked(
+                                            binding_generation,
+                                            arm.gateway_generation,
+                                            xai_grok_shell::remote_control::RemoteRevocationReason::Stopped,
+                                        ).await.is_ok() {
+                                            crate::forge::remote_bridge::forget_binding(binding_generation).await;
+                                        }
+                                        crate::forge::remote_control::RemoteControlStatus::message(
+                                            "error",
+                                            "Forge Remote could not bind the gateway to this exact live session.",
+                                        )
+                                    }
+                                    Err(error) => {
+                                        crate::forge::remote_bridge::suspend_target(
+                                            agent_id,
+                                            &session_id,
+                                            session_binding_epoch,
+                                            xai_grok_shell::remote_control::RemoteRevocationReason::Stopped,
+                                        ).await;
+                                        crate::forge::remote_control::RemoteControlStatus::message("error", error)
+                                    }
+                                }
+                            }
+                            prerequisite => crate::forge::remote_control::RemoteControlStatus::message(
+                                "tailscale_unavailable",
+                                prerequisite.user_message(),
+                            ),
+                        }
+                    }
+                    crate::forge::remote_control::RemoteControlCommand::Status => {
+                        match crate::forge::remote_bridge::binding_for_target(
+                            agent_id,
+                            &session_id,
+                            session_binding_epoch,
+                        ).await {
+                            Some(binding) => match xai_grok_shell::remote_control::active_gateway_arm(
+                                binding.binding_generation,
+                            ).await {
+                                Some(arm) => match arm.remote_url {
+                                    Some(url) => crate::forge::remote_control::RemoteControlStatus::live(
+                                        url,
+                                        arm.expires_at,
+                                    ),
+                                    None => crate::forge::remote_control::RemoteControlStatus::message(
+                                        "route_unavailable",
+                                        "Forge Remote is armed locally, but its private route is not active. Run `/rc` to retry.",
+                                    ),
+                                },
+                                None => crate::forge::remote_control::RemoteControlStatus::message(
+                                    "inactive",
+                                    "Forge Remote is not active for this session. Run `/rc` to create a fresh private link.",
+                                ),
+                            },
+                            None => crate::forge::remote_control::RemoteControlStatus::message(
+                                "inactive",
+                                "Forge Remote is not active for this session. Run `/rc` after Tailscale is configured on this Mac and your phone.",
+                            ),
+                        }
+                    }
+                    crate::forge::remote_control::RemoteControlCommand::Stop => {
+                        let binding = crate::forge::remote_bridge::suspend_target(
+                            agent_id,
+                            &session_id,
+                            session_binding_epoch,
+                            xai_grok_shell::remote_control::RemoteRevocationReason::Stopped,
+                        ).await;
+                        match binding {
+                            Some(binding) => match xai_grok_shell::remote_control::stop_gateway_binding_checked(
+                                binding.binding_generation,
+                                xai_grok_shell::remote_control::RemoteRevocationReason::Stopped,
+                            ).await {
+                                Ok(stopped) => {
+                                    crate::forge::remote_bridge::forget_binding(binding.binding_generation).await;
+                                    crate::forge::remote_control::RemoteControlStatus::message(
+                                        "stopped",
+                                        if stopped {
+                                            "Forge Remote was revoked for this session. Forge removed only its exact private Tailscale route, if it had created one."
+                                        } else {
+                                            "Forge Remote is not active for this session."
+                                        },
+                                    )
+                                }
+                                Err(error) => crate::forge::remote_control::RemoteControlStatus::message(
+                                    "error",
+                                    format!("Forge Remote was revoked locally for this session, but its exact private route cleanup failed: {error}"),
+                                ),
+                            },
+                            None => crate::forge::remote_control::RemoteControlStatus::message(
+                                "stopped",
+                                "Forge Remote is not active for this session.",
+                            ),
+                        }
+                    }
+                };
+                TaskResult::ForgeRemoteControlComplete {
+                    agent_id,
+                    session_id,
+                    session_binding_epoch,
+                    command,
+                    result: Ok(status),
+                }
+            });
+        }
         Effect::ShareSession { agent_id, session_id } => {
             use xai_grok_shell::session::{ShareSessionRequest, ShareSessionResponse};
             let tx = acp_tx.clone();
@@ -3529,6 +3684,64 @@ pub(crate) fn execute(
                     }
                 });
         }
+        Effect::FetchRemoteUsage { identity } => {
+            let tx = acp_tx.clone();
+            tasks.spawn(async move {
+                let (context, session) = tokio::join!(
+                    fetch_session_info(&identity.session_id, &tx),
+                    fetch_session_usage(&identity.session_id, &tx),
+                );
+                let context = context.map(|info| {
+                    crate::forge::remote_usage::context_from_info(&info.data.context)
+                });
+                let session = session
+                    .map(|usage| crate::forge::remote_usage::session_from_usage(&usage));
+                let account = match identity.provider {
+                    Some(xai_grok_shell::agent::provider_auth::ProviderId::OpenaiCodex) => {
+                        xai_grok_shell::agent::provider_auth::fetch_provider_usage(
+                            xai_grok_shell::agent::provider_auth::ProviderId::OpenaiCodex,
+                        )
+                        .await
+                        .map(|snapshot| {
+                            crate::forge::remote_usage::account_from_provider(&snapshot)
+                        })
+                        .map_err(|error| sanitize_user_error(&error.to_string()))
+                    }
+                    Some(xai_grok_shell::agent::provider_auth::ProviderId::Spacexai) => {
+                        fetch_billing_balance(&tx)
+                            .await
+                            .map(|(balance, tier)| {
+                                crate::forge::remote_usage::account_from_xai(
+                                    balance.as_ref(),
+                                    tier,
+                                )
+                            })
+                    }
+                    Some(xai_grok_shell::agent::provider_auth::ProviderId::Openrouter) => Ok(
+                        crate::forge::remote_usage::unavailable_account(
+                            identity.provider,
+                            "OpenRouter account usage is not available in Forge yet.",
+                        ),
+                    ),
+                    None => Ok(crate::forge::remote_usage::unavailable_account(
+                        None,
+                        "Account usage is unavailable because the active model's provider is unknown.",
+                    )),
+                };
+                let binding_current =
+                    crate::forge::remote_bridge::usage_request_is_current(&identity).await;
+                TaskResult::RemoteUsageComplete {
+                    identity,
+                    outcome: Box::new(crate::forge::remote_usage::RemoteUsageFetchOutcome {
+                        context,
+                        session,
+                        account,
+                        refreshed_at: crate::forge::remote_usage::refreshed_at_now(),
+                    }),
+                    binding_current,
+                }
+            });
+        }
         Effect::SendFeedback { agent_id, session_id, feedback_text } => {
             use xai_grok_shell::session::ClientType;
             use xai_grok_shell::session::acp_types::ClientFeedbackInput;
@@ -3660,7 +3873,14 @@ pub(crate) fn execute(
                     }
                 });
         }
-        Effect::SendBtw { agent_id, session_id, question, minimal_request_id } => {
+        Effect::SendBtw {
+            agent_id,
+            session_id,
+            session_binding_epoch,
+            request_id,
+            question,
+            minimal_request_id,
+        } => {
             let tx = acp_tx.clone();
             let is_api_key_auth = session_flags.is_api_key_auth;
             tasks
@@ -3690,6 +3910,9 @@ pub(crate) fn execute(
                                 .to_string();
                             TaskResult::BtwResponse {
                                 agent_id,
+                                session_id,
+                                session_binding_epoch,
+                                request_id,
                                 result: Ok(answer),
                                 minimal_request_id,
                             }
@@ -3697,6 +3920,9 @@ pub(crate) fn execute(
                         Err(e) => {
                             TaskResult::BtwResponse {
                                 agent_id,
+                                session_id,
+                                session_binding_epoch,
+                                request_id,
                                 result: Err(format_acp_error(&e, is_api_key_auth)),
                                 minimal_request_id,
                             }
@@ -4228,46 +4454,17 @@ pub(crate) fn execute(
             let tx = acp_tx.clone();
             tasks
                 .spawn(async move {
-                    use xai_grok_shell::extensions::billing::BillingConfigResponse;
-                    let req = acp::ExtRequest::new(
-                        "x.ai/billing",
-                        serde_json::value::to_raw_value(&serde_json::json!({}))
-                            .expect("serialize billing params")
-                            .into(),
-                    );
-                    let parsed = match acp_send(req, &tx).await {
-                        Ok(resp) => {
-                            let wrapper: serde_json::Value = serde_json::from_str(
-                                    resp.0.get(),
-                                )
-                                .unwrap_or_default();
-                            let result = wrapper.get("result").unwrap_or(&wrapper);
-                            serde_json::from_value::<
-                                BillingConfigResponse,
-                            >(result.clone())
-                        }
-                        Err(e) => {
+                    let (balance, subscription_tier) = match fetch_billing_balance(&tx).await {
+                        Ok(result) => result,
+                        Err(error) => {
                             return TaskResult::BillingError {
                                 agent_id,
-                                error: sanitize_user_error(&format!("{e}")),
+                                error,
                                 silent,
                                 nonce,
                             };
                         }
                     };
-                    let billing = match parsed {
-                        Ok(billing) => billing,
-                        Err(e) => {
-                            return TaskResult::BillingError {
-                                agent_id,
-                                error: format!("Parse error: {e}"),
-                                silent,
-                                nonce,
-                            };
-                        }
-                    };
-                    let subscription_tier = billing.subscription_tier;
-                    let balance = billing.config.map(credit_balance_from_config);
                     let autotopup = if has_prepaid_credits(balance.as_ref()) {
                         fetch_auto_topup_info(&tx).await
                     } else {
@@ -4577,6 +4774,39 @@ async fn fetch_session_usage(
             "invalid session usage response".to_string()
         })?;
     Ok(parsed.usage)
+}
+
+/// Canonical low-level `x.ai/billing` fetch shared by the terminal and remote
+/// usage surfaces. Presentation and cache mutation remain separate.
+async fn fetch_billing_balance(
+    tx: &AcpAgentTx,
+) -> Result<
+    (
+        Option<crate::views::credit_bar::CreditBalance>,
+        Option<String>,
+    ),
+    String,
+> {
+    use xai_grok_shell::extensions::billing::BillingConfigResponse;
+
+    let request = acp::ExtRequest::new(
+        "x.ai/billing",
+        serde_json::value::to_raw_value(&serde_json::json!({}))
+            .expect("serialize billing params")
+            .into(),
+    );
+    let response = acp_send(request, tx)
+        .await
+        .map_err(|error| sanitize_user_error(&error.to_string()))?;
+    let wrapper: serde_json::Value =
+        serde_json::from_str(response.0.get()).unwrap_or_default();
+    let result = wrapper.get("result").unwrap_or(&wrapper);
+    let billing: BillingConfigResponse = serde_json::from_value(result.clone())
+        .map_err(|error| format!("Parse error: {error}"))?;
+    Ok((
+        billing.config.map(credit_balance_from_config),
+        billing.subscription_tier,
+    ))
 }
 /// Look up the session title/summary from local persistence.
 async fn lookup_session_title(session_id: &acp::SessionId) -> Option<String> {

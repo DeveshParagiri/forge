@@ -675,6 +675,8 @@ pub enum Action {
     TaskComplete(TaskResult),
     /// Share the current session via URL.
     ShareSession,
+    /// Forge Remote: privately open the active session in the phone browser.
+    ForgeRemoteControl(crate::forge::remote_control::RemoteControlCommand),
     /// Show session info (auth, ID, cwd, model, context usage) instantly.
     ShowSessionInfo,
     /// Show release notes in a modal.
@@ -1912,6 +1914,13 @@ pub enum Effect {
         agent_id: AgentId,
         session_id: acp::SessionId,
     },
+    /// Start, inspect, or stop Forge’s private browser remote gateway.
+    ForgeRemoteControl {
+        agent_id: AgentId,
+        command: crate::forge::remote_control::RemoteControlCommand,
+        session_id: acp::SessionId,
+        session_binding_epoch: u32,
+    },
     /// Fetch and display session info via x.ai/session/info.
     /// Auth lines are derived in the effect from SessionFlags + env (not Effect fields).
     ShowSessionInfo {
@@ -1969,6 +1978,8 @@ pub enum Effect {
     SendBtw {
         agent_id: AgentId,
         session_id: acp::SessionId,
+        session_binding_epoch: u32,
+        request_id: uuid::Uuid,
         question: String,
         /// Correlates minimal responses; fullscreen leaves this unset.
         minimal_request_id: Option<uuid::Uuid>,
@@ -2122,6 +2133,11 @@ pub enum Effect {
         session_id: acp::SessionId,
         /// Usage-modal fetch generation; echoed back on the task result.
         nonce: u64,
+    },
+    /// Fetch all three structured Forge Remote usage scopes without opening a
+    /// terminal modal or writing to scrollback.
+    FetchRemoteUsage {
+        identity: crate::forge::remote_usage::RemoteUsageRequestIdentity,
     },
     /// Re-fetch remote settings to check subscription gate.
     RefreshGate,
@@ -2638,6 +2654,14 @@ pub enum TaskResult {
         agent_id: AgentId,
         error: String,
     },
+    /// Forge Remote operation completed.
+    ForgeRemoteControlComplete {
+        agent_id: AgentId,
+        session_id: acp::SessionId,
+        session_binding_epoch: u32,
+        command: crate::forge::remote_control::RemoteControlCommand,
+        result: Result<crate::forge::remote_control::RemoteControlStatus, String>,
+    },
     /// Session info fetched successfully.
     SessionInfoComplete {
         agent_id: AgentId,
@@ -2716,6 +2740,13 @@ pub enum TaskResult {
         error: String,
         nonce: u64,
     },
+    /// Structured Forge Remote usage refresh. The identity is revalidated
+    /// against both the live bridge and exact AgentView binding before apply.
+    RemoteUsageComplete {
+        identity: crate::forge::remote_usage::RemoteUsageRequestIdentity,
+        outcome: Box<crate::forge::remote_usage::RemoteUsageFetchOutcome>,
+        binding_current: bool,
+    },
     /// Feedback submitted successfully (fire-and-forget).
     FeedbackComplete {
         agent_id: AgentId,
@@ -2767,6 +2798,9 @@ pub enum TaskResult {
     /// Side question (/btw) response received.
     BtwResponse {
         agent_id: AgentId,
+        session_id: acp::SessionId,
+        session_binding_epoch: u32,
+        request_id: uuid::Uuid,
         result: Result<String, String>,
         /// Correlates minimal responses; fullscreen leaves this unset.
         minimal_request_id: Option<uuid::Uuid>,
