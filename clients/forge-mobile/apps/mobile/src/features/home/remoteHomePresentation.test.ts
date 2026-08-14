@@ -38,6 +38,7 @@ describe("Forge Remote Home project identity", () => {
     const first = remoteHomeProjectGroupKey("Devs-MacBook.ts.net", "/Users/dev/forge/");
 
     expect(remoteHomeProjectGroupKey("devs-macbook.ts.net", "/Users/dev/forge")).toBe(first);
+    expect(remoteHomeProjectGroupKey("devs-macbook.ts.net", "/Users/dev/Forge")).toBe(first);
     expect(remoteHomeProjectGroupKey("other-mac.ts.net", "/Users/dev/forge")).not.toBe(first);
     expect(remoteHomeProjectGroupKey("Devs-MacBook.ts.net", "/Users/dev/other")).not.toBe(first);
   });

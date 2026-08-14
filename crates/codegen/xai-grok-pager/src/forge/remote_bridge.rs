@@ -776,13 +776,29 @@ pub(crate) async fn execute_request(app: &mut AppView, inbound: RemoteInbound) -
     let mut rejection_code = "command_rejected";
     let mut rejection_retryable = false;
     let result = match inbound.request.command {
-        RemoteCommand::Prompt { text } => {
-            if text.trim().is_empty() {
+        RemoteCommand::Prompt { text, images } => {
+            if text.trim().is_empty() && images.is_empty() {
                 Err("A prompt cannot be empty.".into())
             } else {
-                effects = crate::app::dispatch::dispatch_remote_prompt(app, target.agent_id, text);
+                effects = crate::app::dispatch::dispatch_remote_prompt(
+                    app,
+                    target.agent_id,
+                    text,
+                    images,
+                );
                 Ok(())
             }
+        }
+        RemoteCommand::PhoneReady => {
+            if let Some(agent) = app.agents.get_mut(&target.agent_id)
+                && matches!(
+                    agent.active_modal,
+                    Some(crate::views::modal::ActiveModal::ForgeRemote { .. })
+                )
+            {
+                agent.active_modal = None;
+            }
+            Ok(())
         }
         RemoteCommand::NewSession { .. } => {
             if source_has_pending_new_session(inbound.bridge_generation, gateway_generation) {
@@ -1039,8 +1055,9 @@ fn resolve_interaction(
 }
 
 /// Publish the authoritative target state. The first projection seeds the
-/// reconnectable watch snapshot; later changes are gap-safe full replacement
-/// deltas with monotonic revisions.
+/// reconnectable watch snapshot; later changes are monotonic, gap-safe deltas.
+/// Transcript-only streaming changes use compact tail splices, while every
+/// other change falls back to a full state replacement.
 pub(crate) async fn publish_state(app: &AppView) {
     let mut guard = bridges().lock().await;
     let binding_generations = guard.keys().copied().collect::<Vec<_>>();
@@ -1110,6 +1127,16 @@ fn publish_bridge_state(app: &AppView, active: &mut ActiveBridge) {
     let base_revision = active.revision;
     active.revision = active.revision.saturating_add(1).max(1);
     let session_id = active.target.session_id.0.to_string();
+    let delta_event = active
+        .last_session
+        .as_ref()
+        .and_then(|previous| transcript_splice_event(previous, &session, &session_id))
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "kind": "stateReplaced",
+                "session": session.clone(),
+            })
+        });
     active.last_session = Some(session.clone());
     active.snapshot_tx.send_replace(Some(RemoteSnapshot {
         session_id: session_id.clone(),
@@ -1121,12 +1148,49 @@ fn publish_bridge_state(app: &AppView, active: &mut ActiveBridge) {
             session_id,
             base_revision,
             revision: active.revision,
-            event: serde_json::json!({
-                "kind": "stateReplaced",
-                "session": session,
-            }),
+            event: delta_event,
         });
     }
+}
+
+/// Build a compact live transcript update when every non-transcript field is
+/// unchanged. Reconnects still read the complete authoritative watch snapshot;
+/// this event only avoids retransmitting and replacing that full snapshot for
+/// each streamed assistant, reasoning, or tool chunk.
+fn transcript_splice_event(
+    previous: &serde_json::Value,
+    next: &serde_json::Value,
+    session_id: &str,
+) -> Option<serde_json::Value> {
+    let previous_object = previous.as_object()?;
+    let next_object = next.as_object()?;
+    let previous_transcript = previous_object.get("transcript")?.as_array()?;
+    let next_transcript = next_object.get("transcript")?.as_array()?;
+
+    let same_non_transcript_fields = previous_object
+        .iter()
+        .filter(|(key, _)| key.as_str() != "transcript")
+        .all(|(key, value)| next_object.get(key) == Some(value))
+        && next_object
+            .iter()
+            .filter(|(key, _)| key.as_str() != "transcript")
+            .all(|(key, value)| previous_object.get(key) == Some(value));
+    if !same_non_transcript_fields {
+        return None;
+    }
+
+    let start = previous_transcript
+        .iter()
+        .zip(next_transcript)
+        .take_while(|(previous_item, next_item)| previous_item == next_item)
+        .count();
+    Some(serde_json::json!({
+        "kind": "transcriptSpliced",
+        "sessionId": session_id,
+        "start": start,
+        "deleteCount": previous_transcript.len().saturating_sub(start),
+        "items": next_transcript[start..].to_vec(),
+    }))
 }
 
 /// Send the command acknowledgement after its canonical effects have been
@@ -1836,6 +1900,7 @@ mod tests {
             "prompt",
             RemoteCommand::Prompt {
                 text: "from phone".into(),
+                images: Vec::new(),
             },
         )
         .await;
@@ -1847,6 +1912,64 @@ mod tests {
             [Effect::SendPrompt { agent_id, .. }] if *agent_id == AgentId(0)
         ));
         assert_eq!(app.agents[&AgentId(1)].scrollback.len(), 0);
+        revoke_all(RemoteRevocationReason::Stopped).await;
+    }
+
+    #[tokio::test]
+    async fn phone_ready_closes_the_pairing_qr_without_sending_a_prompt() {
+        let _test = bridge_test_lock().lock().await;
+        let mut app = crate::app::app_view::tests::test_app_with_agent();
+        crate::app::dispatch::dispatch(
+            crate::app::actions::Action::ForgeRemoteControl(
+                crate::forge::remote_control::RemoteControlCommand::Start,
+            ),
+            &mut app,
+        );
+        assert!(matches!(
+            app.agents[&AgentId(0)].active_modal,
+            Some(crate::views::modal::ActiveModal::ForgeRemote { .. })
+        ));
+        let transport = arm_test_app(&app, 81).await;
+        let execution = execute_request(
+            &mut app,
+            receive_command(&transport, 81, "phone-ready-1", RemoteCommand::PhoneReady).await,
+        )
+        .await;
+        assert!(matches!(execution.outcome, RemoteCommandOutcome::Ok));
+        assert!(execution.effects.is_empty());
+        assert!(app.agents[&AgentId(0)].active_modal.is_none());
+        revoke_all(RemoteRevocationReason::Stopped).await;
+    }
+
+    #[tokio::test]
+    async fn prompt_images_travel_as_content_blocks() {
+        let _test = bridge_test_lock().lock().await;
+        let mut app = crate::app::app_view::tests::test_app_with_agent();
+        let transport = arm_test_app(&app, 82).await;
+        let execution = execute_request(
+            &mut app,
+            receive_command(
+                &transport,
+                82,
+                "photo",
+                RemoteCommand::Prompt {
+                    text: "look at this".into(),
+                    images: vec![xai_grok_shell::remote_control::RemotePromptImage {
+                        name: "shot.png".into(),
+                        mime_type: "image/png".into(),
+                        data: "aaaa".into(),
+                    }],
+                },
+            )
+            .await,
+        )
+        .await;
+        assert!(matches!(execution.outcome, RemoteCommandOutcome::Ok));
+        assert!(matches!(
+            execution.effects.as_slice(),
+            [Effect::SendPromptBlocks { blocks, .. }]
+                if blocks.iter().any(|block| matches!(block, acp::ContentBlock::Image(_)))
+        ));
         revoke_all(RemoteRevocationReason::Stopped).await;
     }
 
@@ -1974,6 +2097,7 @@ mod tests {
             "reconnect",
             RemoteCommand::Prompt {
                 text: "wait".into(),
+                images: Vec::new(),
             },
         )
         .await;
@@ -2059,13 +2183,8 @@ mod tests {
         assert_eq!(first.revision, 1);
         assert_eq!(first.session["sessionId"], "test-session");
 
-        app.agents
-            .get_mut(&AgentId(0))
-            .unwrap()
-            .scrollback
-            .push_block(crate::scrollback::block::RenderBlock::user_prompt(
-                "new state",
-            ));
+        app.agents.get_mut(&AgentId(0)).unwrap().session.state =
+            crate::app::agent::AgentState::TurnRunning;
         publish_state(&app).await;
         let event = tokio::time::timeout(std::time::Duration::from_secs(1), events.recv())
             .await
@@ -2091,6 +2210,145 @@ mod tests {
         ));
         let reconnect = transport.snapshots.clone();
         assert_eq!(reconnect.borrow().as_ref().unwrap().revision, 2);
+        revoke_all(RemoteRevocationReason::Stopped).await;
+    }
+
+    #[tokio::test]
+    async fn streamed_assistant_reasoning_and_tool_changes_publish_transcript_splices() {
+        use crate::scrollback::block::RenderBlock;
+
+        let _test = bridge_test_lock().lock().await;
+        let mut app = crate::app::app_view::tests::test_app_with_agent();
+        let id = AgentId(0);
+        app.agents.get_mut(&id).unwrap().session.state = crate::app::agent::AgentState::TurnRunning;
+        let transport = arm_test_app(&app, 731).await;
+        let mut events = transport.events.subscribe();
+        publish_state(&app).await;
+        assert_eq!(transport.snapshots.borrow().as_ref().unwrap().revision, 1);
+        assert!(
+            transport.snapshots.borrow().as_ref().unwrap().session["transcript"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+
+        let assistant_id = {
+            let agent = app.agents.get_mut(&id).unwrap();
+            let entry_id = agent
+                .scrollback
+                .push_block(RenderBlock::agent_message("stream"));
+            agent.scrollback.set_entry_running(entry_id, true);
+            entry_id
+        };
+        publish_state(&app).await;
+        let (base, revision, assistant) = next_delta(&mut events).await;
+        assert_eq!((base, revision), (1, 2));
+        assert_eq!(assistant["kind"], "transcriptSpliced");
+        assert_eq!(assistant["sessionId"], "test-session");
+        assert_eq!(assistant["start"], 0);
+        assert_eq!(assistant["deleteCount"], 0);
+        assert_eq!(assistant["items"][0]["kind"], "assistant");
+        assert_eq!(assistant["items"][0]["text"], "stream");
+        assert_eq!(assistant["items"][0]["status"], "running");
+
+        app.agents
+            .get_mut(&id)
+            .unwrap()
+            .scrollback
+            .push_chunk_to_agent(assistant_id, "ed");
+        publish_state(&app).await;
+        let (base, revision, assistant_chunk) = next_delta(&mut events).await;
+        assert_eq!((base, revision), (2, 3));
+        assert_eq!(assistant_chunk["kind"], "transcriptSpliced");
+        assert_eq!(assistant_chunk["start"], 0);
+        assert_eq!(assistant_chunk["deleteCount"], 1);
+        assert_eq!(assistant_chunk["items"][0]["text"], "streamed");
+
+        {
+            let agent = app.agents.get_mut(&id).unwrap();
+            agent.scrollback.set_entry_running(assistant_id, false);
+            let reasoning_id = agent
+                .scrollback
+                .push_block(RenderBlock::thinking("checking the stream"));
+            agent.scrollback.set_entry_running(reasoning_id, true);
+        }
+        publish_state(&app).await;
+        let (base, revision, reasoning) = next_delta(&mut events).await;
+        assert_eq!((base, revision), (3, 4));
+        assert_eq!(reasoning["kind"], "transcriptSpliced");
+        assert_eq!(reasoning["sessionId"], "test-session");
+        assert!(
+            reasoning["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["kind"] == "reasoning"
+                    && item["text"] == "checking the stream"
+                    && item["status"] == "running")
+        );
+
+        let tool_id = {
+            let agent = app.agents.get_mut(&id).unwrap();
+            let reasoning_id = agent.scrollback.last().unwrap().id;
+            agent.scrollback.set_entry_running(reasoning_id, false);
+            let entry_id = agent
+                .scrollback
+                .push_block(RenderBlock::execute_with_output(
+                    "cargo check",
+                    "",
+                    None::<String>,
+                ));
+            agent.scrollback.set_entry_running(entry_id, true);
+            entry_id
+        };
+        publish_state(&app).await;
+        let (base, revision, tool) = next_delta(&mut events).await;
+        assert_eq!((base, revision), (4, 5));
+        assert_eq!(tool["kind"], "transcriptSpliced");
+        assert_eq!(tool["sessionId"], "test-session");
+        assert!(
+            tool["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["kind"] == "tool"
+                    && item["title"] == "Run"
+                    && item["status"] == "running")
+        );
+
+        app.agents
+            .get_mut(&id)
+            .unwrap()
+            .scrollback
+            .push_chunk_to_execute(tool_id, "Checking forge\n");
+        publish_state(&app).await;
+        let (base, revision, tool_chunk) = next_delta(&mut events).await;
+        assert_eq!((base, revision), (5, 6));
+        assert_eq!(tool_chunk["kind"], "transcriptSpliced");
+        assert_eq!(tool_chunk["sessionId"], "test-session");
+        assert_eq!(
+            tool_chunk["items"].as_array().unwrap().last().unwrap()["kind"],
+            "tool"
+        );
+        assert!(
+            tool_chunk["items"].as_array().unwrap().last().unwrap()["output"]
+                .as_str()
+                .unwrap()
+                .contains("Checking forge")
+        );
+
+        let reconnect = transport.snapshots.borrow().clone().unwrap();
+        assert_eq!(reconnect.revision, 6);
+        assert_eq!(reconnect.session["sessionId"], "test-session");
+        assert_eq!(reconnect.session["status"], "running");
+        assert_eq!(
+            reconnect.session["transcript"]
+                .as_array()
+                .unwrap()
+                .last()
+                .unwrap()["kind"],
+            "tool"
+        );
         revoke_all(RemoteRevocationReason::Stopped).await;
     }
 
@@ -2417,6 +2675,7 @@ mod tests {
                 "phone-prompt",
                 RemoteCommand::Prompt {
                     text: "prompt from phone".into(),
+                    images: Vec::new(),
                 },
             )
             .await,

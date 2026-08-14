@@ -2,6 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@t3tools/contracts";
 
 const files = new Map<string, { base64: string; deleted: boolean }>();
+const documentPickerMocks = vi.hoisted(() => ({
+  getDocumentAsync: vi.fn(),
+}));
+
+vi.mock("expo-document-picker", () => documentPickerMocks);
 
 vi.mock("expo-file-system", () => ({
   File: class {
@@ -39,6 +44,7 @@ vi.mock("./uuid", () => ({
 import {
   convertPastedImagesToAttachments,
   isOwnedPastedImageUri,
+  pickComposerImageFiles,
   toUploadChatImageAttachments,
 } from "./composerImages";
 
@@ -120,5 +126,38 @@ describe("native pasted image cleanup", () => {
     expect(files.get(rejected)?.deleted).toBe(true);
     expect(files.get(overflow)?.deleted).toBe(true);
     expect(files.get(userOwned)?.deleted).toBe(false);
+  });
+});
+
+describe("pickComposerImageFiles", () => {
+  beforeEach(() => {
+    files.clear();
+    documentPickerMocks.getDocumentAsync.mockReset();
+  });
+
+  it("uses the Files document browser and converts the selected image", async () => {
+    const uri = "file:///private/var/mobile/tmp/reference.png";
+    files.set(uri, { base64: "aGVsbG8=", deleted: false });
+    documentPickerMocks.getDocumentAsync.mockResolvedValue({
+      canceled: false,
+      assets: [{ uri, name: "reference.png", mimeType: "image/png", size: 5 }],
+    });
+
+    await expect(pickComposerImageFiles({ existingCount: 0 })).resolves.toEqual({
+      images: [
+        expect.objectContaining({
+          type: "image",
+          name: "reference.png",
+          mimeType: "image/png",
+          previewUri: uri,
+        }),
+      ],
+      error: null,
+    });
+    expect(documentPickerMocks.getDocumentAsync).toHaveBeenCalledWith({
+      type: "image/*",
+      multiple: true,
+      copyToCacheDirectory: true,
+    });
   });
 });

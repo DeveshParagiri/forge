@@ -3,7 +3,10 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   REMOTE_COMPOSER_EDITOR_MAX_HEIGHT,
   REMOTE_COMPOSER_EDITOR_MIN_HEIGHT,
+  REMOTE_COMPOSER_COLLAPSED_EDITOR_HEIGHT,
   REMOTE_COMPOSER_COLLAPSED_CHROME,
+  REMOTE_COMPOSER_COLLAPSED_HORIZONTAL_INSET,
+  REMOTE_COMPOSER_FOCUSED_HORIZONTAL_INSET,
   REMOTE_COMPOSER_EXPANDED_CHROME,
   REMOTE_COMPOSER_FOCUSED_CONTENT_INSET_HORIZONTAL,
   REMOTE_COMPOSER_FOCUSED_TEXT_INSET_HORIZONTAL,
@@ -22,9 +25,10 @@ describe("resolveRemoteComposerEditorHeight", () => {
     expect(resolveRemoteComposerEditorHeight(23.2)).toBe(REMOTE_COMPOSER_EDITOR_MIN_HEIGHT);
   });
 
-  it("keeps multiline input inside the compact focused top row", () => {
+  it("grows through several visible lines before capping the native editor", () => {
     expect(resolveRemoteComposerEditorHeight(31.2)).toBe(32);
-    expect(resolveRemoteComposerEditorHeight(61.2)).toBe(REMOTE_COMPOSER_EDITOR_MAX_HEIGHT);
+    expect(resolveRemoteComposerEditorHeight(61.2)).toBe(62);
+    expect(resolveRemoteComposerEditorHeight(109.2)).toBe(110);
     expect(resolveRemoteComposerEditorHeight(400)).toBe(REMOTE_COMPOSER_EDITOR_MAX_HEIGHT);
   });
 
@@ -51,9 +55,15 @@ describe("remote composer keyboard geometry", () => {
     );
   });
 
-  it("uses a 66pt closed pill and a 112pt focused reservation without changing retained T3", () => {
+  it("uses ChatGPT-style side insets: shorter idle pill, wider focused editor", () => {
+    expect(REMOTE_COMPOSER_COLLAPSED_HORIZONTAL_INSET).toBe(32);
+    expect(REMOTE_COMPOSER_FOCUSED_HORIZONTAL_INSET).toBe(13);
+  });
+
+  it("uses a 66pt closed pill and a 184pt focused reservation without changing retained T3", () => {
+    expect(REMOTE_COMPOSER_COLLAPSED_EDITOR_HEIGHT).toBe(32);
     expect(REMOTE_COMPOSER_COLLAPSED_CHROME).toBe(66);
-    expect(REMOTE_COMPOSER_EXPANDED_CHROME).toBe(112);
+    expect(REMOTE_COMPOSER_EXPANDED_CHROME).toBe(184);
     expect(
       resolveThreadComposerChrome({
         remoteOnly: true,
@@ -80,10 +90,11 @@ describe("remote composer keyboard geometry", () => {
     ).toBe(174);
   });
 
-  it("measures the focused two-level composer from 104pt to 112pt", () => {
+  it("measures the focused two-level composer from 104pt to its multiline cap", () => {
     expect(resolveRemoteComposerVisualChrome({ expanded: true, editorHeight: 28 })).toBe(104);
-    expect(resolveRemoteComposerVisualChrome({ expanded: true, editorHeight: 80 })).toBe(112);
-    expect(resolveRemoteComposerVisualChrome({ expanded: false, editorHeight: 80 })).toBe(66);
+    expect(resolveRemoteComposerVisualChrome({ expanded: true, editorHeight: 80 })).toBe(152);
+    expect(resolveRemoteComposerVisualChrome({ expanded: true, editorHeight: 400 })).toBe(184);
+    expect(resolveRemoteComposerVisualChrome({ expanded: false, editorHeight: 400 })).toBe(66);
   });
 
   it("keeps the sticky keyboard track active from iOS focus before visibility catches up", () => {

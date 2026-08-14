@@ -75,15 +75,21 @@ import { useThreadSettingsSheetPresentation } from "./use-thread-settings-sheet-
 import { forgeComposerAction } from "../../forge/protocol/composerCommand";
 import { showComposerQueueSummary } from "./remoteQueuePresentation";
 import {
+  REMOTE_COMPOSER_COLLAPSED_HORIZONTAL_INSET,
+  REMOTE_COMPOSER_COLLAPSED_EDITOR_HEIGHT,
   REMOTE_COMPOSER_CONTROL_ROW_HEIGHT,
   REMOTE_COMPOSER_EDITOR_MAX_HEIGHT,
   REMOTE_COMPOSER_EDITOR_MIN_HEIGHT,
   REMOTE_COMPOSER_FOCUSED_EDITOR_MIN_HEIGHT,
+  REMOTE_COMPOSER_FOCUSED_HORIZONTAL_INSET,
   REMOTE_COMPOSER_SURFACE_PADDING_HORIZONTAL,
   resolveComposerEditorContentInsetHorizontal,
   resolveRemoteComposerEditorHeight,
 } from "./remoteComposerLayout";
-import { remoteComposerPresentation } from "./remoteComposerPresentation";
+import {
+  remoteComposerAttachmentActions,
+  remoteComposerPresentation,
+} from "./remoteComposerPresentation";
 
 /**
  * Height of the collapsed composer (pill + vertical padding, excluding safe-area inset).
@@ -149,7 +155,9 @@ export interface ThreadComposerProps {
   readonly onSetRemoteFastMode?: (enabled: boolean) => void;
   /** Keeps the retained settings control as the entry point to Forge usage. */
   readonly remoteUsageAvailable?: boolean;
+  readonly remoteUsageLabel?: string;
   readonly onOpenUsage?: () => void;
+  readonly onPickDraftFiles?: () => Promise<void>;
 }
 
 /**
@@ -164,7 +172,7 @@ export interface ThreadComposerProps {
 // running alongside that translate reads as jitter. Snapping the layout and
 // letting the keyboard-synced slide be the only motion looks native there.
 const COMPOSER_LAYOUT_TRANSITION =
-  Platform.OS === "android" ? undefined : LinearTransition.duration(220);
+  Platform.OS === "android" ? undefined : LinearTransition.duration(180);
 
 export function ComposerSurface(props: {
   readonly children: ReactNode;
@@ -312,6 +320,7 @@ const RemoteComposerModelTrigger = memo(function RemoteComposerModelTrigger(prop
   readonly disabled?: boolean;
   readonly model: string;
   readonly reasoning?: string;
+  readonly usage?: string;
 }) {
   const iconColor = useThemeColor("--color-icon");
   const mutedColor = useThemeColor("--color-foreground-muted");
@@ -321,7 +330,7 @@ const RemoteComposerModelTrigger = memo(function RemoteComposerModelTrigger(prop
       accessibilityLabel={`Model and reasoning, current ${props.accessibilityLabel}`}
       accessibilityRole="button"
       disabled={props.disabled}
-      className="h-11 min-w-0 flex-row items-center justify-center gap-1.5 rounded-full px-2 active:bg-white/5"
+      className="h-11 min-w-0 flex-row items-center justify-end gap-1.5 rounded-full px-2 active:bg-white/5"
       style={({ pressed }) => ({ opacity: props.disabled ? 0.5 : pressed ? 0.72 : 1 })}
     >
       <SymbolView name="bolt.fill" size={17} tintColor={iconColor} type="monochrome" />
@@ -342,6 +351,16 @@ const RemoteComposerModelTrigger = memo(function RemoteComposerModelTrigger(prop
           {props.reasoning}
         </Text>
       ) : null}
+      {props.usage ? (
+        <Text
+          className="shrink text-sm font-t3-medium"
+          ellipsizeMode="tail"
+          numberOfLines={1}
+          style={{ color: mutedColor }}
+        >
+          {props.usage}
+        </Text>
+      ) : null}
     </Pressable>
   );
 });
@@ -349,6 +368,11 @@ const RemoteComposerModelTrigger = memo(function RemoteComposerModelTrigger(prop
 export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposerProps) {
   const isDarkMode = useColorScheme() === "dark";
   const foregroundColor = useThemeColor("--color-foreground");
+  const attachmentIconColor = String(useThemeColor("--color-icon"));
+  const remoteAttachmentActions = useMemo(
+    () => remoteComposerAttachmentActions(attachmentIconColor),
+    [attachmentIconColor],
+  );
   const bodyText = useScaledTextRole("body");
   const fallbackInputRef = useRef<ComposerEditorHandle>(null);
   const inputRef = props.editorRef ?? fallbackInputRef;
@@ -408,6 +432,18 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       setRemoteEditorHeight((current) => (current === nextHeight ? current : nextHeight));
     },
     [],
+  );
+  const handleRemoteAttachmentAction = useCallback(
+    ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
+      if (nativeEvent.event === "photos") {
+        void props.onPickDraftImages();
+        return;
+      }
+      if (nativeEvent.event === "files") {
+        void props.onPickDraftFiles?.();
+      }
+    },
+    [props.onPickDraftFiles, props.onPickDraftImages],
   );
   const running =
     props.selectedThread.session?.status === "running" ||
@@ -743,6 +779,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const remotePresentation = remoteComposerPresentation(
     modelDisplayLabel,
     providerOptionDescriptors,
+    props.remoteUsageLabel,
   );
   const settingsSummaryLabel = threadSettingsSummaryLabel({
     modelLabel: modelDisplayLabel,
@@ -768,7 +805,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             optionDescriptors: providerOptionDescriptors,
             runtimeMode: currentRuntimeMode,
             includeRuntime: !props.remoteOnly,
-            includeUsage: props.remoteOnly && props.remoteUsageAvailable === true,
+            includeUsage: false,
+            usageSummary: props.remoteOnly ? props.remoteUsageLabel : undefined,
             modelSelectionDisabled: remoteModelSelectionDisabled,
             fastMode: props.remoteOnly ? props.remoteFastMode : undefined,
           })
@@ -779,7 +817,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       providerOptionDescriptors,
       props.remoteOnly,
       props.remoteFastMode,
-      props.remoteUsageAvailable,
+      props.remoteUsageLabel,
       remoteModelSelectionDisabled,
       threadProviderGroups,
     ],
@@ -838,9 +876,14 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
 
   return (
     <Animated.View
-      className={props.remoteOnly ? "px-[13px]" : "px-4"}
+      className={props.remoteOnly ? undefined : "px-4"}
       layout={COMPOSER_LAYOUT_TRANSITION}
       style={{
+        paddingHorizontal: props.remoteOnly
+          ? isExpanded
+            ? REMOTE_COMPOSER_FOCUSED_HORIZONTAL_INSET
+            : REMOTE_COMPOSER_COLLAPSED_HORIZONTAL_INSET
+          : undefined,
         paddingTop: props.remoteOnly ? (isExpanded ? 2 : 6) : isExpanded ? 8 : 6,
         paddingBottom:
           (props.bottomInset ?? 0) +
@@ -925,7 +968,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           }
         >
           {/* Attachment strip — inside the card, above the text input */}
-          {isExpanded && !props.remoteOnly ? (
+          {isExpanded && props.draftAttachments.length > 0 ? (
             <Animated.View
               className={props.draftAttachments.length > 0 ? "pb-2.5" : undefined}
               entering={FadeIn.duration(160)}
@@ -939,13 +982,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             </Animated.View>
           ) : null}
 
-          {props.remoteOnly && !isExpanded && settingsMenu && settingsMenu.actions.length > 0 ? (
+          {props.remoteOnly && !isExpanded ? (
             <ControlPillMenu
-              actions={settingsMenu.actions}
-              onPressAction={({ nativeEvent }) => handleSettingsMenuAction(nativeEvent.event)}
+              actions={remoteAttachmentActions}
+              onPressAction={handleRemoteAttachmentAction}
             >
               <ControlPill
-                accessibilityLabel="Forge controls"
+                accessibilityLabel="Add photos or files"
                 className="bg-transparent"
                 icon="plus"
               />
@@ -996,10 +1039,10 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   ? {
                       height: isExpanded
                         ? Math.max(REMOTE_COMPOSER_FOCUSED_EDITOR_MIN_HEIGHT, remoteEditorHeight)
-                        : remoteEditorHeight,
+                        : REMOTE_COMPOSER_COLLAPSED_EDITOR_HEIGHT,
                       minHeight: isExpanded
                         ? REMOTE_COMPOSER_FOCUSED_EDITOR_MIN_HEIGHT
-                        : REMOTE_COMPOSER_EDITOR_MIN_HEIGHT,
+                        : REMOTE_COMPOSER_COLLAPSED_EDITOR_HEIGHT,
                       maxHeight: REMOTE_COMPOSER_EDITOR_MAX_HEIGHT,
                       ...(isExpanded ? {} : { paddingHorizontal: 4 }),
                     }
@@ -1064,37 +1107,29 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 marginTop: 4,
               }}
             >
-              {settingsMenu && settingsMenu.actions.length > 0 ? (
-                <ControlPillMenu
-                  actions={settingsMenu.actions}
-                  onPressAction={({ nativeEvent }) => handleSettingsMenuAction(nativeEvent.event)}
-                >
-                  <ControlPill
-                    accessibilityLabel="Forge controls"
-                    className="bg-transparent"
-                    icon="plus"
-                  />
-                </ControlPillMenu>
-              ) : (
+              <ControlPillMenu
+                actions={remoteAttachmentActions}
+                onPressAction={handleRemoteAttachmentAction}
+              >
                 <ControlPill
-                  accessibilityLabel="Forge controls unavailable"
+                  accessibilityLabel="Add photos or files"
                   className="bg-transparent"
-                  disabled
                   icon="plus"
                 />
-              )}
+              </ControlPillMenu>
 
-              <View className="min-w-0 flex-1 px-1">
+              <View className="min-w-0 flex-1 flex-row justify-end px-1">
                 {settingsMenu && settingsMenu.actions.length > 0 ? (
                   <ControlPillMenu
                     actions={settingsMenu.actions}
-                    style={{ width: "100%" }}
+                    style={{ maxWidth: "100%" }}
                     onPressAction={({ nativeEvent }) => handleSettingsMenuAction(nativeEvent.event)}
                   >
                     <RemoteComposerModelTrigger
                       accessibilityLabel={remotePresentation.accessibilityLabel}
                       model={remotePresentation.model}
                       reasoning={remotePresentation.reasoning}
+                      usage={remotePresentation.usage}
                     />
                   </ControlPillMenu>
                 ) : (
@@ -1103,6 +1138,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     disabled
                     model={remotePresentation.model}
                     reasoning={remotePresentation.reasoning}
+                    usage={remotePresentation.usage}
                   />
                 )}
               </View>

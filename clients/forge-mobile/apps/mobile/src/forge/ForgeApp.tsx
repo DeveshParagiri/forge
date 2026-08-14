@@ -74,6 +74,13 @@ import { scopedProjectKey } from "../lib/scopedEntities";
 import { appAtomRegistry } from "../state/atom-registry";
 import type { WorkspaceState } from "../state/workspaceModel";
 import { withNativeGlassHeaderItem } from "../features/layout/native-glass-header-items";
+import {
+  convertPastedImagesToAttachments,
+  pickComposerImageFiles,
+  pickComposerImages,
+  type DraftComposerImageAttachment,
+} from "../lib/composerImages";
+import { compactUsageLimitLabel } from "./usagePresentation";
 import { parseForgeComposerCommand } from "./protocol/composerCommand";
 import { drainQueuedPairing, openOrQueuePairing } from "./protocol/pendingNavigation";
 import { createPairingScanGate } from "./protocol/pairingScan";
@@ -646,6 +653,9 @@ function ForgeThreadScreen(props: NativeStackScreenProps<ForgeStackParams, "Thre
   const api = useForgeSessions();
   const session = api.sessions.find((entry) => entry.pairing.id === props.route.params.pairingId);
   const [draft, setDraft] = useState("");
+  const [draftAttachments, setDraftAttachments] = useState<
+    ReadonlyArray<DraftComposerImageAttachment>
+  >([]);
   const [newSessionFinalizing, setNewSessionFinalizing] = useState(false);
   const [userInputDrafts, setUserInputDrafts] = useState<
     Record<string, PendingUserInputDraftAnswer>
@@ -879,11 +889,25 @@ function ForgeThreadScreen(props: NativeStackScreenProps<ForgeStackParams, "Thre
 
   const connectionState = connectionPhase(session.connectionPhase);
   const openUsage = () => {
-    Keyboard.dismiss();
     if (session.snapshot?.capabilities.usage === true) {
       void api.refreshUsage(session.pairing.id);
     }
-    props.navigation.navigate("Usage", { pairingId: session.pairing.id });
+  };
+  const pickDraftImages = async () => {
+    const result = await pickComposerImages({ existingCount: draftAttachments.length });
+    if (result.error) Alert.alert("Attachments", result.error);
+    if (result.images.length > 0) {
+      setDraftAttachments((current) => [...current, ...result.images]);
+    }
+  };
+  const pickDraftFiles = async () => {
+    const result = await pickComposerImageFiles({ existingCount: draftAttachments.length });
+    if (result.error) {
+      Alert.alert("Attachments", result.error);
+    }
+    if (result.images.length > 0) {
+      setDraftAttachments((current) => [...current, ...result.images]);
+    }
   };
   return (
     <View className="flex-1 bg-screen">
@@ -916,7 +940,7 @@ function ForgeThreadScreen(props: NativeStackScreenProps<ForgeStackParams, "Thre
         activePendingUserInputAnswers={answers}
         respondingUserInputId={respondingUserInputId}
         draftMessage={draft}
-        draftAttachments={[]}
+        draftAttachments={draftAttachments}
         connectionStateLabel={connectionState}
         activeThreadBusy={session.snapshot?.status === "running"}
         environmentId={presentation.environmentId}
@@ -927,9 +951,20 @@ function ForgeThreadScreen(props: NativeStackScreenProps<ForgeStackParams, "Thre
         usesAutomaticContentInsets
         onOpenConnectionEditor={() => props.navigation.navigate("Pair")}
         onChangeDraftMessage={setDraft}
-        onPickDraftImages={async () => undefined}
-        onNativePasteImages={async () => undefined}
-        onRemoveDraftImage={() => undefined}
+        onPickDraftImages={pickDraftImages}
+        onPickDraftFiles={pickDraftFiles}
+        onNativePasteImages={async (uris) => {
+          const converted = await convertPastedImagesToAttachments({
+            uris,
+            existingCount: draftAttachments.length,
+          });
+          if (converted.length > 0) {
+            setDraftAttachments((current) => [...current, ...converted]);
+          }
+        }}
+        onRemoveDraftImage={(id) =>
+          setDraftAttachments((current) => current.filter((attachment) => attachment.id !== id))
+        }
         onStopThread={() => void api.cancel(session.pairing.id)}
         onSendMessage={async () => {
           const command = parseForgeComposerCommand(draft);
@@ -942,12 +977,27 @@ function ForgeThreadScreen(props: NativeStackScreenProps<ForgeStackParams, "Thre
           if (command.type === "btw" && session.snapshot?.capabilities.btw !== true) return null;
           if (command.type === "prompt" && session.snapshot?.capabilities.prompt !== true)
             return null;
+          const images = draftAttachments.flatMap((attachment) => {
+            const data = attachment.dataUrl.includes(",")
+              ? (attachment.dataUrl.split(",")[1] ?? "")
+              : attachment.dataUrl;
+            return data
+              ? [
+                  {
+                    name: attachment.name,
+                    mimeType: attachment.mimeType,
+                    data,
+                  },
+                ]
+              : [];
+          });
           const commandId =
             command.type === "btw"
               ? api.askBtw(session.pairing.id, command.question)
-              : api.sendPrompt(session.pairing.id, command.text);
+              : api.sendPrompt(session.pairing.id, command.text, images);
           if (!commandId) return null;
           setDraft("");
+          setDraftAttachments([]);
           return MessageId.make(commandId);
         }}
         onReconnectEnvironment={() => api.reconnect(session.pairing.id)}
@@ -1020,6 +1070,7 @@ function ForgeThreadScreen(props: NativeStackScreenProps<ForgeStackParams, "Thre
             session.snapshot?.modelSwitchPending === true,
         }}
         remoteUsageAvailable={session.snapshot?.capabilities.usage === true}
+        remoteUsageLabel={compactUsageLimitLabel(session.snapshot?.usage)}
         onOpenUsage={openUsage}
       />
     </View>

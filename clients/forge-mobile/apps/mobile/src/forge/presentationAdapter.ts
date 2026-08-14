@@ -30,6 +30,7 @@ import {
 import type { ForgeSessionView } from "./state/ForgeSessionsProvider";
 import type {
   InteractionResponse,
+  ItemStatus,
   RemoteInteraction,
   RemoteSessionSnapshot,
   RemoteTimelineItem,
@@ -91,6 +92,27 @@ function basename(cwd: string | undefined): string {
   return parts.at(-1) ?? "Forge";
 }
 
+export function compactRemoteToolTitle(title: string): string {
+  const normalized = title.replace(/[?!.]+$/g, "").trim();
+  if (/^run(?:\s+command)?$/i.test(normalized)) return "Run";
+  if (/^edit(?:\s+file)?$/i.test(normalized)) return "Edit";
+  if (/^read(?:\s+file)?$/i.test(normalized)) return "Read";
+  if (/^list(?:\s+directory)?$/i.test(normalized)) return "List";
+  if (/^(?:search(?:\s+memory)?|web search)$/i.test(normalized)) return "Search";
+  if (/^fetch(?:\s+website)?$/i.test(normalized)) return "Fetch";
+  return normalized || title.trim();
+}
+
+function isInternalSystemReminder(item: Extract<RemoteTimelineItem, { kind: "system" }>): boolean {
+  if (item.workDisclosure) return false;
+  const text = item.text.trim();
+  return (
+    text.length === 0 ||
+    /^worked for\b/i.test(text) ||
+    text.startsWith("Forge Remote is live for this exact session until")
+  );
+}
+
 function itemText(item: RemoteTimelineItem): string {
   switch (item.kind) {
     case "user":
@@ -118,27 +140,69 @@ function itemText(item: RemoteTimelineItem): string {
   }
 }
 
-function timelineActivity(
-  item: Extract<RemoteTimelineItem, { kind: "tool" | "background" }>,
-): ThreadFeedActivity {
-  const failed = item.status === "failed" || item.status === "cancelled";
+function timelineStatus(status: ItemStatus | undefined): ThreadFeedActivity["status"] {
+  if (status === "failed" || status === "cancelled") return "failure";
+  if (status === "complete") return "success";
+  return "neutral";
+}
+
+function thoughtActivity(item: {
+  readonly id: string;
+  readonly text: string;
+  readonly createdAt?: string;
+  readonly status?: ItemStatus;
+}): ThreadFeedActivity {
+  const detail = item.text.trim() || null;
   return {
     id: item.id,
     createdAt: item.createdAt ?? new Date(0).toISOString(),
     turnId: null,
-    summary: item.title,
-    detail: itemText(item) || null,
-    canExpand: Boolean(itemText(item)),
-    getFullDetail: () => itemText(item) || null,
-    getCopyText: () => [item.title, itemText(item)].filter(Boolean).join("\n\n"),
+    summary: "Thought",
+    detail,
+    canExpand: Boolean(detail),
+    getFullDetail: () => detail,
+    getCopyText: () => ["Thought", detail].filter(Boolean).join("\n\n"),
+    icon: "zap",
+    toolLike: true,
+    status: timelineStatus(item.status),
+  };
+}
+
+function timelineActivity(
+  item: Extract<RemoteTimelineItem, { kind: "tool" | "background" }>,
+): ThreadFeedActivity {
+  const title = compactRemoteToolTitle(item.title);
+  const detail = itemText(item) || null;
+  return {
+    id: item.id,
+    createdAt: item.createdAt ?? new Date(0).toISOString(),
+    turnId: null,
+    summary: title,
+    detail,
+    canExpand: Boolean(detail),
+    getFullDetail: () => detail,
+    getCopyText: () => [title, detail].filter(Boolean).join("\n\n"),
     icon: item.kind === "tool" ? "wrench" : "agent",
     toolLike: true,
-    status: failed ? "failure" : item.status === "complete" ? "success" : "neutral",
+    status: timelineStatus(item.status),
   };
 }
 
 function timelineFeedEntry(item: RemoteTimelineItem, fallbackDate: string): ThreadFeedEntry | null {
   const createdAt = safeDate(item.createdAt, fallbackDate);
+  if (item.kind === "system" && isInternalSystemReminder(item) && !item.workDisclosure) {
+    return null;
+  }
+  if (item.kind === "reasoning") {
+    const activity = thoughtActivity({ ...item, createdAt });
+    return {
+      type: "activity-group",
+      id: `activity:${item.id}`,
+      createdAt,
+      turnId: null,
+      activities: [activity],
+    };
+  }
   if (item.kind === "tool" || item.kind === "background") {
     const activity = timelineActivity({ ...item, createdAt });
     return {
@@ -147,6 +211,44 @@ function timelineFeedEntry(item: RemoteTimelineItem, fallbackDate: string): Thre
       createdAt,
       turnId: null,
       activities: [activity],
+    };
+  }
+  if (item.kind !== "user" && item.kind !== "assistant" && item.kind !== "error") {
+    if (item.kind === "system" && item.workDisclosure) {
+      const id = MessageId.make(`remote:${item.id}`);
+      return {
+        type: "message",
+        id,
+        createdAt,
+        message: {
+          id,
+          role: "assistant",
+          text: item.text,
+          attachments: [],
+          turnId: null,
+          streaming: false,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      };
+    }
+    const text = itemText(item);
+    if (!text) return null;
+    const id = MessageId.make(`remote:${item.id}`);
+    return {
+      type: "message",
+      id,
+      createdAt,
+      message: {
+        id,
+        role: "assistant",
+        text,
+        attachments: [],
+        turnId: null,
+        streaming: item.status === "running",
+        createdAt,
+        updatedAt: createdAt,
+      },
     };
   }
   const role = item.kind === "user" ? "user" : "assistant";

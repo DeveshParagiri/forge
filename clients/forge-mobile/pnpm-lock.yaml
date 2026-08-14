@@ -176,6 +176,9 @@ importers:
       expo-crypto:
         specifier: ~56.0.4
         version: 56.0.4(expo@56.0.12)
+      expo-document-picker:
+        specifier: ~56.0.4
+        version: 56.0.4(expo@56.0.12)
       expo-file-system:
         specifier: ~56.0.8
         version: 56.0.8(expo@56.0.12)(react-native@0.85.3(@babel/core@7.29.7(supports-color@8.1.1))(@react-native/metro-config@0.85.3(@babel/core@7.29.7(supports-color@8.1.1))(bufferutil@4.1.0)(supports-color@8.1.1)(utf-8-validate@6.0.6))(@types/react@19.2.16)(bufferutil@4.1.0)(react@19.2.3)(supports-color@8.1.1)(utf-8-validate@6.0.6))
@@ -3055,6 +3058,11 @@ packages:
 
   expo-crypto@56.0.4:
     resolution: {integrity: sha512-fRNEhoXRXgAWBpe3/hq5X+KXTit3OZqdiAGts1YvNEUHQb+H5591mpPac0Yw+sZg9pXcrjRnzo5AxvZaENpc7g==}
+    peerDependencies:
+      expo: '*'
+
+  expo-document-picker@56.0.4:
+    resolution: {integrity: sha512-75Apf74XNkYYohObIH19VZw42xpe0gmEnPccuzGXKVAzlvTYCfibSgW17F+6vt4paOfZEnAoZ1QFZM6dmaujRA==}
     peerDependencies:
       expo: '*'
 
@@ -7829,6 +7837,10 @@ snapshots:
       - supports-color
 
   expo-crypto@56.0.4(expo@56.0.12):
+    dependencies:
+      expo: 56.0.12(c3806a08c4c22108cd26d1000d7011f7)
+
+  expo-document-picker@56.0.4(expo@56.0.12):
     dependencies:
       expo: 56.0.12(c3806a08c4c22108cd26d1000d7011f7)
 

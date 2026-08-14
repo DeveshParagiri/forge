@@ -132,6 +132,88 @@ describe("Forge native remote socket", () => {
     remote.stop();
   });
 
+  it("applies continuous transcript splices without replacing authoritative session state", () => {
+    const { remote, socket, states } = harness();
+    connectAndSnapshot(socket, 4);
+    receive(socket, {
+      type: "delta",
+      protocolVersion: 1,
+      baseRevision: 4,
+      revision: 5,
+      event: {
+        kind: "transcriptSpliced",
+        sessionId: "session-123",
+        start: 0,
+        deleteCount: 0,
+        items: [{ id: "answer", kind: "assistant", text: "Partial response" }],
+      },
+    });
+    receive(socket, {
+      type: "delta",
+      protocolVersion: 1,
+      baseRevision: 5,
+      revision: 6,
+      event: {
+        kind: "transcriptSpliced",
+        sessionId: "session-123",
+        start: 0,
+        deleteCount: 1,
+        items: [{ id: "answer", kind: "assistant", text: "Partial response streamed" }],
+      },
+    });
+    expect(states.at(-1)?.revision).toBe(6);
+    expect(states.at(-1)?.snapshot).toMatchObject({
+      title: "Forge Remote",
+      status: "idle",
+      transcript: [{ id: "answer", kind: "assistant", text: "Partial response streamed" }],
+    });
+    remote.stop();
+  });
+
+  it("resyncs instead of applying an out-of-bounds transcript splice", () => {
+    const { remote, socket, states } = harness();
+    connectAndSnapshot(socket, 4);
+    receive(socket, {
+      type: "delta",
+      protocolVersion: 1,
+      baseRevision: 4,
+      revision: 5,
+      event: {
+        kind: "transcriptSpliced",
+        sessionId: "session-123",
+        start: 1,
+        deleteCount: 0,
+        items: [],
+      },
+    });
+    expect(states.at(-1)?.revision).toBe(4);
+    expect(socket.sent.map(JSON.parse)).toContainEqual(
+      expect.objectContaining({ type: "command", command: { type: "resync" } }),
+    );
+    remote.stop();
+  });
+
+  it("fails closed when a transcript splice targets another session", () => {
+    vi.useFakeTimers();
+    const { socket, states } = harness();
+    connectAndSnapshot(socket, 4);
+    receive(socket, {
+      type: "delta",
+      protocolVersion: 1,
+      baseRevision: 4,
+      revision: 5,
+      event: {
+        kind: "transcriptSpliced",
+        sessionId: "different-session",
+        start: 0,
+        deleteCount: 0,
+        items: [],
+      },
+    });
+    expect(states.at(-1)?.phase).toBe("error");
+    expect(states.at(-1)?.error).toMatch(/different session/i);
+  });
+
   it("rejects revision regression and resyncs rather than applying a gap", () => {
     const { remote, socket, states } = harness();
     connectAndSnapshot(socket, 4);

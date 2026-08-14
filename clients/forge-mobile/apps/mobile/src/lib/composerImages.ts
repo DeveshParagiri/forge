@@ -34,6 +34,14 @@ async function loadImagePicker() {
   }
 }
 
+async function loadDocumentPicker() {
+  try {
+    return await import("expo-document-picker");
+  } catch (error) {
+    throw new Error("File attachments are unavailable right now.", { cause: error });
+  }
+}
+
 async function loadClipboard() {
   try {
     return await import("expo-clipboard");
@@ -117,6 +125,80 @@ export async function pickComposerImages(input: { readonly existingCount: number
     images: nextImages,
     error,
   };
+}
+
+/**
+ * Opens the system document browser instead of the photo library. The current
+ * provider wire contract accepts image uploads only, so the Files app is
+ * intentionally filtered to the image documents it can actually send.
+ */
+export async function pickComposerImageFiles(input: { readonly existingCount: number }): Promise<{
+  readonly images: ReadonlyArray<DraftComposerImageAttachment>;
+  readonly error: string | null;
+}> {
+  const remainingSlots = PROVIDER_SEND_TURN_MAX_ATTACHMENTS - input.existingCount;
+  if (remainingSlots <= 0) {
+    return {
+      images: [],
+      error: `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} images per message.`,
+    };
+  }
+
+  let documentPicker: Awaited<ReturnType<typeof loadDocumentPicker>>;
+  try {
+    documentPicker = await loadDocumentPicker();
+  } catch (error) {
+    return {
+      images: [],
+      error: error instanceof Error ? error.message : "File attachments are unavailable right now.",
+    };
+  }
+
+  const result = await documentPicker.getDocumentAsync({
+    type: "image/*",
+    multiple: true,
+    copyToCacheDirectory: true,
+  });
+  if (result.canceled) {
+    return { images: [], error: null };
+  }
+
+  const { File } = await import("expo-file-system");
+  const nextImages: DraftComposerImageAttachment[] = [];
+  let error: string | null =
+    result.assets.length > remainingSlots
+      ? `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} images per message.`
+      : null;
+
+  for (const asset of result.assets.slice(0, remainingSlots)) {
+    const mimeType = (asset.mimeType ?? mimeTypeFromUri(asset.name)).toLowerCase();
+    if (!mimeType.startsWith("image/")) {
+      error = `Unsupported file type for '${asset.name}'.`;
+      continue;
+    }
+
+    try {
+      const base64 = await new File(asset.uri).base64();
+      const sizeBytes = asset.size ?? estimateBase64ByteSize(base64);
+      if (sizeBytes <= 0 || sizeBytes > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
+        error = `'${asset.name}' exceeds the 10 MB attachment limit.`;
+        continue;
+      }
+      nextImages.push({
+        id: uuidv4(),
+        type: "image",
+        name: asset.name,
+        mimeType,
+        sizeBytes,
+        dataUrl: `data:${mimeType};base64,${base64}`,
+        previewUri: asset.uri,
+      });
+    } catch {
+      error = `Failed to read '${asset.name}'.`;
+    }
+  }
+
+  return { images: nextImages, error };
 }
 
 export async function pasteComposerClipboard(input: { readonly existingCount: number }): Promise<{

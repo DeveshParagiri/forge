@@ -67,6 +67,7 @@ export function buildThreadSettingsMenu(input: {
   readonly runtimeMode: RuntimeMode;
   readonly includeRuntime?: boolean;
   readonly includeUsage?: boolean;
+  readonly usageSummary?: string;
   readonly modelSelectionDisabled?: boolean;
   readonly fastMode?: {
     readonly supported: boolean;
@@ -204,7 +205,14 @@ export function buildThreadSettingsMenu(input: {
     });
   }
 
-  if (input.includeUsage) {
+  if (input.usageSummary) {
+    actions.push({
+      id: "usage-summary",
+      title: input.usageSummary,
+      image: "chart.bar",
+      attributes: { disabled: true },
+    });
+  } else if (input.includeUsage) {
     const id = "usage";
     events.set(id, { type: "open-usage" });
     actions.push({ id, title: "Usage", image: "chart.bar" });

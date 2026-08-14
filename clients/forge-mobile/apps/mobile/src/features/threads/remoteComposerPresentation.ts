@@ -1,8 +1,17 @@
 import type { ProviderOptionDescriptor } from "@t3tools/contracts";
+import type { MenuAction } from "@react-native-menu/menu";
 
 import { providerOptionValueLabels } from "../../lib/providerOptions";
 
 const REMOTE_PROVIDER_SEPARATOR = " · ";
+
+/** Native, platform-recognized symbols for the two distinct attachment sources. */
+export function remoteComposerAttachmentActions(imageColor: string): MenuAction[] {
+  return [
+    { id: "photos", title: "Photos", image: "photo", imageColor },
+    { id: "files", title: "Files", image: "doc", imageColor },
+  ];
+}
 
 function titleCaseSlugToken(token: string): string {
   return /^[a-z]/.test(token) ? `${token[0]?.toUpperCase() ?? ""}${token.slice(1)}` : token;
@@ -37,7 +46,13 @@ export function compactRemoteModelLabel(input: string): string {
 export function remoteComposerPresentation(
   modelLabel: string,
   optionDescriptors: ReadonlyArray<ProviderOptionDescriptor>,
-): { readonly accessibilityLabel: string; readonly model: string; readonly reasoning?: string } {
+  usageLabel?: string,
+): {
+  readonly accessibilityLabel: string;
+  readonly model: string;
+  readonly reasoning?: string;
+  readonly usage?: string;
+} {
   const model = compactRemoteModelLabel(modelLabel);
   const reasoningDescriptor = optionDescriptors.find(
     (descriptor) => descriptor.id === "reasoningEffort",
@@ -46,9 +61,11 @@ export function remoteComposerPresentation(
     ? providerOptionValueLabels([reasoningDescriptor])[0]
     : undefined;
   const reasoning = verboseReasoning ? compactRemoteReasoningLabel(verboseReasoning) : undefined;
+  const usage = usageLabel?.trim() || undefined;
   return {
     model,
-    accessibilityLabel: [model, reasoning].filter(Boolean).join(" · "),
+    accessibilityLabel: [model, reasoning, usage].filter(Boolean).join(" · "),
     ...(reasoning ? { reasoning } : {}),
+    ...(usage ? { usage } : {}),
   };
 }

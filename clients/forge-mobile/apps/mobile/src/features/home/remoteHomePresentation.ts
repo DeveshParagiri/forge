@@ -33,7 +33,12 @@ export function remoteHomeEmptyState(hasPairings: boolean): RemoteHomeEmptyState
 
 /** Stable, bearer-free identity for one Mac directory on Remote Home. */
 export function remoteHomeProjectGroupKey(host: string, cwd: string): string {
-  return `remote-project:${host.trim().toLocaleLowerCase()}:${normalizeProjectPathForComparison(cwd)}`;
+  const normalizedHost = host.trim().toLocaleLowerCase();
+  // Forge Remote targets macOS hosts, whose default filesystems compare path
+  // names case-insensitively. Keep host identity in the key so two different
+  // Macs with the same directory spelling never collapse into one project.
+  const normalizedCwd = normalizeProjectPathForComparison(cwd).toLocaleLowerCase();
+  return `remote-project:${normalizedHost}:${normalizedCwd}`;
 }
 
 export function remoteHomeNewSessionActionPresentation(input: {

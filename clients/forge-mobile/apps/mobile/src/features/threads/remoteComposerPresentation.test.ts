@@ -1,6 +1,19 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { compactRemoteModelLabel, remoteComposerPresentation } from "./remoteComposerPresentation";
+import {
+  compactRemoteModelLabel,
+  remoteComposerAttachmentActions,
+  remoteComposerPresentation,
+} from "./remoteComposerPresentation";
+
+describe("remoteComposerAttachmentActions", () => {
+  it("keeps Photos and Files visually distinct with an explicit dark-mode-safe tint", () => {
+    expect(remoteComposerAttachmentActions("#f5f5f5")).toEqual([
+      { id: "photos", title: "Photos", image: "photo", imageColor: "#f5f5f5" },
+      { id: "files", title: "Files", image: "doc", imageColor: "#f5f5f5" },
+    ]);
+  });
+});
 
 describe("compactRemoteModelLabel", () => {
   it("shows the Forge model name without provider or GPT chrome", () => {
@@ -39,6 +52,11 @@ describe("compactRemoteModelLabel", () => {
       accessibilityLabel: "5.6 Sol · Ultra",
       model: "5.6 Sol",
       reasoning: "Ultra",
+    });
+    expect(remoteComposerPresentation("OpenAI · GPT-5.6 Sol", [], "138K / 500K")).toEqual({
+      accessibilityLabel: "5.6 Sol · 138K / 500K",
+      model: "5.6 Sol",
+      usage: "138K / 500K",
     });
   });
 });

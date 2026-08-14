@@ -184,21 +184,29 @@ export function ThreadWorkLog(props: {
                 className="rounded-md px-0.5 py-0"
               >
                 <View className="min-h-8 flex-row items-center gap-1.5">
-                  <View className="h-[18px] w-5 shrink-0 items-center justify-center">
-                    <SymbolView
-                      name={workRowSymbolName(row.icon)}
-                      size={13}
-                      weight="medium"
-                      tintColor={iconIsDestructive ? "#e11d48" : props.iconSubtleColor}
-                      type="monochrome"
-                    />
-                  </View>
+                  {/^(Run|Edit|Read|List|Search|Fetch|Thought)$/.test(row.summary) ? null : (
+                    <View className="h-[18px] w-5 shrink-0 items-center justify-center">
+                      <SymbolView
+                        name={workRowSymbolName(row.icon)}
+                        size={13}
+                        weight="medium"
+                        tintColor={iconIsDestructive ? "#e11d48" : props.iconSubtleColor}
+                        type="monochrome"
+                      />
+                    </View>
+                  )}
 
                   <Text className="min-w-0 flex-1 text-xs text-foreground" numberOfLines={1}>
                     <Text
                       className={cn(
-                        "font-t3-medium text-foreground",
-                        iconIsDestructive && "text-rose-600 dark:text-rose-400",
+                        "font-t3-medium",
+                        row.status === "success" && "text-emerald-600 dark:text-emerald-400",
+                        (row.status === "failure" || iconIsDestructive) &&
+                          "text-rose-600 dark:text-rose-400",
+                        row.status !== "success" &&
+                          row.status !== "failure" &&
+                          !iconIsDestructive &&
+                          "text-foreground-muted",
                       )}
                     >
                       {row.summary}
@@ -224,22 +232,6 @@ export function ThreadWorkLog(props: {
                           }
                           size={11}
                           tintColor={props.iconSubtleColor}
-                          type="monochrome"
-                        />
-                      ) : null}
-                    </View>
-                    <View className="h-4 w-4 items-center justify-center">
-                      {row.status ? (
-                        <SymbolView
-                          name={
-                            row.status === "failure"
-                              ? { ios: "xmark", android: "close" }
-                              : row.status === "success"
-                                ? { ios: "checkmark", android: "check" }
-                                : { ios: "minus", android: "remove" }
-                          }
-                          size={11}
-                          tintColor={row.status === "failure" ? "#e11d48" : props.iconSubtleColor}
                           type="monochrome"
                         />
                       ) : null}

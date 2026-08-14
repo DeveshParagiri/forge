@@ -66,7 +66,7 @@ static AUTO_THEME_CONFIG: Mutex<Option<AutoThemeConfig>> = Mutex::new(None);
 ///
 /// `dark_theme` and `light_theme` are the user-configured overrides read
 /// from `[ui].auto_dark_theme` and `[ui].auto_light_theme` in `config.toml`.
-/// When `None`, `to_theme_kind()` defaults to `GrokNight` / `GrokDay`.
+/// When `None`, `to_theme_kind()` defaults to `Forge` / `GrokDay`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AutoThemeConfig {
     pub dark_theme: Option<ThemeKind>,
@@ -169,7 +169,7 @@ pub fn invalidate_auto_theme_config() {
 /// Precedence:
 /// 1. Environment variable (`GROK_THEME` / `LC_GROK_THEME`)
 /// 2. Config file (`[ui].theme`)
-/// 3. Default: `GrokNight`
+/// 3. Default: `Forge`
 #[must_use]
 pub fn resolve_initial_theme() -> ThemeKind {
     resolve_initial_theme_from(env_theme_name().as_deref(), load_from_disk(), true)
@@ -228,8 +228,8 @@ fn resolve_from_config(config_theme: Option<ThemeKind>, osc11_fallback: bool) ->
         return kind;
     }
 
-    // Default: GrokNight
-    ThemeKind::GrokNight
+    // Default: Forge
+    ThemeKind::Forge
 }
 
 /// Map an optional appearance detection result to a concrete `ThemeKind`.
@@ -237,13 +237,13 @@ fn resolve_from_appearance(appearance: Option<system_appearance::SystemAppearanc
     let config = auto_theme_config();
     appearance
         .map(|a| system_appearance::to_theme_kind(a, config.dark_theme, config.light_theme))
-        .unwrap_or(ThemeKind::GrokNight)
+        .unwrap_or(ThemeKind::Forge)
 }
 
 /// Resolve "auto" by detecting system appearance and mapping via config.
 ///
 /// Returns the concrete `ThemeKind` based on the current system appearance
-/// and the user's dark/light theme mapping. Falls back to `GrokNight`
+/// and the user's dark/light theme mapping. Falls back to `Forge`
 /// when detection fails.
 ///
 /// Uses desktop APIs + env hints (no OSC 11) — safe to call at runtime while
@@ -473,7 +473,7 @@ mod tests {
             );
             assert!(is_auto_mode(), "auto must arm the appearance watcher");
 
-            assert_eq!(resolve_from_config(None, false), ThemeKind::GrokNight);
+            assert_eq!(resolve_from_config(None, false), ThemeKind::Forge);
         });
     }
 
@@ -512,7 +512,7 @@ mod tests {
         with_test_env(|| {
             system_appearance::set_mock(Some(system_appearance::SystemAppearance::Dark));
             let result = resolve_auto();
-            assert_eq!(result, ThemeKind::GrokNight);
+            assert_eq!(result, ThemeKind::Forge);
         });
     }
 
@@ -530,7 +530,7 @@ mod tests {
         with_test_env(|| {
             system_appearance::set_mock(None);
             let result = resolve_auto();
-            assert_eq!(result, ThemeKind::GrokNight);
+            assert_eq!(result, ThemeKind::Forge);
         });
     }
 
@@ -562,7 +562,7 @@ mod tests {
     fn resolve_from_config_no_config_returns_groknight() {
         with_test_env(|| {
             let result = resolve_from_config(None, true);
-            assert_eq!(result, ThemeKind::GrokNight);
+            assert_eq!(result, ThemeKind::Forge);
             assert!(!is_auto_mode());
         });
     }
@@ -584,7 +584,7 @@ mod tests {
         with_test_env(|| {
             system_appearance::set_mock(Some(system_appearance::SystemAppearance::Dark));
             let result = resolve_from_config(Some(ThemeKind::Auto), true);
-            assert_eq!(result, ThemeKind::GrokNight);
+            assert_eq!(result, ThemeKind::Forge);
             assert!(is_auto_mode(), "auto config must enable auto mode");
         });
     }
@@ -604,7 +604,7 @@ mod tests {
         with_test_env(|| {
             system_appearance::set_mock(None);
             let result = resolve_from_config(Some(ThemeKind::Auto), true);
-            assert_eq!(result, ThemeKind::GrokNight);
+            assert_eq!(result, ThemeKind::Forge);
             assert!(is_auto_mode(), "auto mode is set before detection");
         });
     }
@@ -638,7 +638,7 @@ mod tests {
             system_appearance::set_mock(Some(system_appearance::SystemAppearance::Dark));
             assert_eq!(
                 resolve_initial_theme_from(Some("auto"), Some(ThemeKind::TokyoNight), false),
-                ThemeKind::GrokNight
+                ThemeKind::Forge
             );
             assert!(is_auto_mode());
         });
@@ -783,7 +783,7 @@ mod tests {
                     Some(ThemeKind::TokyoNight),
                     true,
                 ),
-                ThemeKind::GrokNight
+                ThemeKind::Forge
             );
             assert!(is_auto_mode());
         });

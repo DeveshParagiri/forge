@@ -97,6 +97,68 @@ function message(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Forge native protocol usage", () => {
+  it("decodes bounded transcript splice deltas for near-real-time updates", () => {
+    const decoded = decodeServerMessage(
+      JSON.stringify({
+        type: "delta",
+        protocolVersion: 1,
+        baseRevision: 4,
+        revision: 5,
+        event: {
+          kind: "transcriptSpliced",
+          sessionId: "session-1",
+          start: 1,
+          deleteCount: 1,
+          items: [{ id: "answer", kind: "assistant", text: "Streaming now" }],
+        },
+      }),
+    );
+    expect(decoded).toEqual({
+      type: "delta",
+      protocolVersion: 1,
+      baseRevision: 4,
+      revision: 5,
+      event: {
+        kind: "transcriptSpliced",
+        sessionId: "session-1",
+        start: 1,
+        deleteCount: 1,
+        items: [{ id: "answer", kind: "assistant", text: "Streaming now" }],
+      },
+    });
+  });
+
+  it("rejects malformed transcript splice coordinates and items", () => {
+    for (const event of [
+      {
+        kind: "transcriptSpliced",
+        sessionId: "session-1",
+        start: -1,
+        deleteCount: 0,
+        items: [],
+      },
+      {
+        kind: "transcriptSpliced",
+        sessionId: "session-1",
+        start: 0,
+        deleteCount: 0,
+        items: [{ id: "answer", kind: "not-a-kind", text: "bad" }],
+      },
+    ]) {
+      expect(() =>
+        decodeServerMessage(
+          JSON.stringify({
+            type: "delta",
+            protocolVersion: 1,
+            baseRevision: 4,
+            revision: 5,
+            event,
+          }),
+        ),
+      ).toThrow(ProtocolDecodeError);
+    }
+  });
+
   it("decodes additive typed work-disclosure metadata without requiring it on old items", () => {
     const decoded = decodeServerMessage(
       message({

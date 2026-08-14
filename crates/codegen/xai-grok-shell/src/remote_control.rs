@@ -32,9 +32,11 @@ pub const REMOTE_PROTOCOL_VERSION: u16 = 1;
 
 const PAIRING_BYTES: usize = 32;
 const MAX_COMMAND_OUTPUT: usize = 64 * 1024;
-const MAX_REMOTE_MESSAGE_BYTES: usize = 128 * 1024;
+const MAX_REMOTE_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_COMMAND_ID_BYTES: usize = 128;
 const MAX_PROMPT_BYTES: usize = 64 * 1024;
+const MAX_PROMPT_IMAGES: usize = 8;
+const MAX_PROMPT_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 const MAX_SHORT_FIELD_BYTES: usize = 4 * 1024;
 const PAIRING_TTL: Duration = Duration::from_secs(8 * 60 * 60);
 const TAILSCALE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -216,7 +218,12 @@ impl RemoteArm {
 pub enum RemoteCommand {
     Prompt {
         text: String,
+        #[serde(default)]
+        images: Vec<RemotePromptImage>,
     },
+    /// Synthesized by the gateway after an authenticated client receives its
+    /// first session snapshot. The pager uses this to dismiss the `/rc` QR.
+    PhoneReady,
     /// Create a normal session in the cwd owned by this exact remote binding.
     /// No path is accepted from the client.
     NewSession {},
@@ -332,6 +339,14 @@ pub enum RemoteRevocationReason {
     Stopped,
     Expired,
     SessionClosed,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemotePromptImage {
+    pub name: String,
+    pub mime_type: String,
+    pub data: String,
 }
 
 #[derive(Debug, Clone)]
@@ -1330,6 +1345,13 @@ async fn remote_socket_session(socket: WebSocket, state: GatewayState) {
                         }).await;
                         break;
                     }
+                    // Deltas published before hello sit in the broadcast
+                    // buffer. The snapshot already contains those revisions, so
+                    // they must be skipped. Asking for a resync here stalls
+                    // the live stream.
+                    if next <= revision {
+                        continue;
+                    }
                     if base_revision != revision || next <= base_revision {
                         let _ = send_server_message(&mut writer, &ServerMessage::ResyncRequired {
                             protocol_version: REMOTE_PROTOCOL_VERSION,
@@ -1432,6 +1454,7 @@ async fn remote_socket_session(socket: WebSocket, state: GatewayState) {
                                 Ok(Some(next)) => {
                                     revision = next;
                                     hello_received = true;
+                                    notify_phone_ready(&state, client.generation);
                                 }
                                 Ok(None) => {
                                     let _ = send_protocol_error(&mut writer, "snapshotUnavailable", "Forge is still preparing the authoritative session snapshot. Retry hello shortly.", true).await;
@@ -1508,6 +1531,7 @@ async fn remote_socket_session(socket: WebSocket, state: GatewayState) {
                                         Ok(Some(next)) => {
                                             revision = next;
                                             hello_received = true;
+                                            notify_phone_ready(&state, client.generation);
                                             let _ = send_server_message(&mut writer, &ServerMessage::CommandResult {
                                                 protocol_version: REMOTE_PROTOCOL_VERSION,
                                                 command_id,
@@ -1657,15 +1681,45 @@ fn revoked(reason: RemoteRevocationReason) -> ServerMessage {
     }
 }
 
+fn notify_phone_ready(state: &GatewayState, client_generation: u64) {
+    let _ = state.commands.try_send(RemoteCommandRequest {
+        session_id: state.session_id.to_string(),
+        gateway_generation: state.generation,
+        client_generation,
+        command_id: format!("phone-ready-{client_generation}"),
+        command: RemoteCommand::PhoneReady,
+    });
+}
+
 fn valid_command_id(command_id: &str) -> bool {
     !command_id.is_empty()
         && command_id.len() <= MAX_COMMAND_ID_BYTES
         && !command_id.chars().any(char::is_control)
 }
 
+fn valid_remote_prompt(text: &str, images: &[RemotePromptImage]) -> bool {
+    if images.len() > MAX_PROMPT_IMAGES {
+        return false;
+    }
+    if text.trim().is_empty() && images.is_empty() {
+        return false;
+    }
+    if !text.is_empty() && (text.len() > MAX_PROMPT_BYTES || text.chars().any(char::is_control)) {
+        return false;
+    }
+    images.iter().all(|image| {
+        valid_nonempty(&image.name, MAX_SHORT_FIELD_BYTES)
+            && valid_nonempty(&image.mime_type, MAX_SHORT_FIELD_BYTES)
+            && image.mime_type.starts_with("image/")
+            && !image.data.is_empty()
+            && image.data.len() <= MAX_PROMPT_IMAGE_BYTES * 2
+    })
+}
+
 fn valid_remote_command(command: &RemoteCommand) -> bool {
     match command {
-        RemoteCommand::Prompt { text } => valid_nonempty(text, MAX_PROMPT_BYTES),
+        RemoteCommand::Prompt { text, images } => valid_remote_prompt(text, images),
+        RemoteCommand::PhoneReady => true,
         RemoteCommand::NewSession {} => true,
         RemoteCommand::AcceptNewSession { session_id } => {
             valid_nonempty(session_id, MAX_SHORT_FIELD_BYTES)
@@ -1742,10 +1796,15 @@ fn payload_session_matches(payload: &serde_json::Value, expected: &str) -> bool 
 }
 
 fn delta_payload_session_matches(event: &serde_json::Value, expected: &str) -> bool {
-    event.get("kind").and_then(serde_json::Value::as_str) == Some("stateReplaced")
-        && event
+    match event.get("kind").and_then(serde_json::Value::as_str) {
+        Some("stateReplaced") => event
             .get("session")
-            .is_some_and(|session| payload_session_matches(session, expected))
+            .is_some_and(|session| payload_session_matches(session, expected)),
+        Some("transcriptSpliced") => {
+            event.get("sessionId").and_then(serde_json::Value::as_str) == Some(expected)
+        }
+        _ => false,
+    }
 }
 
 fn constant_time_token_eq(candidate: &str, expected: &str) -> bool {
@@ -1878,6 +1937,31 @@ mod tests {
                 .await
                 .unwrap()
                 .0
+        }
+
+        async fn drain_phone_ready(&mut self) {
+            while let Ok(Some(request)) =
+                tokio::time::timeout(Duration::from_millis(50), self.command_rx.recv()).await
+            {
+                assert!(
+                    matches!(request.command, RemoteCommand::PhoneReady),
+                    "unexpected command while draining phone-ready: {:?}",
+                    request.command
+                );
+            }
+        }
+
+        async fn recv_user_command(&mut self) -> RemoteCommandRequest {
+            loop {
+                let request = self
+                    .command_rx
+                    .recv()
+                    .await
+                    .expect("command channel closed");
+                if !matches!(request.command, RemoteCommand::PhoneReady) {
+                    return request;
+                }
+            }
         }
 
         fn publish_snapshot(&self, revision: u64, marker: &str) {
@@ -2119,7 +2203,7 @@ mod tests {
     }
 
     #[test]
-    fn delta_rejects_cross_session_state_replacement() {
+    fn delta_rejects_cross_session_payloads() {
         assert!(delta_payload_session_matches(
             &serde_json::json!({
                 "kind":"stateReplaced",
@@ -2131,6 +2215,35 @@ mod tests {
             &serde_json::json!({
                 "kind":"stateReplaced",
                 "session":{"sessionId":"session-2"}
+            }),
+            "session-1"
+        ));
+        assert!(delta_payload_session_matches(
+            &serde_json::json!({
+                "kind":"transcriptSpliced",
+                "sessionId":"session-1",
+                "start":1,
+                "deleteCount":1,
+                "items":[]
+            }),
+            "session-1"
+        ));
+        assert!(!delta_payload_session_matches(
+            &serde_json::json!({
+                "kind":"transcriptSpliced",
+                "sessionId":"session-2",
+                "start":1,
+                "deleteCount":1,
+                "items":[]
+            }),
+            "session-1"
+        ));
+        assert!(!delta_payload_session_matches(
+            &serde_json::json!({
+                "kind":"transcriptSpliced",
+                "start":1,
+                "deleteCount":1,
+                "items":[]
             }),
             "session-1"
         ));
@@ -2228,7 +2341,8 @@ mod tests {
         )
         .is_err());
         assert!(!valid_remote_command(&RemoteCommand::Prompt {
-            text: " ".into()
+            text: " ".into(),
+            images: Vec::new(),
         }));
         assert!(!valid_command_id(""));
     }
@@ -2580,6 +2694,11 @@ mod tests {
         assert_eq!(connected["sessionId"], "session-live");
 
         send_hello(&mut socket).await;
+        let ready = tokio::time::timeout(Duration::from_secs(2), gateway.command_rx.recv())
+            .await
+            .expect("hello did not notify the pager")
+            .expect("command channel closed");
+        assert!(matches!(ready.command, RemoteCommand::PhoneReady));
         let snapshot = receive_server_json(&mut socket).await;
         assert_eq!(snapshot["type"], "snapshot");
         assert_eq!(snapshot["revision"], 4);
@@ -2599,17 +2718,17 @@ mod tests {
             }),
         )
         .await;
-        let request = tokio::time::timeout(Duration::from_secs(2), gateway.command_rx.recv())
+        let request = tokio::time::timeout(Duration::from_secs(2), gateway.recv_user_command())
             .await
-            .expect("gateway did not deliver the command")
-            .expect("pager command channel closed");
+            .expect("gateway did not deliver the command");
         assert_eq!(request.session_id, "session-live");
         assert_eq!(request.gateway_generation, 77);
         assert_eq!(request.command_id, "prompt-1");
         assert_eq!(
             request.command,
             RemoteCommand::Prompt {
-                text: "continue from my phone".into()
+                text: "continue from my phone".into(),
+                images: Vec::new(),
             }
         );
 
@@ -2786,6 +2905,7 @@ mod tests {
             .expect("first client did not claim ownership");
         send_hello(&mut first).await;
         assert_eq!(receive_server_json(&mut first).await["type"], "snapshot");
+        gateway.drain_phone_ready().await;
 
         let mut second = gateway.connect().await;
         assert_eq!(receive_server_json(&mut second).await["type"], "connected");
@@ -2844,10 +2964,9 @@ mod tests {
             }),
         )
         .await;
-        let request = tokio::time::timeout(Duration::from_secs(2), gateway.command_rx.recv())
+        let request = tokio::time::timeout(Duration::from_secs(2), gateway.recv_user_command())
             .await
-            .expect("current owner command timed out")
-            .expect("command channel closed");
+            .expect("current owner command timed out");
         assert_eq!(request.command_id, "current-prompt");
 
         second.close(None).await.unwrap();
@@ -2872,10 +2991,9 @@ mod tests {
             }),
         )
         .await;
-        let request = tokio::time::timeout(Duration::from_secs(2), gateway.command_rx.recv())
+        let request = tokio::time::timeout(Duration::from_secs(2), gateway.recv_user_command())
             .await
-            .expect("new-session command timed out")
-            .expect("command channel closed");
+            .expect("new-session command timed out");
 
         let mut second = gateway.connect().await;
         assert_eq!(receive_server_json(&mut second).await["type"], "connected");
@@ -3123,6 +3241,43 @@ mod tests {
         current.close(None).await.unwrap();
         drop(current);
         wait_for_client_owner(&gateway.state, None).await;
+    }
+
+    #[tokio::test]
+    async fn hello_snapshot_ignores_buffered_stale_deltas_and_keeps_live_updates() {
+        let gateway = LiveGatewayFixture::start(4, "before-hello").await;
+        let mut socket = gateway.connect().await;
+        assert_eq!(receive_server_json(&mut socket).await["type"], "connected");
+        gateway
+            .event_tx
+            .send(RemotePagerEvent::Delta {
+                session_id: "session-live".into(),
+                base_revision: 3,
+                revision: 4,
+                event: state_replaced("session-live", "already-in-snapshot"),
+            })
+            .unwrap();
+        gateway
+            .event_tx
+            .send(RemotePagerEvent::Delta {
+                session_id: "session-live".into(),
+                base_revision: 4,
+                revision: 5,
+                event: state_replaced("session-live", "live-after-hello"),
+            })
+            .unwrap();
+
+        send_hello(&mut socket).await;
+        assert_eq!(receive_server_json(&mut socket).await["type"], "snapshot");
+        let live = receive_server_json(&mut socket).await;
+        assert_eq!(live["type"], "delta");
+        assert_eq!(live["baseRevision"], 4);
+        assert_eq!(live["revision"], 5);
+        assert_eq!(
+            live["event"]["session"]["transcript"][0]["text"],
+            "live-after-hello"
+        );
+        socket.close(None).await.unwrap();
     }
 
     #[tokio::test]

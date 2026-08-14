@@ -1,8 +1,12 @@
 export const REMOTE_COMPOSER_EDITOR_MIN_HEIGHT = 28;
-export const REMOTE_COMPOSER_EDITOR_MAX_HEIGHT = 40;
+export const REMOTE_COMPOSER_COLLAPSED_EDITOR_HEIGHT = 32;
+/** Four comfortable body-text lines before the native editor starts scrolling. */
+export const REMOTE_COMPOSER_EDITOR_MAX_HEIGHT = 112;
 export const REMOTE_COMPOSER_FOCUSED_EDITOR_MIN_HEIGHT = 32;
 export const REMOTE_COMPOSER_CONTROL_ROW_HEIGHT = 44;
 export const REMOTE_COMPOSER_SURFACE_PADDING_HORIZONTAL = 6;
+export const REMOTE_COMPOSER_COLLAPSED_HORIZONTAL_INSET = 32;
+export const REMOTE_COMPOSER_FOCUSED_HORIZONTAL_INSET = 13;
 export const REMOTE_COMPOSER_FOCUSED_TEXT_INSET_HORIZONTAL = 16;
 /** Native inset after subtracting the card's own horizontal padding. */
 export const REMOTE_COMPOSER_FOCUSED_CONTENT_INSET_HORIZONTAL =
@@ -13,10 +17,10 @@ export const REMOTE_COMPOSER_COLLAPSED_CHROME = 66;
 
 /**
  * Maximum focused Forge composer reservation, excluding the device safe-area
- * inset: 2 outer top + 8 top + 40 editor + 4 gap + 44 controls + 4 bottom +
+ * inset: 2 outer top + 8 top + 112 editor + 4 gap + 44 controls + 4 bottom +
  * 10 outer bottom. The ten-point keyboard gap is intentional on older iOS.
  */
-export const REMOTE_COMPOSER_EXPANDED_CHROME = 112;
+export const REMOTE_COMPOSER_EXPANDED_CHROME = 184;
 
 export function resolveThreadComposerChrome(input: {
   readonly remoteOnly: boolean;

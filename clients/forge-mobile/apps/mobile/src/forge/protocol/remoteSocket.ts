@@ -112,10 +112,7 @@ export class ForgeRemoteSocket {
   private hasSnapshotForConnection = false;
   private pinnedSessionId: string | null = null;
   private readonly pendingCommands = new Map<string, PendingCommand>();
-  private readonly queuePendingTimerByCommandId = new Map<
-    string,
-    ReturnType<typeof setTimeout>
-  >();
+  private readonly queuePendingTimerByCommandId = new Map<string, ReturnType<typeof setTimeout>>();
   private state: ForgeRemoteSocketState = INITIAL_STATE;
 
   constructor(
@@ -228,9 +225,25 @@ export class ForgeRemoteSocket {
     this.connect();
   }
 
-  sendPrompt(text: string): string | null {
+  sendPrompt(
+    text: string,
+    images?: ReadonlyArray<{
+      readonly name: string;
+      readonly mimeType: string;
+      readonly data: string;
+    }>,
+  ): string | null {
     const trimmed = text.trim();
-    return trimmed ? this.sendCommand({ type: "prompt", text: trimmed }, { kind: "other" }) : null;
+    const attachments = images?.filter((image) => image.data.length > 0) ?? [];
+    if (!trimmed && attachments.length === 0) return null;
+    return this.sendCommand(
+      {
+        type: "prompt",
+        text: trimmed,
+        ...(attachments.length > 0 ? { images: [...attachments] } : {}),
+      },
+      { kind: "other" },
+    );
   }
 
   cancel(): string | null {
@@ -399,8 +412,11 @@ export class ForgeRemoteSocket {
         return;
       }
       case "delta": {
-        const nextSession = message.event.session;
-        if (!this.pinSession(nextSession.sessionId)) return;
+        const eventSessionId =
+          message.event.kind === "stateReplaced"
+            ? message.event.session.sessionId
+            : message.event.sessionId;
+        if (!this.pinSession(eventSessionId)) return;
         if (!this.state.snapshot || this.state.revision === null) {
           this.requestAuthoritativeSnapshot(
             "Forge sent an update before the authoritative session snapshot.",
@@ -413,6 +429,27 @@ export class ForgeRemoteSocket {
             "Some session updates were missed. Refreshing authoritative state.",
           );
           return;
+        }
+        let nextSession: RemoteSessionSnapshot;
+        if (message.event.kind === "stateReplaced") {
+          nextSession = message.event.session;
+        } else {
+          const { start, deleteCount, items } = message.event;
+          const transcript = this.state.snapshot.transcript;
+          if (start > transcript.length || deleteCount > transcript.length - start) {
+            this.requestAuthoritativeSnapshot(
+              "Forge sent an invalid transcript update. Refreshing authoritative state.",
+            );
+            return;
+          }
+          nextSession = {
+            ...this.state.snapshot,
+            transcript: [
+              ...transcript.slice(0, start),
+              ...items,
+              ...transcript.slice(start + deleteCount),
+            ],
+          };
         }
         this.patchState({
           phase: "connected",
@@ -566,7 +603,9 @@ export class ForgeRemoteSocket {
     if (changed) this.publishPendingCommands();
   }
 
-  private clearPendingCommands(preserveKinds: ReadonlySet<PendingCommand["kind"]> = new Set()): void {
+  private clearPendingCommands(
+    preserveKinds: ReadonlySet<PendingCommand["kind"]> = new Set(),
+  ): void {
     if (this.pendingCommands.size === 0) return;
     for (const [commandId, pending] of this.pendingCommands) {
       if (preserveKinds.has(pending.kind)) continue;

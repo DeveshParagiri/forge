@@ -168,7 +168,9 @@ export interface ThreadDetailScreenProps {
   };
   readonly onSetRemoteFastMode?: (enabled: boolean) => void;
   readonly remoteUsageAvailable?: boolean;
+  readonly remoteUsageLabel?: string;
   readonly onOpenUsage?: () => void;
+  readonly onPickDraftFiles?: () => Promise<void>;
 }
 
 function latestStreamingAssistantMessage(
@@ -821,7 +823,9 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 remoteFastMode={props.remoteFastMode}
                 onSetRemoteFastMode={props.onSetRemoteFastMode}
                 remoteUsageAvailable={props.remoteUsageAvailable}
+                remoteUsageLabel={props.remoteUsageLabel}
                 onOpenUsage={props.onOpenUsage}
+                onPickDraftFiles={props.onPickDraftFiles}
               />
             </View>
           </View>

@@ -1,8 +1,7 @@
-//! Forge UI package theme — warm dark prompt chrome on a GrokNight base.
+//! Forge UI package theme — Oscura Midnight purple accents on a deep dark base.
 //!
-//! The original palette was inspired by Claude Code dark:
-//! - `promptBorder` / `promptBorderShimmer` for input frame
-//! - `userMessageBackground` for user-message / elevated fills
+//! The purple, code, and background colors follow the `oscura-midnight` theme
+//! so Forge keeps the same visual language as the rest of the pager.
 //!
 //! The package default that hides the shortcuts footer lives in the sibling
 //! Forge policy module; keyboard behavior is intentionally theme-independent.
@@ -15,136 +14,121 @@ const fn rgb(r: u8, g: u8, b: u8) -> Color {
     Color::Rgb(r, g, b)
 }
 
-// Start from the same gray ramp as GrokNight, then override chatbox chrome.
+// Forge uses the Oscura Midnight palette for its core surfaces, purple brand
+// accents, and markdown/code rendering. Keep these values aligned with
+// theme/oscura.rs rather than maintaining a second visual direction.
 #[allow(dead_code)]
 mod palette {
     use super::*;
 
-    pub const BG: Color = rgb(10, 10, 10);
-    pub const BG_DARK: Color = rgb(12, 12, 12);
-    pub const BG_STORM_DARK: Color = rgb(17, 17, 17);
-    pub const BG_STORM: Color = rgb(20, 20, 20);
-    pub const BG_HIGHLIGHT: Color = rgb(36, 36, 36);
+    // Oscura Midnight backgrounds.
+    pub const BASE: Color = rgb(3, 3, 4);
+    pub const SURFACE: Color = rgb(4, 5, 7);
+    pub const ELEVATED: Color = rgb(15, 18, 22);
+    pub const HIGHLIGHT_MED: Color = rgb(36, 32, 52);
+    pub const HIGHLIGHT_HIGH: Color = rgb(52, 48, 72);
 
-    pub const FG: Color = rgb(225, 225, 225);
-    pub const FG_DARK: Color = rgb(200, 200, 200);
-    pub const FG_GUTTER: Color = rgb(65, 65, 65);
-    pub const COMMENT: Color = rgb(108, 108, 108);
-    pub const DARK3: Color = rgb(90, 90, 90);
-    pub const DARK5: Color = rgb(120, 120, 120);
+    // Oscura Midnight text and muted ramp.
+    pub const TEXT: Color = rgb(228, 228, 228);
+    pub const TEXT_DIM: Color = rgb(190, 190, 190);
+    pub const MUTED: Color = rgb(129, 134, 143);
+    pub const SUBTLE: Color = rgb(94, 100, 108);
 
-    pub const BLUE: Color = rgb(122, 162, 247);
-    pub const BLUE0: Color = rgb(61, 89, 161);
-    pub const BLUE1: Color = rgb(58, 149, 171);
-    pub const CYAN: Color = rgb(125, 207, 255);
-    pub const GREEN: Color = rgb(158, 206, 106);
-    pub const GREEN1: Color = rgb(115, 218, 202);
-    pub const MAGENTA: Color = rgb(187, 154, 247);
-    pub const ORANGE: Color = rgb(255, 158, 100);
-    pub const PURPLE: Color = rgb(157, 124, 216);
-    pub const RED: Color = rgb(247, 118, 142);
-    pub const RED1: Color = rgb(219, 75, 75);
-    pub const TEAL: Color = rgb(26, 188, 156);
-    pub const YELLOW: Color = rgb(224, 175, 104);
+    // Oscura Midnight semantic/accent colors.
+    pub const GOLD: Color = rgb(235, 217, 110);
+    pub const RED: Color = rgb(220, 90, 100);
+    pub const TEAL: Color = rgb(80, 180, 140);
+    pub const AMBER: Color = rgb(241, 189, 0);
+    pub const PURPLE: Color = rgb(155, 126, 206);
+    pub const PURPLE_DIM: Color = rgb(110, 90, 154);
+    pub const PURPLE_BRIGHT: Color = rgb(196, 167, 231);
+    pub const CYAN: Color = rgb(125, 207, 223);
 
-    pub const RED_DARK: Color = rgb(66, 14, 20);
-    pub const GREEN_DARK: Color = rgb(6, 56, 6);
-
-    // Forge chatbox slots (values derived from the palette noted above).
-    pub const USER_MSG_BG: Color = rgb(55, 55, 55);
-    pub const USER_MSG_HOVER: Color = rgb(70, 70, 70);
-    pub const PROMPT_BORDER: Color = rgb(136, 136, 136);
-    pub const PROMPT_BORDER_ACTIVE: Color = rgb(166, 166, 166);
-    // Forge's warm brand accent and brighter animation step.
-    pub const BRAND: Color = rgb(215, 119, 87);
-    pub const BRAND_SHIMMER: Color = rgb(245, 149, 117);
+    pub const RED_DARK: Color = rgb(45, 15, 25);
+    pub const GREEN_DARK: Color = rgb(10, 35, 30);
 }
 use palette::*;
 
 impl Theme {
-    /// Forge dark UI package palette.
+    /// Forge dark UI package palette, matched to Oscura Midnight.
     pub const fn forge() -> Self {
         Self {
-            bg_base: BG_STORM,
-            bg_light: USER_MSG_BG,
-            bg_dark: rgb(28, 28, 28),
-            bg_highlight: USER_MSG_BG,
-            bg_hover: USER_MSG_HOVER,
-            bg_terminal: BG,
+            bg_base: BASE,
+            bg_light: ELEVATED,
+            bg_dark: SURFACE,
+            bg_highlight: ELEVATED,
+            bg_hover: HIGHLIGHT_MED,
+            bg_terminal: BASE,
 
-            // Prompt › / selection — warm brand, not gray-on-gray
-            accent_user: BRAND,
-            // Assistant + thinking + spinner use the warm Forge accent.
-            accent_assistant: BRAND,
-            accent_thinking: BRAND_SHIMMER,
-            accent_tool: DARK5,
-            accent_system: BLUE,
+            accent_user: PURPLE_BRIGHT,
+            accent_assistant: PURPLE,
+            accent_thinking: PURPLE_BRIGHT,
+            accent_tool: SUBTLE,
+            accent_system: CYAN,
             accent_error: RED,
-            accent_success: GREEN,
-            accent_running: BRAND,
-            accent_skill: BRAND,
+            accent_success: TEAL,
+            accent_running: PURPLE_DIM,
+            accent_skill: PURPLE,
 
-            text_primary: FG,
-            text_secondary: FG_DARK,
+            text_primary: TEXT,
+            text_secondary: TEXT_DIM,
 
-            gray_dim: rgb(88, 88, 88),
-            gray: COMMENT,
-            gray_bright: DARK5,
+            gray_dim: SUBTLE,
+            gray: MUTED,
+            gray_bright: TEXT_DIM,
 
-            command: YELLOW,
-            path: BRAND_SHIMMER,
-            running: BRAND,
-            warning: YELLOW,
+            command: GOLD,
+            path: AMBER,
+            running: CYAN,
+            warning: GOLD,
 
-            fuzzy_accent: BRAND,
+            fuzzy_accent: PURPLE_BRIGHT,
+            accent_plan: GOLD,
+            accent_verify: PURPLE,
+            accent_remember: rgb(139, 195, 74),
 
-            accent_plan: rgb(255, 219, 141),
-            accent_verify: BRAND_SHIMMER,
-            accent_remember: Color::Rgb(139, 195, 74),
+            selection_border: HIGHLIGHT_HIGH,
+            prompt_border: HIGHLIGHT_MED,
+            prompt_border_active: HIGHLIGHT_HIGH,
+            hover_border: HIGHLIGHT_MED,
 
-            selection_border: rgb(60, 60, 65),
-            prompt_border: PROMPT_BORDER,
-            // Focused input frame picks up a warm edge (still readable)
-            prompt_border_active: BRAND,
-            hover_border: rgb(30, 30, 34),
+            accent_model: CYAN,
 
-            accent_model: BRAND,
-
-            scrollbar_bg: BG_STORM_DARK,
-            scrollbar_fg: BG_HIGHLIGHT,
+            scrollbar_bg: rgb(18, 16, 28),
+            scrollbar_fg: HIGHLIGHT_HIGH,
 
             diff_delete_bg: RED_DARK,
             diff_delete_fg: RED,
             diff_insert_bg: GREEN_DARK,
-            diff_insert_fg: GREEN,
-            diff_equal_fg: COMMENT,
-            diff_gutter_fg: COMMENT,
+            diff_insert_fg: TEAL,
+            diff_equal_fg: MUTED,
+            diff_gutter_fg: MUTED,
 
-            bg_visual: USER_MSG_BG,
+            bg_visual: HIGHLIGHT_MED,
 
-            paste_bg: BG_STORM_DARK,
-            paste_fg: FG_DARK,
-            paste_dim: FG_GUTTER,
+            paste_bg: SURFACE,
+            paste_fg: TEXT_DIM,
+            paste_dim: MUTED,
 
-            md_heading_h1: TEAL,
+            md_heading_h1: TEXT,
             md_heading_h1_mod: Modifier::BOLD,
-            md_heading_h2: BLUE,
+            md_heading_h2: PURPLE_BRIGHT,
             md_heading_h2_mod: Modifier::BOLD,
             md_heading_h3: PURPLE,
             md_heading_h3_mod: Modifier::BOLD,
-            md_heading_h4: DARK5,
-            md_heading_h4_mod: Modifier::BOLD,
-            md_heading_h5: COMMENT,
+            md_heading_h4: TEAL,
+            md_heading_h4_mod: Modifier::BOLD.union(Modifier::ITALIC),
+            md_heading_h5: GOLD,
             md_heading_h5_mod: Modifier::BOLD,
-            md_heading_h6: DARK3,
-            md_heading_h6_mod: Modifier::empty(),
-            md_code: BLUE1,
-            md_task_checked: GREEN,
-            md_task_unchecked: FG_DARK,
-            md_muted: COMMENT,
-            md_code_bg: rgb(28, 28, 28),
-            md_text: FG_DARK,
-            link_fg: rgb(122, 166, 218),
+            md_heading_h6: CYAN,
+            md_heading_h6_mod: Modifier::BOLD,
+            md_code: CYAN,
+            md_task_checked: TEAL,
+            md_task_unchecked: TEXT_DIM,
+            md_muted: MUTED,
+            md_code_bg: SURFACE,
+            md_text: TEXT,
+            link_fg: CYAN,
         }
     }
 }

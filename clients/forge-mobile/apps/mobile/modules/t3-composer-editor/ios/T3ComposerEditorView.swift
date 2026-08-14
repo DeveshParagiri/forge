@@ -310,6 +310,7 @@ public final class T3ComposerEditorView: ExpoView, UITextViewDelegate, UITextDro
   private var isApplyingControlledValue = false
   private var nativeEventCount = 0
   private var lastContentSize = CGSize.zero
+  private var hasScheduledContentSizeEmission = false
   private var iconImages: [String: UIImage] = [:]
   private var pendingIconUris = Set<String>()
   private var tokensNeedRebuild = false
@@ -331,6 +332,9 @@ public final class T3ComposerEditorView: ExpoView, UITextViewDelegate, UITextDro
     textView.backgroundColor = .clear
     textView.textContainerInset = .zero
     textView.textContainer.lineFragmentPadding = 0
+    textView.textContainer.widthTracksTextView = true
+    textView.textContainer.heightTracksTextView = false
+    textView.textContainer.lineBreakMode = .byWordWrapping
     textView.keyboardDismissMode = .interactive
     textView.alwaysBounceVertical = false
     textView.showsVerticalScrollIndicator = true
@@ -781,6 +785,7 @@ public final class T3ComposerEditorView: ExpoView, UITextViewDelegate, UITextDro
     ])
     updatePlaceholderVisibility()
     emitContentSizeIfNeeded()
+    scheduleContentSizeEmission()
   }
 
   private func emitSelection() {
@@ -838,13 +843,56 @@ public final class T3ComposerEditorView: ExpoView, UITextViewDelegate, UITextDro
   }
 
   private func emitContentSizeIfNeeded() {
-    let nextSize = textView.contentSize
+    let nextSize = measuredContentSize()
     guard abs(nextSize.width - lastContentSize.width) > 0.5 ||
       abs(nextSize.height - lastContentSize.height) > 0.5 else {
       return
     }
     lastContentSize = nextSize
     onComposerContentSizeChange(["width": nextSize.width, "height": nextSize.height])
+  }
+
+  /// `textViewDidChange` can run before TextKit has committed the latest soft
+  /// line wrapping to `contentSize`. Measuring the laid-out text container is
+  /// authoritative, while the next-run-loop pass catches any deferred UIKit
+  /// layout before React decides the editor height.
+  private func measuredContentSize() -> CGSize {
+    let availableWidth = textView.bounds.width
+    guard availableWidth > 0 else {
+      return textView.contentSize
+    }
+
+    textView.layoutManager.ensureLayout(for: textView.textContainer)
+    let usedRect = textView.layoutManager.usedRect(for: textView.textContainer)
+    let insets = textView.textContainerInset
+    let minimumTextHeight = max(lineHeight, textView.font?.lineHeight ?? 0)
+    let laidOutHeight = ceil(
+      max(minimumTextHeight, usedRect.height) + insets.top + insets.bottom
+    )
+    let fittingHeight = ceil(
+      textView.sizeThatFits(
+        CGSize(width: availableWidth, height: CGFloat.greatestFiniteMagnitude)
+      ).height
+    )
+    // `sizeThatFits` includes TextKit's extra line fragment for a trailing
+    // newline, while `usedRect` is the reliable synchronous soft-wrap size.
+    let measuredHeight = max(laidOutHeight, fittingHeight)
+    return CGSize(width: ceil(availableWidth), height: measuredHeight)
+  }
+
+  private func scheduleContentSizeEmission() {
+    guard !hasScheduledContentSizeEmission else {
+      return
+    }
+    hasScheduledContentSizeEmission = true
+    DispatchQueue.main.async { [weak self] in
+      guard let self else {
+        return
+      }
+      self.hasScheduledContentSizeEmission = false
+      self.textView.layoutIfNeeded()
+      self.emitContentSizeIfNeeded()
+    }
   }
 
   private func decode<T: Decodable>(_ type: T.Type, from json: String) -> T? {

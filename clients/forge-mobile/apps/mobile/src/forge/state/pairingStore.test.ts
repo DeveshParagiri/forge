@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => {
       values.delete(key);
       return Promise.resolve();
     }),
+    randomUUID: vi.fn(() => "pairing-1"),
   };
 });
 
@@ -25,20 +26,25 @@ vi.mock("expo-secure-store", () => ({
 }));
 
 vi.mock("expo-crypto", () => ({
-  randomUUID: vi.fn(() => "pairing-1"),
+  randomUUID: mocks.randomUUID,
 }));
 
 import {
+  bindStoredPairingSessionIdentity,
   finalizeStoredPairing,
   loadStoredPairings,
   normalizeSessionAlias,
+  reconcileStoredPairingSessionIdentity,
   registerStoredPairing,
+  registerStoredPairingWithStatus,
   updateStoredPairingMetadata,
 } from "./pairingStore";
 import { comparePairingSummaries } from "./sessionOrganization";
 
 const token = "0123456789abcdef".repeat(4);
 const pairingUrl = `https://forge-mac.example-tailnet.ts.net/forge/${token}/`;
+const refreshedPairingUrl = `https://forge-mac.example-tailnet.ts.net/forge/${"fedcba9876543210".repeat(4)}/`;
+const otherHostPairingUrl = `https://other-mac.example-tailnet.ts.net/forge/${"abcdef0123456789".repeat(4)}/`;
 
 describe("Forge pairing organization storage", () => {
   beforeEach(() => {
@@ -82,6 +88,59 @@ describe("Forge pairing organization storage", () => {
     expect(restored.metadata.customTitle).toBe("Keep my name");
     expect(restored.metadata.archivedAt).toBeUndefined();
     expect((await loadStoredPairings())[0]?.metadata.archivedAt).toBeUndefined();
+  });
+
+  it("reuses the stable session record when /rc issues a new bearer URL", async () => {
+    mocks.randomUUID.mockReturnValueOnce("pairing-existing").mockReturnValueOnce("pairing-scanned");
+    const existing = await registerStoredPairing(pairingUrl);
+    await bindStoredPairingSessionIdentity(existing.id, "session-main");
+    await updateStoredPairingMetadata(existing.id, {
+      customTitle: "Main Forge Harness Development",
+      pinnedAt: "2026-08-13T12:00:00.000Z",
+    });
+
+    const scanned = await registerStoredPairingWithStatus(refreshedPairingUrl);
+    expect(scanned).toMatchObject({ created: true, record: { id: "pairing-scanned" } });
+
+    const reconciled = await reconcileStoredPairingSessionIdentity(
+      scanned.record.id,
+      "session-main",
+    );
+
+    expect(reconciled).toMatchObject({
+      record: {
+        id: "pairing-existing",
+        gatewayUrl: refreshedPairingUrl,
+        sessionId: "session-main",
+        metadata: {
+          customTitle: "Main Forge Harness Development",
+          pinnedAt: "2026-08-13T12:00:00.000Z",
+        },
+      },
+      removedPairingIds: ["pairing-scanned"],
+    });
+    expect(await loadStoredPairings()).toEqual([reconciled.record]);
+  });
+
+  it("reports exact bearer rescans as an existing registration", async () => {
+    const first = await registerStoredPairingWithStatus(pairingUrl);
+    const second = await registerStoredPairingWithStatus(pairingUrl);
+
+    expect(first.created).toBe(true);
+    expect(second).toEqual({ created: false, record: first.record });
+  });
+
+  it("does not merge equal session labels from different remote hosts", async () => {
+    mocks.randomUUID.mockReturnValueOnce("pairing-first").mockReturnValueOnce("pairing-other");
+    const first = await registerStoredPairing(pairingUrl);
+    await bindStoredPairingSessionIdentity(first.id, "host-local-session");
+    const other = await registerStoredPairing(otherHostPairingUrl);
+
+    const reconciled = await reconcileStoredPairingSessionIdentity(other.id, "host-local-session");
+
+    expect(reconciled.record.id).toBe("pairing-other");
+    expect(reconciled.removedPairingIds).toBeUndefined();
+    expect(await loadStoredPairings()).toHaveLength(2);
   });
 
   it("persists an expected child session identity only for a fresh pairing URL", async () => {

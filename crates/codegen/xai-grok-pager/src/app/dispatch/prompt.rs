@@ -434,8 +434,51 @@ pub(crate) fn dispatch_remote_prompt(
     app: &mut AppView,
     agent_id: crate::app::agent::AgentId,
     text: String,
+    images: Vec<xai_grok_shell::remote_control::RemotePromptImage>,
 ) -> Vec<Effect> {
-    dispatch_send_prompt_inner_for_agent(app, Some(agent_id), text, false, true, false)
+    if images.is_empty() {
+        return dispatch_send_prompt_inner_for_agent(app, Some(agent_id), text, false, true, false);
+    }
+    dispatch_remote_prompt_with_images(app, agent_id, text, images)
+}
+
+fn dispatch_remote_prompt_with_images(
+    app: &mut AppView,
+    agent_id: crate::app::agent::AgentId,
+    text: String,
+    images: Vec<xai_grok_shell::remote_control::RemotePromptImage>,
+) -> Vec<Effect> {
+    let Some(agent) = app.agents.get(&agent_id) else {
+        return vec![];
+    };
+    let Some(session_id) = agent.session.session_id.clone() else {
+        return vec![];
+    };
+    let display_text = if text.trim().is_empty() {
+        images
+            .iter()
+            .enumerate()
+            .map(|(index, image)| format!("[Image #{}: {}]", index + 1, image.name))
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        text.clone()
+    };
+    let mut blocks = vec![acp::ContentBlock::Text(acp::TextContent::new(
+        display_text.clone(),
+    ))];
+    for image in images {
+        blocks.push(acp::ContentBlock::Image(acp::ImageContent::new(
+            image.data,
+            image.mime_type,
+        )));
+    }
+    vec![Effect::SendPromptBlocks {
+        agent_id,
+        session_id,
+        blocks,
+        prompt_id: uuid::Uuid::new_v4().to_string(),
+    }]
 }
 
 fn dispatch_send_prompt_inner_for_agent(

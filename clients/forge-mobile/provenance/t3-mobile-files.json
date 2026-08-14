@@ -5,13 +5,13 @@
     "revision": "b73232bdd31e83914a8a943960c7dc4b6390b39b",
     "license": "MIT"
   },
-  "generatedAt": "2026-08-14T09:52:13.897Z",
+  "generatedAt": "2026-08-14T14:03:43.282Z",
   "copiedFileCount": 1054,
-  "identicalFileCount": 1007,
-  "adaptedFileCount": 47,
+  "identicalFileCount": 1004,
+  "adaptedFileCount": 50,
   "missingFileCount": 0,
   "adaptationPatch": "provenance/t3-mobile-adaptations.patch",
-  "adaptationPatchSha256": "487f449bf10dabe806e49dbfd0eabca6645c5f657be3d32efab1b4c3e651b3c9",
+  "adaptationPatchSha256": "fda8c20b09bc4b36ff9dbb2d5fd050afa718b186399fa3daedd403c263c0ce71",
   "excludedUpstreamFiles": [
     {
       "upstreamPath": "apps/mobile/clerk-theme.json",
@@ -163,7 +163,7 @@
       "upstreamPath": "apps/mobile/modules/t3-composer-editor/android/src/main/java/expo/modules/t3composereditor/T3ComposerEditorView.kt",
       "currentPath": "apps/mobile/modules/t3-composer-editor/android/src/main/java/expo/modules/t3composereditor/T3ComposerEditorView.kt",
       "upstreamSha256": "b33b1306cbf2e8c0e470af18c3559d51dd11b876a94b97710d91e0d39181a791",
-      "currentSha256": "a4053a43f866b13e778e830fbaec16082c04b057e4da9ba10c84531d48fa78e9",
+      "currentSha256": "f36c173eaae9e6e2079ea5e276b74449c453c13499e6e77c9ae190c4ba8f6378",
       "status": "adapted"
     },
     {
@@ -191,7 +191,7 @@
       "upstreamPath": "apps/mobile/modules/t3-composer-editor/ios/T3ComposerEditorView.swift",
       "currentPath": "apps/mobile/modules/t3-composer-editor/ios/T3ComposerEditorView.swift",
       "upstreamSha256": "b579b0831046b6cdc20b97643ed7f07e6eddf41000ab96c7a3b8a468110781c4",
-      "currentSha256": "5bddb22ef91afa1b2bc89b28c8ccbf1ed7d8f2a7d0470b727d95f67f0e1ec435",
+      "currentSha256": "2d222ccc8a31daf3f80c1f7ca314277c7658e7d34b65185fc0f25d7284965e59",
       "status": "adapted"
     },
     {
@@ -1367,7 +1367,7 @@
       "upstreamPath": "apps/mobile/package.json",
       "currentPath": "apps/mobile/package.json",
       "upstreamSha256": "a196a5ae9528c3ce59316635fcd18f2e333337ebf6d1c5dda2c0b98d735028c0",
-      "currentSha256": "7c7335f8659b31871566be89e86aee2d32b59dc0a324398630d19d62a31de38d",
+      "currentSha256": "9723a1c5128e24a98bf2e1f8d166743f599e31ccbfd1b8080956efc2377ad94d",
       "status": "adapted"
     },
     {
@@ -1493,7 +1493,7 @@
       "upstreamPath": "apps/mobile/src/components/AppSymbol.tsx",
       "currentPath": "apps/mobile/src/components/AppSymbol.tsx",
       "upstreamSha256": "6aa1c4220072a064e260da95b0399edf005d1fb8a6f88016b9afcce2698ffe4e",
-      "currentSha256": "12e315637cc023099ae52204954d42b1baa92ac7c05fe353cce4fa8e118146ad",
+      "currentSha256": "b8d03c3b70e21859ecf4bae1ea5d9af6f7f7edd888a4910d9bbb9cc351b632f5",
       "status": "adapted"
     },
     {
@@ -3516,7 +3516,7 @@
       "upstreamPath": "apps/mobile/src/features/threads/thread-settings-menu.ts",
       "currentPath": "apps/mobile/src/features/threads/thread-settings-menu.ts",
       "upstreamSha256": "4dbd92930fa339fadd50cbd4c17a7f0297aa2f226e3fe9f55515b5f38efe5dba",
-      "currentSha256": "dd6a33db211f0f25af8470908dce3775dea7de1edc3667ac1741eeadc3bf7ab0",
+      "currentSha256": "62e6854c8f44132a0874c228563a0beca0dc01df088b372d60cfe13591bdd062",
       "status": "adapted"
     },
     {
@@ -3551,14 +3551,14 @@
       "upstreamPath": "apps/mobile/src/features/threads/thread-work-log.tsx",
       "currentPath": "apps/mobile/src/features/threads/thread-work-log.tsx",
       "upstreamSha256": "1f6f79314bb0bd269bd1ee0bed02cb8b2ca8b70997d70df418311428517875a1",
-      "currentSha256": "1f6f79314bb0bd269bd1ee0bed02cb8b2ca8b70997d70df418311428517875a1",
-      "status": "identical"
+      "currentSha256": "787faacaad113026b492e785106bd2304256eca5ce1c977257be07a4f030156a",
+      "status": "adapted"
     },
     {
       "upstreamPath": "apps/mobile/src/features/threads/ThreadComposer.tsx",
       "currentPath": "apps/mobile/src/features/threads/ThreadComposer.tsx",
       "upstreamSha256": "c7d872b1d87e625c77a3b7c721325cdf8c7808544ae3b5c3cba1a71f7c783215",
-      "currentSha256": "d8535bf167036932f29572d9bad3843bb99935e560fce878ba70d9d1408ff1cd",
+      "currentSha256": "313ceb8353cf6d130be93ea25267239b5d578d3f4a889b68641db3384a0b2583",
       "status": "adapted"
     },
     {
@@ -3579,7 +3579,7 @@
       "upstreamPath": "apps/mobile/src/features/threads/ThreadDetailScreen.tsx",
       "currentPath": "apps/mobile/src/features/threads/ThreadDetailScreen.tsx",
       "upstreamSha256": "8a84bb7711ef68307ef0d9cdb256a95ca1fbc8545de8c74c4728f57f843c7977",
-      "currentSha256": "73efb7625714271164b759c56d785addb9a65b7a99fa39983eeeb0fbe54c1860",
+      "currentSha256": "8ccd4d4a2699d40237507946c4ffe0b98aac8f4b9e7e8f1ec41fcee6a70702df",
       "status": "adapted"
     },
     {
@@ -3789,15 +3789,15 @@
       "upstreamPath": "apps/mobile/src/lib/composerImages.test.ts",
       "currentPath": "apps/mobile/src/lib/composerImages.test.ts",
       "upstreamSha256": "17deec5706142e9ef3a44ed3ad541e4852d053c4b42a4a2244fd945cf40de5a9",
-      "currentSha256": "17deec5706142e9ef3a44ed3ad541e4852d053c4b42a4a2244fd945cf40de5a9",
-      "status": "identical"
+      "currentSha256": "954971189c558272c155eec9adb122172567005ddc4074709207dbf9cf55514b",
+      "status": "adapted"
     },
     {
       "upstreamPath": "apps/mobile/src/lib/composerImages.ts",
       "currentPath": "apps/mobile/src/lib/composerImages.ts",
       "upstreamSha256": "c61405e3d39f89050f6f2d2365ac5df541e22fcb3b475415808fe69c32e1c8c4",
-      "currentSha256": "c61405e3d39f89050f6f2d2365ac5df541e22fcb3b475415808fe69c32e1c8c4",
-      "status": "identical"
+      "currentSha256": "1fcbbd488610b87ddb2fb6c78ef38bd5f594d50ced94f59262bdad3972bd7a52",
+      "status": "adapted"
     },
     {
       "upstreamPath": "apps/mobile/src/lib/connection.test.ts",
@@ -7121,7 +7121,7 @@
       "upstreamPath": "pnpm-lock.yaml",
       "currentPath": "pnpm-lock.yaml",
       "upstreamSha256": "d6368d1ca81cc9d08cc872537dd812d8067a678d4c38a3007bcadefdb59f8c7e",
-      "currentSha256": "d8c78b3a7a04dfbd05ed139784e56a31aec7720facec16deabbdefe3706cd1b5",
+      "currentSha256": "a726998feb6d2e499742943cbdb4b901360f60ef20e4b8d0091081a8b5267171",
       "status": "adapted"
     },
     {

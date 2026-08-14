@@ -62,6 +62,25 @@ export function formatUsageReset(
   return resetAtFormatter.format(date);
 }
 
+export function compactUsageLimitLabel(usage: RemoteUsageSnapshot | undefined): string | undefined {
+  const used = usage?.context?.usedTokens;
+  const total = usage?.context?.totalTokens;
+  if (
+    typeof used === "number" &&
+    Number.isFinite(used) &&
+    typeof total === "number" &&
+    Number.isFinite(total) &&
+    total > 0
+  ) {
+    return `${formatUsageTokens(used)} / ${formatUsageTokens(total)}`;
+  }
+  const window = usage?.account?.windows[0];
+  if (window && Number.isFinite(window.usedPercent)) {
+    return `${formatUsagePercent(window.usedPercent)} used`;
+  }
+  return undefined;
+}
+
 export function hasUsageData(usage: RemoteUsageSnapshot | undefined): boolean {
   return Boolean(usage?.context || usage?.session || usage?.account);
 }

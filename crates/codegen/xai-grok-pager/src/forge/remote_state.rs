@@ -937,19 +937,19 @@ fn project_tool(
 ) -> RemoteTimelineItem {
     let (title, detail, input, output) = match block {
         ToolCallBlock::Execute(tool) => (
-            "Run command".to_owned(),
+            "Run".to_owned(),
             tool.description.clone(),
             Some(tool.command.clone()),
             tool.error.clone().or_else(|| tool.output.clone()),
         ),
         ToolCallBlock::Read(tool) => (
-            "Read file".to_owned(),
+            "Read".to_owned(),
             Some(tool.path.clone()),
             tool.line_range.map(|range| range.to_string()),
             tool.error.clone().or_else(|| tool.content.clone()),
         ),
         ToolCallBlock::Edit(tool) => (
-            "Edit file".to_owned(),
+            "Edit".to_owned(),
             Some(tool.path.clone()),
             Some(tool.copy_text()),
             tool.error.clone(),
@@ -1241,7 +1241,7 @@ mod tests {
         assert_eq!(projected[1]["status"], "running");
         assert_eq!(projected[2]["kind"], "reasoning");
         assert_eq!(projected[3]["kind"], "tool");
-        assert_eq!(projected[3]["title"], "Run command");
+        assert_eq!(projected[3]["title"], "Run");
         assert_eq!(projected[3]["input"], "cargo test");
         assert_eq!(projected[3]["output"], "ok");
         assert_eq!(projected[4]["kind"], "btw");

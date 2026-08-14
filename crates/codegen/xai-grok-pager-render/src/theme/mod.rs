@@ -1,7 +1,7 @@
 //! Theming for the pager.
 //!
 //! All colors come from the `Theme` struct. No hardcoded colors elsewhere.
-//! The default theme is GrokNight (neutral gray base with TokyoNight accents).
+//! The default theme is Forge (Oscura Midnight purple accents and dark surfaces).
 //!
 //! ## Color support
 //!

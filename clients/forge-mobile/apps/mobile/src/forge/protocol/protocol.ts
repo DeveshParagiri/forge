@@ -281,7 +281,15 @@ export interface RemoteError {
   retryable?: boolean;
 }
 
-export type RemoteSessionEvent = { kind: "stateReplaced"; session: RemoteSessionSnapshot };
+export type RemoteSessionEvent =
+  | { kind: "stateReplaced"; session: RemoteSessionSnapshot }
+  | {
+      kind: "transcriptSpliced";
+      sessionId: string;
+      start: number;
+      deleteCount: number;
+      items: RemoteTimelineItem[];
+    };
 
 export type ServerMessage =
   | {
@@ -340,6 +348,12 @@ export interface RemoteQuestionAnswer {
   freeform?: string;
 }
 
+export interface RemotePromptImage {
+  name: string;
+  mimeType: string;
+  data: string;
+}
+
 export type ClientMessage =
   | { type: "hello"; protocolVersion: 1 }
   | {
@@ -347,7 +361,7 @@ export type ClientMessage =
       protocolVersion: 1;
       commandId: string;
       command:
-        | { type: "prompt"; text: string }
+        | { type: "prompt"; text: string; images?: RemotePromptImage[] }
         | { type: "cancel" }
         | { type: "setModel"; modelId: string; reasoningEffort: string | null }
         | { type: "setFastMode"; enabled: boolean }
@@ -963,8 +977,20 @@ function decodeSnapshot(value: unknown): RemoteSessionSnapshot {
 function decodeEvent(value: unknown): RemoteSessionEvent {
   if (!isRecord(value)) throw new ProtocolDecodeError("Invalid delta event");
   const kind = stringField(value, "kind");
-  if (kind !== "stateReplaced") throw new ProtocolDecodeError(`Unknown delta event: ${kind}`);
-  return { kind, session: decodeSnapshot(value.session) };
+  if (kind === "stateReplaced") return { kind, session: decodeSnapshot(value.session) };
+  if (kind === "transcriptSpliced") {
+    if (!Array.isArray(value.items)) {
+      throw new ProtocolDecodeError("Invalid transcript splice items");
+    }
+    return {
+      kind,
+      sessionId: stringField(value, "sessionId"),
+      start: numberField(value, "start"),
+      deleteCount: numberField(value, "deleteCount"),
+      items: value.items.map(decodeTimelineItem),
+    };
+  }
+  throw new ProtocolDecodeError(`Unknown delta event: ${kind}`);
 }
 
 export function decodeServerMessage(raw: string): ServerMessage {

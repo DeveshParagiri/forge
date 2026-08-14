@@ -5,6 +5,7 @@ import { buildModelOptions } from "../lib/modelOptions";
 import {
   assistantResponseMessageIds,
   buildServerConfig,
+  compactRemoteToolTitle,
   presentInteraction,
   presentRemoteTranscript,
   presentRemoteSession,
@@ -71,7 +72,7 @@ describe("Forge transcript status presentation", () => {
     );
     expect(presented.feed.map((entry) => String(entry.id))).toEqual([
       "remote:user",
-      "remote:reasoning",
+      "activity:reasoning",
       "remote:assistant",
     ]);
     expect(presented.workDisclosures).toEqual([]);
@@ -132,7 +133,7 @@ describe("Forge transcript status presentation", () => {
     );
     expect(presented.feed.map((entry) => String(entry.id))).toEqual([
       "remote:user",
-      "remote:reasoning",
+      "activity:reasoning",
       "activity:tool",
       "remote:worked",
       "remote:assistant",
@@ -145,12 +146,12 @@ describe("Forge transcript status presentation", () => {
       durationMs: 221_000,
     });
     expect([...(presented.workDisclosures[0]?.hiddenEntryIds ?? [])]).toEqual([
-      "remote:reasoning",
+      "activity:reasoning",
       "activity:tool",
     ]);
   });
 
-  it("leaves matching text and unrelated Recap rows ordinary without typed metadata", () => {
+  it("suppresses untyped Worked for strings and keeps Recap as a compact note", () => {
     const presented = presentRemoteTranscript(
       [
         { id: "worked", kind: "system", text: "Worked for 3m41s" },
@@ -159,11 +160,39 @@ describe("Forge transcript status presentation", () => {
       false,
       "2026-08-13T12:00:00.000Z",
     );
-    expect(presented.feed.map((entry) => String(entry.id))).toEqual([
-      "remote:worked",
-      "remote:recap",
-    ]);
+    expect(presented.feed.map((entry) => String(entry.id))).toEqual(["remote:recap"]);
     expect(presented.workDisclosures).toEqual([]);
+  });
+
+  it("renders reasoning as a Thought row and shortens tool verbs", () => {
+    const presented = presentRemoteTranscript(
+      [
+        { id: "thought", kind: "reasoning", text: "Inspect the composer" },
+        { id: "run", kind: "tool", title: "Run command", status: "complete", detail: "cargo test" },
+        { id: "edit", kind: "tool", title: "Edit file", status: "failed", detail: "ForgeApp.tsx" },
+      ],
+      false,
+      "2026-08-13T12:00:00.000Z",
+    );
+    expect(compactRemoteToolTitle("Run command")).toBe("Run");
+    expect(compactRemoteToolTitle("Edit file")).toBe("Edit");
+    expect(presented.feed.map((entry) => String(entry.id))).toEqual([
+      "activity:thought",
+      "activity:run",
+      "activity:edit",
+    ]);
+    expect(presented.feed[0]?.type === "activity-group" && presented.feed[0].activities[0]).toMatchObject({
+      summary: "Thought",
+      status: "neutral",
+    });
+    expect(presented.feed[1]?.type === "activity-group" && presented.feed[1].activities[0]).toMatchObject({
+      summary: "Run",
+      status: "success",
+    });
+    expect(presented.feed[2]?.type === "activity-group" && presented.feed[2].activities[0]).toMatchObject({
+      summary: "Edit",
+      status: "failure",
+    });
   });
 });
 

@@ -15,16 +15,20 @@ import type {
   RemoteSessionCreated,
   RemoteSessionSnapshot,
 } from "../protocol/protocol";
+import { pairingDisplayHost } from "../protocol/pairing";
 import {
   ForgeRemoteSocket,
   type ForgeRemoteSocketState,
   type RemoteConnectionPhase,
 } from "../protocol/remoteSocket";
 import {
+  bindStoredPairingSessionIdentity,
+  deduplicateStoredPairingSessionIdentity,
   finalizeStoredPairing,
   loadStoredPairings,
   normalizeSessionAlias,
-  registerStoredPairing,
+  reconcileStoredPairingSessionIdentity,
+  registerStoredPairingWithStatus,
   removeStoredPairing,
   summarizePairing,
   updateStoredPairingMetadata,
@@ -59,7 +63,15 @@ interface ForgeSessionsContextValue {
   readonly pinSession: (pairingId: string) => Promise<boolean>;
   readonly unpinSession: (pairingId: string) => Promise<boolean>;
   readonly archiveSession: (pairingId: string) => Promise<boolean>;
-  readonly sendPrompt: (pairingId: string, text: string) => string | null;
+  readonly sendPrompt: (
+    pairingId: string,
+    text: string,
+    images?: ReadonlyArray<{
+      readonly name: string;
+      readonly mimeType: string;
+      readonly data: string;
+    }>,
+  ) => string | null;
   readonly cancel: (pairingId: string) => string | null;
   readonly askBtw: (pairingId: string, question: string) => string | null;
   readonly refreshUsage: (pairingId: string) => string | null;
@@ -118,8 +130,8 @@ function initialSession(record: StoredPairing): ForgeSessionView {
 }
 
 interface PairingRegistrationValidation {
-  readonly expectedSessionId: string;
-  readonly resolve: () => void;
+  readonly expectedSessionId?: string;
+  readonly resolve: (pairingId: string) => void;
   readonly reject: (error: Error) => void;
   readonly timeout: ReturnType<typeof setTimeout>;
 }
@@ -135,6 +147,11 @@ export function ForgeSessionsProvider(props: { readonly children: ReactNode }) {
   const metadataTimerById = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const recoveryTimerById = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const validationById = useRef(new Map<string, PairingRegistrationValidation>());
+  const identityUpdateById = useRef(new Set<string>());
+  const sessionIdByPairingId = useRef(new Map<string, string>());
+  const handleSocketIdentity = useRef<
+    (record: StoredPairing, state: ForgeRemoteSocketState) => void
+  >(() => undefined);
   const appState = useRef<AppStateStatus>(AppState.currentState);
   const activePairingId = useRef<string | null>(null);
 
@@ -147,6 +164,7 @@ export function ForgeSessionsProvider(props: { readonly children: ReactNode }) {
     }
     socketById.current.get(pairingId)?.stop();
     socketById.current.delete(pairingId);
+    sessionIdByPairingId.current.delete(pairingId);
     const timer = metadataTimerById.current.get(pairingId);
     if (timer) clearTimeout(timer);
     metadataTimerById.current.delete(pairingId);
@@ -180,102 +198,92 @@ export function ForgeSessionsProvider(props: { readonly children: ReactNode }) {
         next.set(record.id, current.get(record.id) ?? initialSession(record));
         return next;
       });
-      const socket = new ForgeRemoteSocket(record.gatewayUrl, {
-        onChange: (state: ForgeRemoteSocketState) => {
-          setSessionById((current) => {
-            const previous = current.get(record.id) ?? initialSession(record);
-            const next = new Map(current);
-            next.set(record.id, {
-              ...previous,
-              connectionPhase: state.phase,
-              connectionError: state.error,
-              snapshot: state.snapshot,
-              revision: state.revision,
-              expiresAt: state.expiresAt,
-              pendingInteractionIds: state.pendingInteractionIds,
-              modelCommandPending: state.modelCommandPending,
-              fastModeCommandPending: state.fastModeCommandPending,
-              usageCommandPending: state.usageCommandPending,
-              newSessionCommandPending: state.newSessionCommandPending,
-              pendingQueueItemIds: state.pendingQueueItemIds,
-              pairing: {
-                ...previous.pairing,
-                metadata: {
-                  ...previous.pairing.metadata,
-                  ...(state.snapshot?.title ? { title: state.snapshot.title } : {}),
-                  ...(state.snapshot ? { status: state.snapshot.status } : {}),
-                  ...(state.expiresAt ? { expiresAt: state.expiresAt } : {}),
-                  ...(state.snapshot ? { lastSeenAt: new Date().toISOString() } : {}),
+      const socket = new ForgeRemoteSocket(
+        record.gatewayUrl,
+        {
+          onChange: (state: ForgeRemoteSocketState) => {
+            setSessionById((current) => {
+              const previous = current.get(record.id) ?? initialSession(record);
+              const next = new Map(current);
+              next.set(record.id, {
+                ...previous,
+                connectionPhase: state.phase,
+                connectionError: state.error,
+                snapshot: state.snapshot,
+                revision: state.revision,
+                expiresAt: state.expiresAt,
+                pendingInteractionIds: state.pendingInteractionIds,
+                modelCommandPending: state.modelCommandPending,
+                fastModeCommandPending: state.fastModeCommandPending,
+                usageCommandPending: state.usageCommandPending,
+                newSessionCommandPending: state.newSessionCommandPending,
+                pendingQueueItemIds: state.pendingQueueItemIds,
+                pairing: {
+                  ...previous.pairing,
+                  metadata: {
+                    ...previous.pairing.metadata,
+                    ...(state.snapshot?.title ? { title: state.snapshot.title } : {}),
+                    ...(state.snapshot ? { status: state.snapshot.status } : {}),
+                    ...(state.expiresAt ? { expiresAt: state.expiresAt } : {}),
+                    ...(state.snapshot ? { lastSeenAt: new Date().toISOString() } : {}),
+                  },
                 },
-              },
-            });
-            return next;
-          });
-          const validation = validationById.current.get(record.id);
-          if (validation) {
-            if (state.phase === "error") {
-              clearTimeout(validation.timeout);
-              validationById.current.delete(record.id);
-              validation.reject(new Error(state.error ?? "The new Forge pairing could not connect."));
-            } else if (state.snapshot && state.snapshot.sessionId !== validation.expectedSessionId) {
-              clearTimeout(validation.timeout);
-              validationById.current.delete(record.id);
-              validation.reject(new Error("The new Forge pairing opened a different session."));
-            } else if (
-              state.phase === "connected" &&
-              state.snapshot?.sessionId === validation.expectedSessionId
-            ) {
-              clearTimeout(validation.timeout);
-              validationById.current.delete(record.id);
-              validation.resolve();
-            }
-          }
-          const existingTimer = metadataTimerById.current.get(record.id);
-          if (existingTimer) clearTimeout(existingTimer);
-          metadataTimerById.current.set(
-            record.id,
-            setTimeout(() => {
-              metadataTimerById.current.delete(record.id);
-              setSessionById((current) => {
-                const session = current.get(record.id);
-                if (session) {
-                  const { expiresAt, lastSeenAt, status, title } = session.pairing.metadata;
-                  void updateStoredPairingMetadata(record.id, {
-                    expiresAt,
-                    lastSeenAt,
-                    status,
-                    title,
-                  });
-                }
-                return current;
               });
-            }, 1_000),
-          );
+              return next;
+            });
+            handleSocketIdentity.current(record, state);
+            const existingTimer = metadataTimerById.current.get(record.id);
+            if (existingTimer) clearTimeout(existingTimer);
+            metadataTimerById.current.set(
+              record.id,
+              setTimeout(() => {
+                metadataTimerById.current.delete(record.id);
+                setSessionById((current) => {
+                  const session = current.get(record.id);
+                  if (session) {
+                    const { expiresAt, lastSeenAt, status, title } = session.pairing.metadata;
+                    void updateStoredPairingMetadata(record.id, {
+                      expiresAt,
+                      lastSeenAt,
+                      status,
+                      title,
+                    });
+                  }
+                  return current;
+                });
+              }, 1_000),
+            );
+          },
+          onRevoked: () => {
+            const validation = validationById.current.get(record.id);
+            if (validation) {
+              clearTimeout(validation.timeout);
+              validationById.current.delete(record.id);
+              validation.reject(new Error("The new Forge pairing was revoked before validation."));
+            }
+            removeRevokedPairing(record.id);
+          },
         },
-        onRevoked: () => {
-          const validation = validationById.current.get(record.id);
-          if (validation) {
-            clearTimeout(validation.timeout);
-            validationById.current.delete(record.id);
-            validation.reject(new Error("The new Forge pairing was revoked before validation."));
-          }
-          removeRevokedPairing(record.id);
-        },
-      }, record.sessionId);
+        record.sessionId,
+      );
       socketById.current.set(record.id, socket);
     },
     [removeRevokedPairing],
   );
 
   const validateAttachedPairing = useCallback(
-    async (record: StoredPairing, expectedSessionId: string, keepConnected: boolean) => {
-      const validation = new Promise<void>((resolve, reject) => {
+    async (
+      record: StoredPairing,
+      expectedSessionId: string | undefined,
+      keepConnected: boolean,
+    ) => {
+      const validation = new Promise<string>((resolve, reject) => {
         const timeout = setTimeout(() => {
           validationById.current.delete(record.id);
-          reject(new Error("The new Forge pairing did not validate in time."));
+          reject(new Error("The Forge pairing did not validate in time."));
         }, PAIRING_VALIDATION_TIMEOUT_MS);
         validationById.current.set(record.id, {
-          expectedSessionId,
+          ...(expectedSessionId ? { expectedSessionId } : {}),
           resolve,
           reject,
           timeout,
@@ -284,9 +292,9 @@ export function ForgeSessionsProvider(props: { readonly children: ReactNode }) {
       attachPairing(record);
       socketById.current.get(record.id)?.resume();
       try {
-        await validation;
-        if (!keepConnected) socketById.current.get(record.id)?.suspend();
-        return record.id;
+        const pairingId = await validation;
+        if (!keepConnected) socketById.current.get(pairingId)?.suspend();
+        return pairingId;
       } catch (error) {
         detachPairing(record.id);
         await removeStoredPairing(record.id);
@@ -295,6 +303,82 @@ export function ForgeSessionsProvider(props: { readonly children: ReactNode }) {
     },
     [attachPairing, detachPairing],
   );
+
+  handleSocketIdentity.current = (record, state) => {
+    const validation = validationById.current.get(record.id);
+    if (validation && state.phase === "error") {
+      clearTimeout(validation.timeout);
+      validationById.current.delete(record.id);
+      validation.reject(new Error(state.error ?? "The Forge pairing could not connect."));
+      return;
+    }
+    if (
+      validation?.expectedSessionId &&
+      state.snapshot &&
+      state.snapshot.sessionId !== validation.expectedSessionId
+    ) {
+      clearTimeout(validation.timeout);
+      validationById.current.delete(record.id);
+      validation.reject(new Error("The new Forge pairing opened a different session."));
+      return;
+    }
+    if (state.phase !== "connected" || !state.snapshot) return;
+
+    const sessionId = state.snapshot.sessionId;
+    if (!validation && sessionIdByPairingId.current.get(record.id) === sessionId) return;
+    if (identityUpdateById.current.has(record.id)) return;
+    identityUpdateById.current.add(record.id);
+
+    void (async () => {
+      if (validation?.expectedSessionId) {
+        const recordHost = pairingDisplayHost(record.gatewayUrl);
+        const collision = (await loadStoredPairings()).find(
+          (candidate) =>
+            candidate.id !== record.id &&
+            candidate.sessionId === validation.expectedSessionId &&
+            pairingDisplayHost(candidate.gatewayUrl) === recordHost,
+        );
+        if (collision) throw new Error("Forge did not return a fresh child session.");
+        const bound = await bindStoredPairingSessionIdentity(record.id, sessionId);
+        return { record: bound };
+      }
+      if (validation) {
+        return reconcileStoredPairingSessionIdentity(record.id, sessionId);
+      }
+      return deduplicateStoredPairingSessionIdentity(record.id, sessionId);
+    })()
+      .then((identity) => {
+        if (validation && validationById.current.get(record.id) !== validation) return;
+        if (validation) {
+          clearTimeout(validation.timeout);
+          validationById.current.delete(record.id);
+        }
+
+        const pairingId = identity.record.id;
+        for (const removedPairingId of identity.removedPairingIds ?? []) {
+          if (removedPairingId !== record.id && removedPairingId !== pairingId) {
+            detachPairing(removedPairingId);
+          }
+        }
+        if (pairingId !== record.id) {
+          detachPairing(record.id);
+          if (socketById.current.has(pairingId)) detachPairing(pairingId);
+          attachPairing(identity.record);
+          socketById.current.get(pairingId)?.resume();
+        }
+        sessionIdByPairingId.current.set(pairingId, sessionId);
+        validation?.resolve(pairingId);
+      })
+      .catch((error: unknown) => {
+        if (!validation || validationById.current.get(record.id) !== validation) return;
+        clearTimeout(validation.timeout);
+        validationById.current.delete(record.id);
+        validation.reject(
+          error instanceof Error ? error : new Error("The Forge pairing could not be saved."),
+        );
+      })
+      .finally(() => identityUpdateById.current.delete(record.id));
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -346,8 +430,9 @@ export function ForgeSessionsProvider(props: { readonly children: ReactNode }) {
 
   const registerPairing = useCallback(
     async (input: string, expectedSessionId?: string) => {
-      const record = await registerStoredPairing(input, expectedSessionId);
-      if (!expectedSessionId) {
+      const registration = await registerStoredPairingWithStatus(input, expectedSessionId);
+      const { record } = registration;
+      if (!registration.created) {
         attachPairing(record);
         return record.id;
       }
@@ -443,7 +528,7 @@ export function ForgeSessionsProvider(props: { readonly children: ReactNode }) {
         if (archived) detachPairing(pairingId);
         return archived;
       },
-      sendPrompt: (pairingId, text) => socket(pairingId)?.sendPrompt(text) ?? null,
+      sendPrompt: (pairingId, text, images) => socket(pairingId)?.sendPrompt(text, images) ?? null,
       cancel: (pairingId) => socket(pairingId)?.cancel() ?? null,
       askBtw: (pairingId, question) => socket(pairingId)?.askBtw(question) ?? null,
       refreshUsage: (pairingId) => socket(pairingId)?.refreshUsage() ?? null,

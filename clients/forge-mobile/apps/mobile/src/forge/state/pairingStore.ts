@@ -31,6 +31,18 @@ export interface StoredPairing {
   readonly metadata: PairingMetadata;
 }
 
+export interface StoredPairingRegistration {
+  readonly created: boolean;
+  readonly record: StoredPairing;
+}
+
+export interface StoredPairingIdentityReconciliation {
+  /** The stable record that should remain visible after identity reconciliation. */
+  readonly record: StoredPairing;
+  /** Duplicate records removed from SecureStore, when any existed. */
+  readonly removedPairingIds?: ReadonlyArray<string>;
+}
+
 export interface PairingSummary {
   readonly id: string;
   readonly host: string;
@@ -92,6 +104,19 @@ function recordKey(id: string): string {
 }
 
 const metadataUpdateById = new Map<string, Promise<void>>();
+let identityUpdate: Promise<unknown> = Promise.resolve();
+
+function serializeIdentityUpdate<T>(operation: () => Promise<T>): Promise<T> {
+  const update = identityUpdate.catch(() => undefined).then(operation);
+  identityUpdate = update;
+  return update;
+}
+
+async function awaitPendingMetadataUpdates(): Promise<void> {
+  await Promise.all(
+    [...metadataUpdateById.values()].map((update) => update.catch(() => undefined)),
+  );
+}
 
 function parseIndex(raw: string | null): string[] {
   if (!raw) return [];
@@ -155,10 +180,10 @@ export async function loadStoredPairings(): Promise<StoredPairing[]> {
   return records.filter((record): record is StoredPairing => record !== null);
 }
 
-export async function registerStoredPairing(
+export async function registerStoredPairingWithStatus(
   input: string,
   expectedSessionId?: string,
-): Promise<StoredPairing> {
+): Promise<StoredPairingRegistration> {
   const gatewayUrl = parsePairingInput(input);
   const sessionId = optionalBoundedString(expectedSessionId, 256);
   if (expectedSessionId !== undefined && sessionId === undefined) {
@@ -168,28 +193,150 @@ export async function registerStoredPairing(
   const existing = current.find((record) => record.gatewayUrl === gatewayUrl);
   if (existing) {
     if (sessionId) throw new Error("Forge did not return a fresh child pairing.");
-    if (existing.metadata.archivedAt === undefined) return existing;
+    if (existing.metadata.archivedAt === undefined) {
+      return { created: false, record: existing };
+    }
     const restored: StoredPairing = {
       ...existing,
       metadata: { ...existing.metadata, archivedAt: undefined },
     };
     await saveRecord(restored);
-    return restored;
+    return { created: false, record: restored };
   }
 
   const record: StoredPairing = {
     id: Crypto.randomUUID(),
     gatewayUrl,
     ...(sessionId ? { sessionId } : {}),
-    ...(sessionId
-      ? { provisionalUntil: new Date(Date.now() + 35_000).toISOString() }
-      : {}),
+    ...(sessionId ? { provisionalUntil: new Date(Date.now() + 35_000).toISOString() } : {}),
     addedAt: new Date().toISOString(),
     metadata: {},
   };
   await saveRecord(record);
   await saveIndex([...current.map((entry) => entry.id), record.id]);
-  return record;
+  return { created: true, record };
+}
+
+export async function registerStoredPairing(
+  input: string,
+  expectedSessionId?: string,
+): Promise<StoredPairing> {
+  return (await registerStoredPairingWithStatus(input, expectedSessionId)).record;
+}
+
+/**
+ * Pins the immutable session identity learned from a gateway handshake. This
+ * makes a later /rc scan able to recognize the same session even when the
+ * terminal issued a new bearer capability URL.
+ */
+export function bindStoredPairingSessionIdentity(
+  id: string,
+  sessionIdInput: string,
+): Promise<StoredPairing> {
+  return serializeIdentityUpdate(async () => {
+    await awaitPendingMetadataUpdates();
+    const sessionId = optionalBoundedString(sessionIdInput, 256);
+    if (!sessionId) throw new Error("Forge returned an invalid session identity.");
+    const record = parseRecord(await SecureStore.getItemAsync(recordKey(id)));
+    if (!record) throw new Error("The Forge pairing no longer exists.");
+    if (record.sessionId && record.sessionId !== sessionId) {
+      throw new Error("The Forge pairing opened a different session.");
+    }
+    if (record.sessionId === sessionId) return record;
+    const bound = { ...record, sessionId };
+    await saveRecord(bound);
+    return bound;
+  });
+}
+
+/**
+ * Reconciles a newly scanned bearer URL against durable session identity. A
+ * fresh URL for an already-known session updates the existing stable record,
+ * preserving its alias, pin/archive state, and Home/thread identity.
+ */
+export function reconcileStoredPairingSessionIdentity(
+  incomingId: string,
+  sessionIdInput: string,
+): Promise<StoredPairingIdentityReconciliation> {
+  return serializeIdentityUpdate(async () => {
+    await awaitPendingMetadataUpdates();
+    const sessionId = optionalBoundedString(sessionIdInput, 256);
+    if (!sessionId) throw new Error("Forge returned an invalid session identity.");
+    const records = await loadStoredPairings();
+    const incoming = records.find((record) => record.id === incomingId);
+    if (!incoming) throw new Error("The scanned Forge pairing no longer exists.");
+    if (incoming.sessionId && incoming.sessionId !== sessionId) {
+      throw new Error("The scanned Forge pairing opened a different session.");
+    }
+
+    const incomingHost = pairingDisplayHost(incoming.gatewayUrl);
+    const matches = records.filter(
+      (record) =>
+        record.id !== incomingId &&
+        record.sessionId === sessionId &&
+        pairingDisplayHost(record.gatewayUrl) === incomingHost,
+    );
+    const existing = matches[0];
+    if (!existing) {
+      const bound = incoming.sessionId === sessionId ? incoming : { ...incoming, sessionId };
+      if (bound !== incoming) await saveRecord(bound);
+      return { record: bound };
+    }
+
+    const rebound: StoredPairing = {
+      ...existing,
+      gatewayUrl: incoming.gatewayUrl,
+      sessionId,
+      metadata: { ...existing.metadata, archivedAt: undefined },
+    };
+    const removedPairingIds = [incomingId, ...matches.slice(1).map((record) => record.id)];
+    await saveRecord(rebound);
+    await Promise.all(removedPairingIds.map((id) => SecureStore.deleteItemAsync(recordKey(id))));
+    await saveIndex(
+      records.map((record) => record.id).filter((id) => !removedPairingIds.includes(id)),
+    );
+    return { record: rebound, removedPairingIds };
+  });
+}
+
+/**
+ * Backfills one already-open pairing and removes legacy duplicates that have
+ * since proven to be the exact same immutable remote session. The currently
+ * open pairing remains stable so its active navigation route cannot disappear.
+ */
+export function deduplicateStoredPairingSessionIdentity(
+  preferredId: string,
+  sessionIdInput: string,
+): Promise<StoredPairingIdentityReconciliation> {
+  return serializeIdentityUpdate(async () => {
+    await awaitPendingMetadataUpdates();
+    const sessionId = optionalBoundedString(sessionIdInput, 256);
+    if (!sessionId) throw new Error("Forge returned an invalid session identity.");
+    const records = await loadStoredPairings();
+    const preferred = records.find((record) => record.id === preferredId);
+    if (!preferred) throw new Error("The Forge pairing no longer exists.");
+    if (preferred.sessionId && preferred.sessionId !== sessionId) {
+      throw new Error("The Forge pairing opened a different session.");
+    }
+
+    const preferredHost = pairingDisplayHost(preferred.gatewayUrl);
+    const duplicates = records.filter(
+      (record) =>
+        record.id !== preferredId &&
+        record.sessionId === sessionId &&
+        pairingDisplayHost(record.gatewayUrl) === preferredHost,
+    );
+    const bound = preferred.sessionId === sessionId ? preferred : { ...preferred, sessionId };
+    await saveRecord(bound);
+    if (duplicates.length === 0) return { record: bound };
+
+    const removedPairingIds = duplicates.map((record) => record.id);
+    await Promise.all(removedPairingIds.map((id) => SecureStore.deleteItemAsync(recordKey(id))));
+    await saveIndex(
+      records.map((record) => record.id).filter((id) => !removedPairingIds.includes(id)),
+    );
+    return { record: bound, removedPairingIds };
+  });
 }
 
 export async function finalizeStoredPairing(id: string): Promise<void> {

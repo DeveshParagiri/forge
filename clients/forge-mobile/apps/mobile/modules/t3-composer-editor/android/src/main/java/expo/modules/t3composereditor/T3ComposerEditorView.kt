@@ -36,6 +36,7 @@ class T3ComposerEditorView(context: Context, appContext: AppContext) : ExpoView(
   private var applyingNativeValue = false
   private var desiredLineHeightPx = 0
   private var lastContentHeight = 0
+  private var hasScheduledContentSizeEmission = false
   private var contentInsetHorizontal = 0
   private var contentInsetVertical = 0
   private var tokensJson = "[]"
@@ -96,6 +97,7 @@ class T3ComposerEditorView(context: Context, appContext: AppContext) : ExpoView(
             ),
           )
           emitContentSizeIfNeeded()
+          scheduleContentSizeEmission()
         }
       },
     )
@@ -146,6 +148,7 @@ class T3ComposerEditorView(context: Context, appContext: AppContext) : ExpoView(
       applyingNativeValue = false
     }
     emitContentSizeIfNeeded()
+    scheduleContentSizeEmission()
   }
 
   fun setThemeJson(themeJson: String) {
@@ -204,12 +207,15 @@ class T3ComposerEditorView(context: Context, appContext: AppContext) : ExpoView(
       max(0, (contentInsetVertical * resources.displayMetrics.density).toInt())
     applyContentInsets()
     emitContentSizeIfNeeded()
+    scheduleContentSizeEmission()
   }
 
   fun setContentInsetHorizontal(contentInsetHorizontal: Int) {
     this.contentInsetHorizontal =
       max(0, (contentInsetHorizontal * resources.displayMetrics.density).toInt())
     applyContentInsets()
+    emitContentSizeIfNeeded()
+    scheduleContentSizeEmission()
   }
 
   private fun applyContentInsets() {
@@ -307,13 +313,27 @@ class T3ComposerEditorView(context: Context, appContext: AppContext) : ExpoView(
   }
 
   private fun emitContentSizeIfNeeded() {
-    val height = editor.layout?.height ?: editor.measuredHeight
-    val contentHeight = height + contentInsetVertical * 2
+    val textHeight = editor.layout?.height ?: editor.measuredHeight
+    val contentHeight = textHeight + contentInsetVertical * 2
     if (contentHeight == lastContentHeight) return
     lastContentHeight = contentHeight
     onComposerContentSizeChange(
       mapOf("height" to contentHeight / resources.displayMetrics.density),
     )
+  }
+
+  private fun scheduleContentSizeEmission() {
+    if (hasScheduledContentSizeEmission) return
+    hasScheduledContentSizeEmission = true
+    // TextWatcher runs before TextView commits a newly wrapped Layout. Waiting
+    // through the next frame's traversal makes `editor.layout.height` reflect
+    // the natural text height instead of the previous line count.
+    editor.postOnAnimation {
+      editor.post {
+        hasScheduledContentSizeEmission = false
+        emitContentSizeIfNeeded()
+      }
+    }
   }
 
   private fun applyTokenSpans() {
