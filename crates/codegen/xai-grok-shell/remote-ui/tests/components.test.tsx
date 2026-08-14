@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { InteractionResponse } from "../src/protocol";
 import type { StoredPairing } from "../src/pairingRegistry";
@@ -16,9 +16,21 @@ function commandsFixture(): ForgeRemoteCommands {
     sendPrompt: vi.fn(() => "prompt-1"),
     cancel: vi.fn(() => "cancel-1"),
     setModel: vi.fn(() => "model-1"),
+    setFastMode: vi.fn(() => "fast-mode-1"),
     askBtw: vi.fn(() => "btw-1"),
     refreshUsage: vi.fn(() => "usage-1"),
     resolveInteraction: vi.fn(() => "interaction-1"),
+    editQueuedPrompt: vi.fn(() => "queue-edit-1"),
+    steerQueuedPrompt: vi.fn(() => "queue-steer-1"),
+    cancelQueuedPrompt: vi.fn(() => "queue-cancel-1"),
+    newSession: vi.fn(() =>
+      Promise.resolve({
+        sessionId: "session-new",
+        pairingUrl: `https://forge.example/forge/${"b".repeat(64)}/`,
+        expiresAt: "2030-01-01T00:00:00Z",
+      }),
+    ),
+    acceptNewSession: vi.fn(() => Promise.resolve()),
     resync: vi.fn(() => "resync-1"),
   };
 }
@@ -37,16 +49,38 @@ function liveState(overrides: Partial<RemoteClientState> = {}): RemoteClientStat
   };
 }
 
+function openComposerSettings(): HTMLElement {
+  fireEvent.focus(screen.getByLabelText("Message Forge"));
+  const trigger = screen.getByLabelText(/^Model and reasoning, current /);
+  fireEvent.click(trigger);
+  expect(trigger.closest("details")).toHaveAttribute("open");
+  return trigger;
+}
+
 describe("T3-derived Forge conversation surface", () => {
   it("renders the authoritative transcript and server-provided controls", () => {
     render(<ChatView state={liveState()} commands={commandsFixture()} />);
     expect(screen.getByText("Keep the terminal active.")).toBeVisible();
     expect(screen.getByText("Forge session")).toBeVisible();
-    expect(screen.getByText("Model")).toBeVisible();
-    expect(screen.getByLabelText("Model")).toHaveValue("gpt-5.6-sol");
-    expect(screen.getByLabelText("Reasoning effort")).toHaveValue("medium");
+    openComposerSettings();
+    expect(screen.getByRole("group", { name: "Model" })).toBeVisible();
+    expect(
+      within(screen.getByRole("group", { name: "Model" })).getByRole("button", {
+        name: "5.6 Sol",
+        pressed: true,
+      }),
+    ).toBeVisible();
+    expect(screen.getByRole("group", { name: "Reasoning" })).toBeVisible();
+    expect(
+      within(screen.getByRole("group", { name: "Reasoning" })).getByRole("button", {
+        name: "Medium",
+        pressed: true,
+      }),
+    ).toBeVisible();
     expect(screen.getByRole("button", { name: "Usage" })).toBeVisible();
-    expect(screen.getByText("forge · GPT-5.6 Sol")).toBeVisible();
+    expect(screen.getByText("Remote feature")).toBeVisible();
+    expect(document.querySelector('.session-connection-dot[data-connection-state="connected"]')).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("forge · GPT-5.6 Sol");
     expect(document.body).not.toHaveTextContent("Live · Private");
     expect(document.body).not.toHaveTextContent("Expires");
     expect(document.body).not.toHaveTextContent("Tailnet only");
@@ -67,6 +101,30 @@ describe("T3-derived Forge conversation surface", () => {
     expect(editor).toHaveValue("Visible above the keyboard");
   });
 
+  it("grows the multiline editor with its content and caps it at 112 pixels", () => {
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      callback(0);
+      return 1;
+    });
+    render(<ChatView state={liveState()} commands={commandsFixture()} />);
+    const editor = screen.getByLabelText("Message Forge");
+    let scrollHeight = 72;
+    Object.defineProperty(editor, "scrollHeight", {
+      configurable: true,
+      get: () => scrollHeight,
+    });
+
+    fireEvent.change(editor, { target: { value: "First line\nSecond line\nThird line" } });
+    expect(editor).toHaveStyle({ height: "72px", overflowY: "hidden" });
+    expect(editor.closest(".composer-dock")).toHaveAttribute("data-expanded", "true");
+
+    scrollHeight = 180;
+    fireEvent.change(editor, {
+      target: { value: "First line\nSecond line\nThird line\nFourth line\nFifth line" },
+    });
+    expect(editor).toHaveStyle({ height: "112px", overflowY: "auto" });
+  });
+
   it("provides the T3-style back affordance without rendering the bearer token", () => {
     const onBack = vi.fn();
     const bearer = "a".repeat(64);
@@ -82,15 +140,79 @@ describe("T3-derived Forge conversation surface", () => {
     const editor = screen.getByLabelText("Message Forge");
     fireEvent.change(editor, { target: { value: "Continue from my phone" } });
     fireEvent.click(screen.getByLabelText("Send message"));
-    expect(commands.sendPrompt).toHaveBeenCalledWith("Continue from my phone");
+    expect(commands.sendPrompt).toHaveBeenCalledWith("Continue from my phone", []);
     expect(screen.queryByText("Continue from my phone")).not.toBeInTheDocument();
+  });
+
+  it("offers distinct Photos and Files actions and sends an image-only payload", async () => {
+    const commands = commandsFixture();
+    render(<ChatView state={liveState()} commands={commands} />);
+    fireEvent.focus(screen.getByLabelText("Message Forge"));
+    fireEvent.click(screen.getByLabelText("Add photos or files"));
+    const photosAction = screen.getByRole("button", { name: "Photos" });
+    const filesAction = screen.getByRole("button", { name: "Files" });
+    expect(photosAction.querySelector(".lucide-image")).toBeInTheDocument();
+    expect(filesAction.querySelector(".lucide-file-text")).toBeInTheDocument();
+
+    const photosInput = screen.getByLabelText("Choose photos") as HTMLInputElement;
+    const filesInput = screen.getByLabelText("Choose image files") as HTMLInputElement;
+    const openPhotos = vi.spyOn(photosInput, "click");
+    const openFiles = vi.spyOn(filesInput, "click");
+    fireEvent.click(photosAction);
+    fireEvent.click(filesAction);
+    expect(openPhotos).toHaveBeenCalledOnce();
+    expect(openFiles).toHaveBeenCalledOnce();
+    expect(photosInput).toHaveAttribute("accept", "image/*");
+    expect(filesInput).toHaveAttribute("accept", "image/*");
+
+    const image = new File(["pixels"], "release.png", { type: "image/png" });
+    fireEvent.change(filesInput, { target: { files: [image] } });
+    await waitFor(() => expect(screen.getByLabelText("Attached images")).toBeVisible());
+    expect(screen.getByLabelText("Send message")).toBeEnabled();
+    fireEvent.click(screen.getByLabelText("Send message"));
+    await waitFor(() =>
+      expect(commands.sendPrompt).toHaveBeenCalledWith("", [
+        {
+          name: "release.png",
+          mimeType: "image/png",
+          data: "cGl4ZWxz",
+        },
+      ]),
+    );
   });
 
   it("lets the target model choose its own default reasoning effort", () => {
     const commands = commandsFixture();
     render(<ChatView state={liveState()} commands={commands} />);
-    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "gpt-5.6-terra" } });
+    openComposerSettings();
+    fireEvent.click(screen.getByRole("button", { name: "5.6 Terra" }));
     expect(commands.setModel).toHaveBeenCalledWith("gpt-5.6-terra", null);
+  });
+
+  it("shows Fast mode only when both capability and authoritative support allow it", () => {
+    const commands = commandsFixture();
+    const capabilityDisabled = sessionFixture({
+      capabilities: { ...sessionFixture().capabilities, fastMode: false },
+    });
+    const { rerender } = render(
+      <ChatView state={liveState({ session: capabilityDisabled })} commands={commands} />,
+    );
+    openComposerSettings();
+    expect(screen.queryByRole("button", { name: "Fast mode" })).not.toBeInTheDocument();
+
+    rerender(
+      <ChatView
+        state={liveState({ session: sessionFixture({ fastMode: { supported: false, enabled: false } }) })}
+        commands={commands}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Fast mode" })).not.toBeInTheDocument();
+
+    rerender(<ChatView state={liveState()} commands={commands} />);
+    const fastMode = screen.getByRole("button", { name: "Fast mode" });
+    expect(fastMode).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(fastMode);
+    expect(commands.setFastMode).toHaveBeenCalledWith(true);
   });
 
   it("shows exactly one Stop action while the same session is running", () => {
@@ -118,6 +240,39 @@ describe("T3-derived Forge conversation surface", () => {
     fireEvent.click(screen.getByLabelText("Ask side question"));
     expect(commands.askBtw).toHaveBeenCalledWith("did the tests finish?");
     expect(commands.sendPrompt).not.toHaveBeenCalled();
+  });
+
+  it("traps focus in the queued-message editor and restores the action on Escape", async () => {
+    const session = sessionFixture({
+      queue: [
+        {
+          id: "queued-for-edit",
+          text: "Verify release",
+          position: 0,
+          source: "shared",
+          version: 3,
+          actions: { edit: true, steer: true, cancel: true },
+        },
+      ],
+    });
+    render(<ChatView state={liveState({ session })} commands={commandsFixture()} />);
+
+    fireEvent.click(screen.getByLabelText("Queued message actions"));
+    const editAction = screen.getByRole("button", { name: "Edit message" });
+    editAction.focus();
+    fireEvent.click(editAction);
+    const dialog = screen.getByRole("dialog", { name: "Edit message" });
+    const editor = within(dialog).getByRole("textbox");
+    await waitFor(() => expect(editor).toHaveFocus());
+
+    const save = within(dialog).getByRole("button", { name: "Save" });
+    save.focus();
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(editor).toHaveFocus();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Edit message" })).not.toBeInTheDocument();
+    await waitFor(() => expect(editAction).toHaveFocus());
   });
 
   it("does not submit a bare /btw command", () => {
@@ -160,6 +315,7 @@ describe("T3-derived Forge conversation surface", () => {
         commands={commands}
       />,
     );
+    openComposerSettings();
     fireEvent.click(screen.getByRole("button", { name: "Usage" }));
     expect(commands.refreshUsage).not.toHaveBeenCalled();
     expect(screen.getByRole("tabpanel", { name: "Context" })).toHaveTextContent("48%");
@@ -177,6 +333,7 @@ describe("T3-derived Forge conversation surface", () => {
       session: sessionFixture({ usage: usageFixture({ status: "loading" }) }),
     });
     render(<ChatView state={state} commands={commands} />);
+    openComposerSettings();
     fireEvent.click(screen.getByRole("button", { name: "Usage" }));
     expect(screen.getByText("Refreshing usage…")).toBeVisible();
     expect(screen.getByRole("tabpanel", { name: "Context" })).toHaveTextContent("48%");
@@ -197,6 +354,7 @@ describe("T3-derived Forge conversation surface", () => {
       }),
     });
     render(<ChatView state={state} commands={commands} />);
+    openComposerSettings();
     fireEvent.click(screen.getByRole("button", { name: "Usage" }));
     expect(screen.getByText("Usage could not be refreshed. Showing cached data.")).toBeVisible();
     fireEvent.click(screen.getByRole("tab", { name: "This session" }));
@@ -375,17 +533,20 @@ describe("Forge session index", () => {
     modelLabel: "GPT-5.6 Sol",
   };
 
-  it("keeps the T3 row hierarchy without an invented project badge", () => {
+  it("uses a native-like project header and compact thread row", () => {
     const { container } = render(
       <PairingsHome pairings={[pairing]} onSelect={vi.fn()} onRemove={vi.fn()} />,
     );
     expect(screen.getByText("forge")).toBeVisible();
     expect(screen.getByText("Keep the browser quiet")).toBeVisible();
-    expect(screen.getByText("/workspace/forge")).toBeVisible();
-    expect(screen.getByText("GPT-5.6 Sol")).toBeVisible();
+    expect(screen.getByText("Working")).toBeVisible();
+    expect(screen.queryByText("/workspace/forge")).not.toBeInTheDocument();
+    expect(screen.queryByText("GPT-5.6 Sol")).not.toBeInTheDocument();
     expect(container.querySelector(".pairing-project-mark")).not.toBeInTheDocument();
     expect(screen.queryByText("ALPHA")).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/saved pairings/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Remove Keep the browser quiet/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /More options for Keep the browser quiet/ })).toBeVisible();
   });
 
   it("keeps the empty state typographic instead of substituting another fake icon", () => {

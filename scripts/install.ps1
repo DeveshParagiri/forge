@@ -1,8 +1,8 @@
 # Install or update Forge from a checksummed GitHub Release binary on Windows.
 #
-#   irm https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install.ps1 | iex
-#   $env:FORGE_VERSION = "0.5.0"; irm https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install.ps1 | iex
-#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install.ps1))) -Version 0.5.0
+#   irm https://raw.githubusercontent.com/exaforge/forge/main/scripts/install.ps1 | iex
+#   $env:FORGE_VERSION = "0.5.0"; irm https://raw.githubusercontent.com/exaforge/forge/main/scripts/install.ps1 | iex
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/exaforge/forge/main/scripts/install.ps1))) -Version 0.5.0
 
 param(
     [Parameter(Position = 0)]
@@ -14,7 +14,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 if ($PSVersionTable.Platform -and $PSVersionTable.Platform -ne 'Win32NT') {
-    Write-Error "This installer is for Windows. On macOS/Linux, use: curl -fsSL https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install | sh"
+    Write-Error "This installer is for Windows. On macOS/Linux, use: curl -fsSL https://raw.githubusercontent.com/exaforge/forge/main/scripts/install | sh"
     exit 1
 }
 
@@ -22,10 +22,10 @@ if (-not $Version -and $env:FORGE_VERSION) {
     $Version = $env:FORGE_VERSION
 }
 
-$Repo = if ($env:FORGE_REPO) { $env:FORGE_REPO } else { 'DeveshParagiri/forge' }
+$Repo = if ($env:FORGE_REPO) { $env:FORGE_REPO } else { 'exaforge/forge' }
 $HomeDir = if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:HOME }
-$InstallBin = if ($env:GROK_INSTALL_BIN) { $env:GROK_INSTALL_BIN } else { Join-Path $HomeDir '.grok\bin\grok.exe' }
-$Updater = if ($env:GROK_UPDATER) { $env:GROK_UPDATER } else { Join-Path $HomeDir 'bin\grok-update-from-source.ps1' }
+$InstallBin = if ($env:FORGE_INSTALL_BIN) { $env:FORGE_INSTALL_BIN } elseif ($env:GROK_INSTALL_BIN) { $env:GROK_INSTALL_BIN } else { Join-Path $HomeDir '.grok\bin\forge.exe' }
+$Updater = if ($env:FORGE_UPDATER) { $env:FORGE_UPDATER } elseif ($env:GROK_UPDATER) { $env:GROK_UPDATER } else { Join-Path $HomeDir 'bin\forge-update-from-source.ps1' }
 
 function Fail([string]$Message) {
     Write-Error "BLOCKED: $Message"
@@ -71,9 +71,14 @@ try {
     }
 
     Expand-Archive -Path $zipPath -DestinationPath $tmp -Force
-    $extracted = Join-Path $tmp 'grok.exe'
+    $extracted = Join-Path $tmp 'forge.exe'
     if (-not (Test-Path $extracted)) {
-        Fail "release archive did not contain grok.exe"
+        # Releases published before the canonical executable rename contained
+        # grok.exe inside the same checksummed forge-* archive.
+        $extracted = Join-Path $tmp 'grok.exe'
+    }
+    if (-not (Test-Path $extracted)) {
+        Fail "release archive did not contain forge.exe or grok.exe"
     }
 
     $binDir = Split-Path -Parent $InstallBin
@@ -96,6 +101,12 @@ try {
     Invoke-WebRequest -Uri $updaterSrc -OutFile $updaterTmp -UseBasicParsing
     Move-Item -Path $updaterTmp -Destination $Updater -Force
 
+    # Keep the old executable name working for existing Windows installations.
+    $legacyBin = Join-Path $binDir 'grok.exe'
+    if ($legacyBin -ne $InstallBin) {
+        Copy-Item -Path $InstallBin -Destination $legacyBin -Force
+    }
+
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     $entries = if ($userPath) { $userPath -split ';' | Where-Object { $_ -ne '' } } else { @() }
     if ($entries -notcontains $binDir) {
@@ -109,7 +120,7 @@ try {
     try { $reported = & $InstallBin --version } catch {}
     Write-Host "Installed: $reported"
     Write-Host "  binary: $InstallBin"
-    Write-Host "  update: grok update"
+    Write-Host "  update: forge update"
 } finally {
     if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue }
 }

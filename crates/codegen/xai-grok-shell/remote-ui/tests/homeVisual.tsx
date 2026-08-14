@@ -12,4 +12,12 @@ const pairings: StoredPairing[] = [
 
 const root = document.getElementById("root");
 if (!root) throw new Error("Visual fixture root was not found");
-createRoot(root).render(<PairingsHome pairings={pairings} onSelect={() => {}} onRemove={() => {}} />);
+createRoot(root).render(
+  <PairingsHome
+    pairings={pairings}
+    onSelect={() => {}}
+    onRemove={() => {}}
+    onCreateSession={() => {}}
+    onCreateSessionInProject={() => {}}
+  />,
+);

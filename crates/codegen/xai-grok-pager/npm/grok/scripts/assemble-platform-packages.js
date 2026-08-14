@@ -85,36 +85,36 @@ async function main() {
         {
             platform: 'darwin', arch: 'arm64', binName: 'grok',
             envVar: 'GROK_DARWIN_ARM64',
-            defaultSource: path.join(xaiRoot, 'target', 'release', 'xai-grok-pager'),
+            defaultSource: path.join(xaiRoot, 'target', 'release', 'forge'),
         },
         {
             platform: 'darwin', arch: 'x64', binName: 'grok',
             envVar: 'GROK_DARWIN_X64',
-            defaultSource: path.join(xaiRoot, 'target', 'x86_64-apple-darwin', 'release', 'xai-grok-pager'),
+            defaultSource: path.join(xaiRoot, 'target', 'x86_64-apple-darwin', 'release', 'forge'),
         },
         {
             platform: 'linux', arch: 'x64', binName: 'grok',
             envVar: 'GROK_LINUX_X64',
             defaultSource: path.join(xaiRoot, 'target',
                 'explorer_cross_x86_64-unknown-linux-gnu',
-                'x86_64-unknown-linux-gnu', 'release', 'xai-grok-pager'),
+                'x86_64-unknown-linux-gnu', 'release', 'forge'),
         },
         {
             platform: 'linux', arch: 'arm64', binName: 'grok',
             envVar: 'GROK_LINUX_ARM64',
             defaultSource: path.join(xaiRoot, 'target',
                 'explorer_cross_aarch64-unknown-linux-gnu',
-                'aarch64-unknown-linux-gnu', 'release', 'xai-grok-pager'),
+                'aarch64-unknown-linux-gnu', 'release', 'forge'),
         },
         {
             platform: 'win32', arch: 'x64', binName: 'grok.exe',
             envVar: 'GROK_WIN32_X64',
-            defaultSource: path.join(xaiRoot, 'target', 'x86_64-pc-windows-msvc', 'release', 'xai-grok-pager.exe'),
+            defaultSource: path.join(xaiRoot, 'target', 'x86_64-pc-windows-msvc', 'release', 'forge.exe'),
         },
         {
             platform: 'win32', arch: 'arm64', binName: 'grok.exe',
             envVar: 'GROK_WIN32_ARM64',
-            defaultSource: path.join(xaiRoot, 'target', 'aarch64-pc-windows-msvc', 'release', 'xai-grok-pager.exe'),
+            defaultSource: path.join(xaiRoot, 'target', 'aarch64-pc-windows-msvc', 'release', 'forge.exe'),
         },
     ];
 

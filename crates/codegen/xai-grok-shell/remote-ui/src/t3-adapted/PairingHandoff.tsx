@@ -1,4 +1,5 @@
 import Smartphone from "lucide-react/dist/esm/icons/smartphone.js";
+import forgeMarkUrl from "../../../../../../clients/forge-mobile/apps/mobile/assets/forge/mark.png";
 
 export function PairingHandoff({
   nativeClaimed,
@@ -11,7 +12,10 @@ export function PairingHandoff({
 }) {
   return (
     <main className="pairing-handoff">
-      <div className="forge-wordmark" aria-label="Forge"><strong>Forge</strong></div>
+      <div className="forge-wordmark" aria-label="Forge">
+        <img src={forgeMarkUrl} alt="" aria-hidden="true" />
+        <strong>Forge</strong>
+      </div>
       <div className="handoff-mark" aria-hidden="true"><Smartphone /></div>
       <h1>{nativeClaimed ? "Opened in Forge" : "Opening Forge"}</h1>
       <p>{nativeClaimed ? "This private session was handed to the app." : "Use the Forge app, or continue with the same session in this browser."}</p>

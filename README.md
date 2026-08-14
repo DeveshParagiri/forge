@@ -26,56 +26,38 @@ synchronized with upstream Grok Build.
 
 ---
 
-## Install Forge
+## Install
 
-Install the latest checksummed release:
+Install the latest release:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install | sh
+curl -fsSL https://raw.githubusercontent.com/exaforge/forge/main/scripts/install | sh
 ```
 
-The installer selects the archive for macOS Apple Silicon or Linux ARM64;
-verifies its SHA-256 checksum; and installs the canonical executable
-at `~/.grok/bin/grok`. It also refreshes compatibility links without changing
-your shell configuration.
-
-On Windows x86_64, use PowerShell:
+On Windows, run PowerShell as your normal user:
 
 ```powershell
-irm https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/exaforge/forge/main/scripts/install.ps1 | iex
 ```
 
-That installs `%USERPROFILE%\.grok\bin\grok.exe` and adds it to your user PATH.
-
-Launch Forge:
+Then launch Forge:
 
 ```sh
-grok
+forge
 ```
 
-Update to the latest Forge release at any time:
+Update an installed release:
 
 ```sh
-grok update
+forge update
 ```
 
-Configuration, authentication, sessions, and memory remain under `~/.grok/`.
-`grok update` installs another packaged release. It does not need Rust or alter
-a source checkout.
+`grok` remains available as a compatibility alias, including `grok update`, so
+existing Forge installations and scripts continue to work.
 
-### Install a specific release
-
-Pass a Forge version with or without the `forge-v` prefix:
-
-```sh
-FORGE_VERSION=0.5.0 \
-  curl -fsSL https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install | sh
-```
-
-```powershell
-$env:FORGE_VERSION = "0.5.0"
-irm https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install.ps1 | iex
-```
+Forge stores its configuration, authentication, sessions, and memory under
+`~/.grok/`. The installer supports macOS Apple Silicon, Linux ARM64, and
+Windows x86_64.
 
 ## Extended features
 
@@ -101,7 +83,7 @@ generic model-provider configuration for other endpoints.
 Start Forge and use `/login`, or run:
 
 ```sh
-grok login
+forge login
 ```
 
 This remains the stock first-party authentication path.
@@ -284,57 +266,27 @@ Building from source requires Git, [Rust](https://rustup.rs/), Cargo, and either
 Clone the stable branch and build manually:
 
 ```sh
-git clone --branch main https://github.com/DeveshParagiri/forge.git
+git clone --branch main https://github.com/exaforge/forge.git
 cd forge
 cargo build --locked -p xai-grok-pager-bin --release
 mkdir -p ~/.grok/bin
-install -m 755 target/release/xai-grok-pager ~/.grok/bin/grok
+install -m 755 target/release/forge ~/.grok/bin/forge
 ```
 
 On macOS, ad-hoc sign a manually installed binary:
 
 ```sh
-codesign --force --sign - ~/.grok/bin/grok
-codesign --verify ~/.grok/bin/grok
+codesign --force --sign - ~/.grok/bin/forge
+codesign --verify ~/.grok/bin/forge
 ```
 
 The installer also supports a source mode. It checks prerequisites but does not
 install system packages or alter shell configuration:
 
 ```sh
-FORGE_INSTALL_MODE=source GROK_BRANCH=main \
-  curl -fsSL https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install | sh
+FORGE_INSTALL_MODE=source FORGE_BRANCH=main \
+  curl -fsSL https://raw.githubusercontent.com/exaforge/forge/main/scripts/install | sh
 ```
-
-## Maintainer workflow
-
-Forge uses three principal refs:
-
-| Ref | Purpose |
-|---|---|
-| `upstream/main` | Official source from `xai-org/grok-build` |
-| `dev` | Forge integration and upstream synchronization |
-| `main` | Validated, published, installable Forge |
-
-Synchronize a clean local `dev` branch:
-
-```sh
-scripts/forge-sync-upstream
-```
-
-That helper fetches `upstream/main` and rebases local `dev`; it does not publish.
-
-After resolving conflicts and running the focused checks, publish the exact
-validated integration commit without rewriting history:
-
-```sh
-scripts/forge-publish main
-```
-
-The publisher runs formatting, compilation, and focused Forge tests by default.
-It refuses dirty trees, the wrong source branch, and non-fast-forward updates.
-Create immutable Forge release tags only after `dev` and `main` point to the same
-validated commit.
 
 ## License
 

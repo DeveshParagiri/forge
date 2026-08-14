@@ -8,16 +8,16 @@ upstream is tracked through the `upstream/main` remote-tracking branch.
 
 | Role | Path |
 |------|------|
-| Canonical executable | `~/.grok/bin/grok` |
+| Canonical executable | `~/.grok/bin/forge` |
 | Source checkout | `~/.local/share/grok/source` |
-| Update script | `~/bin/grok-update-from-source` |
+| Update script | `~/bin/forge-update-from-source` |
 | Config, auth, and sessions | `~/.grok/` |
 | ChatGPT Codex auth | `~/.codex/auth.json` |
 | Third-party provider config | `[model_providers.*]` in `~/.grok/config.toml` |
 
-`~/.local/bin/grok`, `~/.local/share/grok/versions/current`,
-`~/.grok/local/grok`, and `~/bin/grok` are compatibility symlinks to the
-canonical executable.
+`~/.grok/bin/grok`, `~/.local/bin/{forge,grok}`,
+`~/.local/share/{forge,grok}/versions/current`, `~/.grok/local/{forge,grok}`,
+and `~/bin/{forge,grok}` are compatibility symlinks to the canonical executable.
 
 ## Branches and remotes
 
@@ -162,14 +162,14 @@ scripts/forge-publish main
 
 ```bash
 cargo build -p xai-grok-pager-bin --release
-install -m 755 target/release/xai-grok-pager ~/.grok/bin/grok
+install -m 755 target/release/forge ~/.grok/bin/forge
 ```
 
 The updater automates fetch, rebase, release build, atomic installation, and
 compatibility symlink refresh:
 
 ```bash
-~/bin/grok-update-from-source
+~/bin/forge-update-from-source
 ```
 
 ## Deferred hardening

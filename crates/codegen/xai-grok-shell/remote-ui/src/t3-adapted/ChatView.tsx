@@ -4,14 +4,14 @@
  */
 import AlertTriangle from "lucide-react/dist/esm/icons/triangle-alert.js";
 import ClipboardList from "lucide-react/dist/esm/icons/clipboard-list.js";
-import ListOrdered from "lucide-react/dist/esm/icons/list-ordered.js";
 import RefreshCw from "lucide-react/dist/esm/icons/refresh-cw.js";
 import { useCallback, useState } from "react";
-import type { RemoteSessionSnapshot } from "../protocol";
+import type { RemoteQueueItem, RemoteSessionSnapshot } from "../protocol";
 import type { RemoteClientState } from "../reducer";
 import type { ForgeRemoteCommands } from "../remoteSocket";
 import { InteractionCards } from "../components/InteractionCards";
 import { SessionTether } from "../components/SessionTether";
+import { useModalFocus } from "../useModalFocus";
 import { ChatComposer } from "./ChatComposer";
 import { MessagesTimeline } from "./MessagesTimeline";
 import { UsageSheet } from "./UsageSheet";
@@ -28,21 +28,10 @@ export function usageNeedsRefresh(session: RemoteSessionSnapshot, now = Date.now
 }
 
 function SessionWorkState({ session }: { session: RemoteSessionSnapshot }) {
-  const queue = session.queue || [];
   const showPlan = Boolean(session.planMode?.active && session.planMode.plan);
-  if (!queue.length && !showPlan) return null;
+  if (!showPlan) return null;
   return (
     <div className="session-work-state">
-      {queue.length ? (
-        <details className="queue-strip">
-          <summary><ListOrdered aria-hidden="true" />{queue.length} queued message{queue.length === 1 ? "" : "s"}</summary>
-          <ol>
-            {queue.map((item, index) => (
-              <li key={item.id}><span>{item.position ?? index + 1}</span><p>{item.text}</p></li>
-            ))}
-          </ol>
-        </details>
-      ) : null}
       {showPlan ? (
         <details className="plan-mode-strip">
           <summary><ClipboardList aria-hidden="true" />Plan mode</summary>
@@ -85,17 +74,28 @@ function LiveChatView({
   session,
   commands,
   onBack,
+  onCreateSession,
 }: {
   state: RemoteClientState;
   session: RemoteSessionSnapshot;
   commands: ForgeRemoteCommands;
   onBack?: () => void;
+  onCreateSession?: () => void;
 }) {
   const [usageOpen, setUsageOpen] = useState(false);
+  const [queueEditItem, setQueueEditItem] = useState<RemoteQueueItem>();
+  const [queueEditText, setQueueEditText] = useState("");
+  const closeQueueEditor = useCallback(() => setQueueEditItem(undefined), []);
+  const queueDialogRef = useModalFocus<HTMLFormElement>(Boolean(queueEditItem), closeQueueEditor);
   const connected = state.phase === "live";
   const pendingCommand = Object.values(state.pendingCommands)[0];
   const usagePending = Object.values(state.pendingCommands).some((command) => command.type === "refreshUsage");
   const isWorking = session.status === "running";
+  const pendingQueueItemIds = new Set(
+    Object.values(state.pendingCommands)
+      .filter((command) => command.type === "queue" && command.queueItemId)
+      .map((command) => command.queueItemId as string),
+  );
   const refreshUsage = useCallback(() => {
     if (!connected || !session.capabilities.usage || usagePending) return;
     commands.refreshUsage();
@@ -108,7 +108,12 @@ function LiveChatView({
   const closeUsage = useCallback(() => setUsageOpen(false), []);
   return (
     <div className="remote-app">
-      <SessionTether phase={state.phase} session={session} onBack={onBack} />
+      <SessionTether
+        phase={state.phase}
+        session={session}
+        onBack={onBack}
+        onCreateSession={onCreateSession}
+      />
       {state.phase === "reconnecting" || state.phase === "resyncing" || state.phase === "passive" ? (
         <div className="connection-banner" role="status"><RefreshCw className={state.phase === "passive" ? undefined : "status-spin"} aria-hidden="true" />{state.phase === "resyncing" ? "Refreshing the complete Forge session…" : state.phase === "passive" ? "Active in the Forge app. Return to this browser to take control here." : "Reconnecting. Work continues in the terminal…"}</div>
       ) : null}
@@ -118,7 +123,20 @@ function LiveChatView({
         <MessagesTimeline
           items={session.transcript}
           isWorking={isWorking}
-          workingLabel={session.taskState?.label}
+          queue={session.queue}
+          pendingQueueItemIds={pendingQueueItemIds}
+          queueActions={{
+            onEdit: (item) => {
+              setQueueEditItem(item);
+              setQueueEditText(item.text);
+            },
+            onSteer: (item) => {
+              if (item.version !== undefined) commands.steerQueuedPrompt(item.id, item.version);
+            },
+            onCancel: (item) => {
+              if (item.version !== undefined) commands.cancelQueuedPrompt(item.id, item.version);
+            },
+          }}
           revision={state.revision}
         />
         <div className="composer-stack">
@@ -142,11 +160,55 @@ function LiveChatView({
           onClose={closeUsage}
         />
       ) : null}
+      {queueEditItem ? (
+        <div className="queue-edit-backdrop" role="presentation" onMouseDown={closeQueueEditor}>
+          <form
+            ref={queueDialogRef}
+            className="queue-edit-sheet"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="queue-edit-title"
+            tabIndex={-1}
+            onMouseDown={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (queueEditItem.version === undefined) return;
+              const commandId = commands.editQueuedPrompt(
+                queueEditItem.id,
+                queueEditItem.version,
+                queueEditText,
+              );
+              if (commandId) setQueueEditItem(undefined);
+            }}
+          >
+            <header><strong id="queue-edit-title">Edit message</strong></header>
+            <textarea
+              data-autofocus
+              value={queueEditText}
+              onChange={(event) => setQueueEditText(event.target.value)}
+            />
+            <footer>
+              <button type="button" onClick={closeQueueEditor}>Cancel</button>
+              <button type="submit" disabled={!queueEditText.trim()}>Save</button>
+            </footer>
+          </form>
+        </div>
+      ) : null}
     </div>
   );
 }
 
-export function ChatView({ state, commands, onBack }: { state: RemoteClientState; commands: ForgeRemoteCommands; onBack?: () => void }) {
+export function ChatView({
+  state,
+  commands,
+  onBack,
+  onCreateSession,
+}: {
+  state: RemoteClientState;
+  commands: ForgeRemoteCommands;
+  onBack?: () => void;
+  onCreateSession?: () => void;
+}) {
   const session = state.session;
   const terminalPhase = ["revoked", "conflict", "incompatible"].includes(state.phase);
   if (!session || terminalPhase) {
@@ -157,5 +219,13 @@ export function ChatView({ state, commands, onBack }: { state: RemoteClientState
       </div>
     );
   }
-  return <LiveChatView state={state} session={session} commands={commands} onBack={onBack} />;
+  return (
+    <LiveChatView
+      state={state}
+      session={session}
+      commands={commands}
+      onBack={onBack}
+      onCreateSession={onCreateSession}
+    />
+  );
 }

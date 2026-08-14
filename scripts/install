@@ -2,14 +2,14 @@
 # Install or update Forge from a checksummed GitHub Release binary.
 set -eu
 
-REPO="${FORGE_REPO:-DeveshParagiri/forge}"
+REPO="${FORGE_REPO:-exaforge/forge}"
 VERSION="${FORGE_VERSION:-latest}"
 MODE="${FORGE_INSTALL_MODE:-binary}"
-INSTALL_BIN="${GROK_INSTALL_BIN:-$HOME/.grok/bin/grok}"
-UPDATER="${GROK_UPDATER:-$HOME/bin/grok-update-from-source}"
-SOURCE_DIR="${GROK_SRC:-$HOME/Projects/forge}"
-BRANCH="${GROK_BRANCH:-main}"
-REPO_URL="${GROK_REPO_URL:-https://github.com/$REPO.git}"
+INSTALL_BIN="${FORGE_INSTALL_BIN:-${GROK_INSTALL_BIN:-$HOME/.grok/bin/forge}}"
+UPDATER="${FORGE_UPDATER:-${GROK_UPDATER:-$HOME/bin/forge-update-from-source}}"
+SOURCE_DIR="${FORGE_SRC:-${GROK_SRC:-$HOME/Projects/forge}}"
+BRANCH="${FORGE_BRANCH:-${GROK_BRANCH:-main}}"
+REPO_URL="${FORGE_REPO_URL:-${GROK_REPO_URL:-https://github.com/$REPO.git}}"
 
 fail() {
   echo "BLOCKED: $*" >&2
@@ -22,13 +22,20 @@ need() {
 
 install_links() {
   for link_path in \
+    "$HOME/.grok/bin/grok" \
+    "$HOME/.local/bin/forge" \
     "$HOME/.local/bin/grok" \
+    "$HOME/.local/share/forge/versions/current" \
     "$HOME/.local/share/grok/versions/current" \
+    "$HOME/.grok/local/forge" \
     "$HOME/.grok/local/grok" \
+    "$HOME/bin/forge" \
     "$HOME/bin/grok"
   do
     mkdir -p "$(dirname "$link_path")"
-    ln -sfn "$INSTALL_BIN" "$link_path"
+    if [ "$link_path" != "$INSTALL_BIN" ]; then
+      ln -sfn "$INSTALL_BIN" "$link_path"
+    fi
   done
 }
 
@@ -67,10 +74,16 @@ install_binary() {
   fi
 
   tar -xzf "$tmp_dir/$asset" -C "$tmp_dir"
-  [ -x "$tmp_dir/grok" ] || fail "release archive did not contain an executable named grok"
+  extracted="$tmp_dir/forge"
+  if [ ! -x "$extracted" ]; then
+    # Releases published before the canonical executable rename contained
+    # `grok` inside the same checksummed forge-* archive.
+    extracted="$tmp_dir/grok"
+  fi
+  [ -x "$extracted" ] || fail "release archive did not contain an executable named forge or grok"
 
   mkdir -p "$(dirname "$INSTALL_BIN")"
-  install -m 755 "$tmp_dir/grok" "$INSTALL_BIN.new.$$"
+  install -m 755 "$extracted" "$INSTALL_BIN.new.$$"
   mv -f "$INSTALL_BIN.new.$$" "$INSTALL_BIN"
 
   if [ "$os" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
@@ -78,7 +91,17 @@ install_binary() {
     codesign --verify "$INSTALL_BIN"
   fi
 
-  # Keep `grok update` and the documented recovery command on one canonical
+  # Keep the old executable name working for existing installations.
+  legacy_bin="$(dirname "$INSTALL_BIN")/grok"
+  if [ "$legacy_bin" != "$INSTALL_BIN" ]; then
+    cp "$INSTALL_BIN" "$legacy_bin"
+    chmod 755 "$legacy_bin"
+    if [ "$os" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
+      codesign --force --sign - "$legacy_bin"
+    fi
+  fi
+
+  # Keep `forge update` and the documented recovery command on one canonical
   # installer implementation. The updater simply re-runs this release installer.
   mkdir -p "$(dirname "$UPDATER")"
   curl --fail --location --silent --show-error \
@@ -91,7 +114,7 @@ install_binary() {
   rm -rf "$tmp_dir"
   echo "Installed: $($INSTALL_BIN --version 2>/dev/null || echo Forge)"
   echo "  binary: $INSTALL_BIN"
-  echo "  update: grok update"
+  echo "  update: forge update (grok update also remains supported)"
 }
 
 install_source() {
@@ -106,9 +129,13 @@ install_source() {
     mkdir -p "$(dirname "$SOURCE_DIR")"
     git clone --branch "$BRANCH" "$REPO_URL" "$SOURCE_DIR"
   fi
-  (cd "$SOURCE_DIR" && cargo build -p xai-grok-pager-bin --release)
+  (cd "$SOURCE_DIR" && cargo build --locked -p xai-grok-pager-bin --release)
   mkdir -p "$(dirname "$INSTALL_BIN")"
-  install -m 755 "$SOURCE_DIR/target/release/xai-grok-pager" "$INSTALL_BIN"
+  install -m 755 "$SOURCE_DIR/target/release/forge" "$INSTALL_BIN"
+  if [ "$(uname -s)" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
+    codesign --force --sign - "$INSTALL_BIN"
+    codesign --verify "$INSTALL_BIN"
+  fi
   install_links
   echo "Installed source build from $SOURCE_DIR"
 }

@@ -244,6 +244,263 @@ describe("ForgeRemoteSocket lifecycle", () => {
     remote.stop();
   });
 
+  it("sends image attachments and permits an attachment-only prompt", () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const remote = new ForgeRemoteSocket(() => {});
+    remote.connect();
+    const socket = FakeWebSocket.instances[0];
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+
+    expect(
+      remote.sendPrompt("   ", [
+        { name: "screen.png", mimeType: "image/png", data: "aGVsbG8=" },
+        { name: "empty.png", mimeType: "image/png", data: "" },
+      ]),
+    ).not.toBeNull();
+    expect(socket.sent.map((payload) => JSON.parse(payload))).toContainEqual(
+      expect.objectContaining({
+        type: "command",
+        command: {
+          type: "prompt",
+          text: "",
+          images: [{ name: "screen.png", mimeType: "image/png", data: "aGVsbG8=" }],
+        },
+      }),
+    );
+    remote.stop();
+  });
+
+  it("gates fast mode and queue controls against authoritative capability metadata", () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const remote = new ForgeRemoteSocket(() => {});
+    remote.connect();
+    const socket = FakeWebSocket.instances[0];
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "snapshot",
+        protocolVersion: 1,
+        revision: 1,
+        session: sessionFixture({
+          fastMode: { supported: true, enabled: false },
+          queue: [
+            {
+              id: "queued-1",
+              text: "Then ship",
+              position: 1,
+              source: "shared",
+              version: 4,
+              actions: { edit: true, steer: true, cancel: false },
+            },
+          ],
+        }),
+      }),
+    });
+
+    expect(remote.setFastMode(true)).not.toBeNull();
+    expect(remote.setFastMode(true)).toBeNull();
+    expect(remote.steerQueuedPrompt("queued-1", 4)).not.toBeNull();
+    expect(remote.steerQueuedPrompt("queued-1", 4)).toBeNull();
+    expect(remote.cancelQueuedPrompt("queued-1", 4)).toBeNull();
+    expect(remote.editQueuedPrompt("queued-1", 3, "Changed")).toBeNull();
+
+    const sent = socket.sent.map((payload) => JSON.parse(payload));
+    expect(sent).toContainEqual(
+      expect.objectContaining({ command: { type: "setFastMode", enabled: true } }),
+    );
+    expect(sent).toContainEqual(
+      expect.objectContaining({
+        command: { type: "steerQueuedPrompt", queueItemId: "queued-1", expectedVersion: 4 },
+      }),
+    );
+    remote.stop();
+  });
+
+  it("resyncs and unlocks a queue action that never receives authoritative state", () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    let state: RemoteClientState = initialRemoteClientState;
+    const remote = new ForgeRemoteSocket((action) => {
+      state = remoteClientReducer(state, action);
+    });
+    remote.connect();
+    const socket = FakeWebSocket.instances[0];
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "snapshot",
+        protocolVersion: 1,
+        revision: 1,
+        session: sessionFixture({
+          queue: [
+            {
+              id: "queued-1",
+              text: "Then ship",
+              source: "shared",
+              version: 4,
+              actions: { edit: true, steer: true, cancel: true },
+            },
+          ],
+        }),
+      }),
+    });
+    const commandId = remote.steerQueuedPrompt("queued-1", 4);
+    expect(commandId).not.toBeNull();
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "commandResult",
+        protocolVersion: 1,
+        commandId,
+        outcome: { status: "ok" },
+      }),
+    });
+    expect(Object.keys(state.pendingCommands)).toHaveLength(1);
+
+    vi.advanceTimersByTime(8_000);
+    expect(socket.sent.map((payload) => JSON.parse(payload))).toContainEqual(
+      expect.objectContaining({ command: { type: "resync" } }),
+    );
+    vi.advanceTimersByTime(2_000);
+    expect(state.pendingCommands).toEqual({});
+    remote.stop();
+  });
+
+  it("correlates child-session creation and acceptance without synthesizing a pairing", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const remote = new ForgeRemoteSocket(() => {});
+    remote.connect();
+    const socket = FakeWebSocket.instances[0];
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "snapshot",
+        protocolVersion: 1,
+        revision: 1,
+        session: sessionFixture(),
+      }),
+    });
+
+    const created = remote.newSession();
+    expect(created).not.toBeNull();
+    const newSessionCommand = socket.sent
+      .map((payload) => JSON.parse(payload))
+      .find((message) => message.command?.type === "newSession");
+    expect(newSessionCommand?.commandId).toEqual(expect.any(String));
+    const pairingUrl = `https://forge.example/forge/${"b".repeat(64)}/`;
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "sessionCreated",
+        protocolVersion: 1,
+        commandId: newSessionCommand.commandId,
+        sessionId: "session-child",
+        pairingUrl,
+        expiresAt: "2030-01-01T00:00:00Z",
+      }),
+    });
+    await expect(created).resolves.toEqual({
+      sessionId: "session-child",
+      pairingUrl,
+      expiresAt: "2030-01-01T00:00:00Z",
+    });
+
+    const accepted = remote.acceptNewSession("  session-child  ");
+    expect(accepted).not.toBeNull();
+    const acceptCommand = socket.sent
+      .map((payload) => JSON.parse(payload))
+      .find((message) => message.command?.type === "acceptNewSession");
+    expect(acceptCommand.command).toEqual({
+      type: "acceptNewSession",
+      sessionId: "session-child",
+    });
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "commandResult",
+        protocolVersion: 1,
+        commandId: acceptCommand.commandId,
+        outcome: { status: "ok" },
+      }),
+    });
+    await expect(accepted).resolves.toBeUndefined();
+    remote.stop();
+  });
+
+  it("rejects a child-session promise when Forge rejects the command", async () => {
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const remote = new ForgeRemoteSocket(() => {});
+    remote.connect();
+    const socket = FakeWebSocket.instances[0];
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "snapshot",
+        protocolVersion: 1,
+        revision: 1,
+        session: sessionFixture(),
+      }),
+    });
+    const created = remote.newSession();
+    expect(created).not.toBeNull();
+    const command = socket.sent
+      .map((payload) => JSON.parse(payload))
+      .find((message) => message.command?.type === "newSession");
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "commandResult",
+        protocolVersion: 1,
+        commandId: command.commandId,
+        outcome: {
+          status: "error",
+          error: { code: "newSessionUnavailable", message: "Could not create session" },
+        },
+      }),
+    });
+    await expect(created).rejects.toThrow("Could not create session");
+    remote.stop();
+  });
+
+  it("times out an unanswered new-session command and unlocks a retry", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    let state: RemoteClientState = initialRemoteClientState;
+    const remote = new ForgeRemoteSocket((action) => {
+      state = remoteClientReducer(state, action);
+    });
+    remote.connect();
+    const socket = FakeWebSocket.instances[0];
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", {
+      data: JSON.stringify({
+        type: "snapshot",
+        protocolVersion: 1,
+        revision: 1,
+        session: sessionFixture(),
+      }),
+    });
+
+    const created = remote.newSession();
+    expect(created).not.toBeNull();
+    const rejected = expect(created).rejects.toThrow(
+      "Forge did not finish the new-session request in time.",
+    );
+    expect(Object.values(state.pendingCommands)).toEqual([
+      expect.objectContaining({ type: "newSession" }),
+    ]);
+
+    vi.advanceTimersByTime(45_000);
+    await rejected;
+    expect(state.pendingCommands).toEqual({});
+    const retried = remote.newSession();
+    expect(retried).not.toBeNull();
+    remote.stop();
+    await expect(retried).rejects.toThrow("The remote page closed before the new session was ready.");
+  });
+
   it("expires locally and stops reconnecting when the phone was offline at expiry", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));

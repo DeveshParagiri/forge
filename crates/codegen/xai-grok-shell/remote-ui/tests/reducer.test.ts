@@ -92,6 +92,75 @@ describe("Forge Remote protocol reducer", () => {
     expect(next.session?.transcript.at(-1)?.id).toBe("u2");
   });
 
+  it("applies a bounded transcript splice without replacing unrelated session state", () => {
+    const live = withSnapshot(4);
+    const next = remoteClientReducer(live, {
+      type: "serverMessage",
+      message: {
+        type: "delta",
+        protocolVersion: 1,
+        baseRevision: 4,
+        revision: 5,
+        event: {
+          kind: "transcriptSpliced",
+          sessionId: "session-123",
+          start: 1,
+          deleteCount: 1,
+          items: [{ id: "a1", kind: "assistant", text: "Streaming now", status: "running" }],
+        },
+      },
+    });
+    expect(next.phase).toBe("live");
+    expect(next.revision).toBe(5);
+    expect(next.session?.title).toBe("Remote feature");
+    expect(next.session?.transcript.map((item) => item.id)).toEqual(["u1", "a1"]);
+    expect(next.session?.transcript[1]).toMatchObject({ text: "Streaming now", status: "running" });
+  });
+
+  it("requests authoritative state for an out-of-bounds transcript splice", () => {
+    const next = remoteClientReducer(withSnapshot(4), {
+      type: "serverMessage",
+      message: {
+        type: "delta",
+        protocolVersion: 1,
+        baseRevision: 4,
+        revision: 5,
+        event: {
+          kind: "transcriptSpliced",
+          sessionId: "session-123",
+          start: 3,
+          deleteCount: 0,
+          items: [],
+        },
+      },
+    });
+    expect(next.phase).toBe("resyncing");
+    expect(next.needsResync).toBe(true);
+    expect(next.revision).toBe(4);
+    expect(next.lastError).toMatch(/invalid transcript update/i);
+  });
+
+  it("fails closed when a transcript splice names another session", () => {
+    const next = remoteClientReducer(withSnapshot(4), {
+      type: "serverMessage",
+      message: {
+        type: "delta",
+        protocolVersion: 1,
+        baseRevision: 4,
+        revision: 5,
+        event: {
+          kind: "transcriptSpliced",
+          sessionId: "different-session",
+          start: 0,
+          deleteCount: 0,
+          items: [],
+        },
+      },
+    });
+    expect(next.phase).toBe("incompatible");
+    expect(next.revision).toBe(4);
+  });
+
   it("fails closed when a delta carries another session", () => {
     const live = withSnapshot(4);
     const next = remoteClientReducer(live, {
@@ -177,6 +246,59 @@ describe("Forge Remote protocol reducer", () => {
     expect(acknowledged.pendingCommands).toEqual({});
   });
 
+  it("keeps a successful queue command pending until authoritative queue state changes", () => {
+    const live = {
+      ...withSnapshot(4),
+      session: sessionFixture({
+        queue: [
+          {
+            id: "queued-1",
+            text: "Ship it",
+            position: 1,
+            source: "shared",
+            version: 7,
+            actions: { edit: true, steer: true, cancel: true },
+          },
+        ],
+      }),
+    };
+    const queued = remoteClientReducer(live, {
+      type: "commandQueued",
+      commandId: "queue-1",
+      command: {
+        type: "queue",
+        label: "Steering with queued message",
+        queueItemId: "queued-1",
+        expectedVersion: 7,
+      },
+    });
+    const acknowledged = remoteClientReducer(queued, {
+      type: "serverMessage",
+      message: {
+        type: "commandResult",
+        protocolVersion: 1,
+        commandId: "queue-1",
+        outcome: { status: "ok" },
+      },
+    });
+    expect(acknowledged.pendingCommands["queue-1"]).toBeDefined();
+
+    const reconciled = remoteClientReducer(acknowledged, {
+      type: "serverMessage",
+      message: {
+        type: "delta",
+        protocolVersion: 1,
+        baseRevision: 4,
+        revision: 5,
+        event: {
+          kind: "stateReplaced",
+          session: sessionFixture({ queue: [] }),
+        },
+      },
+    });
+    expect(reconciled.pendingCommands).toEqual({});
+  });
+
   it("treats command acknowledgement as scheduling and waits for authoritative usage state", () => {
     const loadingUsage = usageFixture({ status: "loading", refreshedAt: "2030-01-01T00:00:00Z" });
     const live = withSnapshot();
@@ -251,6 +373,7 @@ describe("Forge Remote protocol reducer", () => {
       reason: "",
       wasClean: false,
     });
+    expect(disconnected.pendingCommands).toEqual({});
     const reconnected = remoteClientReducer(disconnected, {
       type: "serverMessage",
       message: {
@@ -305,17 +428,116 @@ describe("Forge Remote protocol reducer", () => {
     expect(message.type).toBe("delta");
     if (message.type !== "delta") throw new Error("expected delta");
     expect(message.event.kind).toBe("stateReplaced");
+    if (message.event.kind !== "stateReplaced") throw new Error("expected replacement");
     expect(message.baseRevision).toBe(9);
     expect(message.event.session.capabilities.usage).toBe(true);
     expect(message.event.session.usage?.session?.costUsdTicks).toBe("1250000000");
     expect(message.event.session.availableModels[0]?.reasoningEffort?.options[2]?.id).toBe("high");
   });
 
-  it("keeps usage capability backward-compatible when an older snapshot omits it", () => {
+  it("decodes work disclosure, fast-mode, and actionable queue metadata", () => {
+    const serialized = sessionFixture({
+      transcript: [
+        { id: "thought", kind: "reasoning", text: "Checking", status: "complete" },
+        {
+          id: "worked",
+          kind: "system",
+          text: "Worked for 2m 5s",
+          workDisclosure: {
+            durationMs: 125_000,
+            finalResponseItemId: "answer",
+            workItemIds: ["thought"],
+          },
+        },
+        { id: "answer", kind: "assistant", text: "Done", status: "complete" },
+      ],
+      queue: [
+        {
+          id: "queued-1",
+          text: "Then test",
+          position: 1,
+          source: "shared",
+          version: 3,
+          kind: "prompt",
+          actions: { edit: true, steer: true, cancel: false },
+        },
+      ],
+      fastMode: { supported: true, enabled: true, pending: false },
+    });
+    const message = decodeServerMessage(JSON.stringify({
+      type: "snapshot",
+      protocolVersion: 1,
+      revision: 1,
+      session: serialized,
+    }));
+    expect(message.type).toBe("snapshot");
+    if (message.type !== "snapshot") throw new Error("expected snapshot");
+    const disclosure = message.session.transcript.find((item) => item.id === "worked");
+    expect(disclosure?.kind).toBe("system");
+    if (disclosure?.kind !== "system") throw new Error("expected disclosure marker");
+    expect(disclosure.workDisclosure).toEqual({
+      durationMs: 125_000,
+      finalResponseItemId: "answer",
+      workItemIds: ["thought"],
+    });
+    expect(message.session.fastMode).toEqual({ supported: true, enabled: true, pending: false });
+    expect(message.session.capabilities).toMatchObject({
+      fastMode: true,
+      queueControl: true,
+      newSession: true,
+    });
+    expect(message.session.queue?.[0]).toMatchObject({
+      source: "shared",
+      version: 3,
+      kind: "prompt",
+      actions: { edit: true, steer: true, cancel: false },
+    });
+  });
+
+  it("decodes transcript-splice and child-session server messages", () => {
+    const splice = decodeServerMessage(JSON.stringify({
+      type: "delta",
+      protocolVersion: 1,
+      baseRevision: 1,
+      revision: 2,
+      event: {
+        kind: "transcriptSpliced",
+        sessionId: "session-123",
+        start: 2,
+        deleteCount: 0,
+        items: [{ id: "a2", kind: "assistant", text: "More", status: "running" }],
+      },
+    }));
+    expect(splice).toMatchObject({
+      type: "delta",
+      event: { kind: "transcriptSpliced", sessionId: "session-123", start: 2 },
+    });
+
+    const created = decodeServerMessage(JSON.stringify({
+      type: "sessionCreated",
+      protocolVersion: 1,
+      commandId: "new-1",
+      sessionId: "session-child",
+      pairingUrl: `https://forge.example/forge/${"b".repeat(64)}/`,
+      expiresAt: "2030-01-01T00:00:00Z",
+    }));
+    expect(created).toMatchObject({
+      type: "sessionCreated",
+      commandId: "new-1",
+      sessionId: "session-child",
+    });
+  });
+
+  it("keeps additive capabilities and queue metadata backward-compatible", () => {
     const serialized = JSON.parse(JSON.stringify(sessionFixture())) as {
       capabilities: Record<string, unknown>;
+      queue: Array<Record<string, unknown>>;
     };
     delete serialized.capabilities.usage;
+    delete serialized.capabilities.fastMode;
+    delete serialized.capabilities.queueControl;
+    delete serialized.capabilities.newSession;
+    serialized.queue = [{ id: "old-queue", text: "Old prompt", position: 1 }];
     const message = decodeServerMessage(JSON.stringify({
       type: "snapshot",
       protocolVersion: 1,
@@ -325,6 +547,13 @@ describe("Forge Remote protocol reducer", () => {
     expect(message.type).toBe("snapshot");
     if (message.type !== "snapshot") throw new Error("expected snapshot");
     expect(message.session.capabilities.usage).toBe(false);
+    expect(message.session.capabilities.fastMode).toBe(false);
+    expect(message.session.capabilities.queueControl).toBe(false);
+    expect(message.session.capabilities.newSession).toBe(false);
+    expect(message.session.queue?.[0]).toMatchObject({
+      source: "local",
+      actions: { edit: false, steer: false, cancel: false },
+    });
   });
 
   it("rejects malformed usage cost ticks before rendering", () => {

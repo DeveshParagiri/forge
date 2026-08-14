@@ -77,6 +77,7 @@ export function sessionFixture(
       },
     ],
     currentModel: { id: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
+    fastMode: { supported: true, enabled: false },
     availableModels: [
       {
         id: "gpt-5.6-sol",
@@ -114,10 +115,13 @@ export function sessionFixture(
       prompt: true,
       cancel: true,
       setModel: true,
+      fastMode: true,
       reasoning: true,
       btw: true,
       usage: true,
       resolveInteractions: true,
+      queueControl: true,
+      newSession: true,
     },
     ...overrides,
   };

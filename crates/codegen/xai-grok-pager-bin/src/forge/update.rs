@@ -1,14 +1,14 @@
 //! Forge source-checkout update command.
 //!
 //! The release installer owns the update mechanics. This module gives
-//! `grok update` a Forge-aware entry point while preserving the stock updater
+//! `forge update` a Forge-aware entry point while preserving the stock updater
 //! for unsupported flags and non-Forge installations.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::path::PathBuf;
 use std::process::Command;
 
-const DEFAULT_UPDATER: &str = "~/bin/grok-update-from-source";
+const DEFAULT_UPDATER: &str = "~/bin/forge-update-from-source";
 
 /// Returns whether Forge should handle this invocation instead of the stock
 /// release-channel updater.
@@ -64,15 +64,30 @@ fn updater_command(updater: &std::path::Path) -> Command {
 }
 
 fn updater_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("FORGE_UPDATER") {
+        return PathBuf::from(path);
+    }
     if let Some(path) = std::env::var_os("GROK_UPDATER") {
         return PathBuf::from(path);
     }
-    home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(default_updater_relpath())
+    let home = home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let forge_path = home.join(default_updater_relpath());
+    if forge_path.is_file() {
+        forge_path
+    } else {
+        home.join(legacy_updater_relpath())
+    }
 }
 
 fn default_updater_relpath() -> &'static str {
+    if cfg!(windows) {
+        "bin/forge-update-from-source.ps1"
+    } else {
+        "bin/forge-update-from-source"
+    }
+}
+
+fn legacy_updater_relpath() -> &'static str {
     if cfg!(windows) {
         "bin/grok-update-from-source.ps1"
     } else {
@@ -117,7 +132,7 @@ mod tests {
     fn plain_update_uses_an_installed_forge_updater() {
         let _guard = ENV_LOCK.lock().unwrap();
         let root = std::env::temp_dir().join(format!("forge-update-test-{}", std::process::id()));
-        let updater = root.join("grok-update-from-source");
+        let updater = root.join("forge-update-from-source");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(&updater, "#!/bin/sh\nexit 0\n").unwrap();
         unsafe { std::env::set_var("GROK_UPDATER", &updater) };

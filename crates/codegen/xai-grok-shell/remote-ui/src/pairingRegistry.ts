@@ -80,6 +80,59 @@ function isExpired(pairing: StoredPairing, now: number): boolean {
   return Number.isFinite(expiry) && expiry <= now;
 }
 
+function pairingHost(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).host.toLocaleLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * A bearer URL is intentionally rotated whenever `/rc` is reopened. Once the
+ * authoritative snapshot tells us which session that bearer belongs to, keep
+ * one bearer-free row identity for that host and session.
+ */
+export function pairingIdForSession(baseUrl: string, sessionId: string): string {
+  return `session:${encodeURIComponent(pairingHost(baseUrl))}:${encodeURIComponent(sessionId)}`;
+}
+
+function pairingActivityMs(pairing: StoredPairing): number {
+  for (const value of [pairing.lastSeenAt, pairing.addedAt]) {
+    if (!value) continue;
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function normalizeSessionPairings(pairings: StoredPairing[]): StoredPairing[] {
+  const byIdentity = new Map<string, StoredPairing>();
+  const order: string[] = [];
+  for (const pairing of pairings) {
+    const identity = pairing.sessionId
+      ? pairingIdForSession(pairing.baseUrl, pairing.sessionId)
+      : pairing.id;
+    const normalized = pairing.sessionId ? { ...pairing, id: identity } : pairing;
+    const previous = byIdentity.get(identity);
+    if (!previous) {
+      byIdentity.set(identity, normalized);
+      order.push(identity);
+      continue;
+    }
+    const newer = pairingActivityMs(normalized) >= pairingActivityMs(previous) ? normalized : previous;
+    const older = newer === normalized ? previous : normalized;
+    byIdentity.set(identity, {
+      ...older,
+      ...newer,
+      id: identity,
+      addedAt:
+        Date.parse(older.addedAt) < Date.parse(newer.addedAt) ? older.addedAt : newer.addedAt,
+    });
+  }
+  return order.map((identity) => byIdentity.get(identity)).filter((pairing): pairing is StoredPairing => Boolean(pairing));
+}
+
 export function readPairings(
   storage: Pick<Storage, "getItem" | "setItem"> = window.localStorage,
   expectedOrigin = window.location.origin,
@@ -95,8 +148,13 @@ export function readPairings(
     const decoded = envelope.pairings
       .map((value) => decodePairing(value, expectedOrigin))
       .filter((pairing): pairing is StoredPairing => Boolean(pairing));
-    const live = decoded.filter((pairing) => !isExpired(pairing, now));
-    if (live.length !== decoded.length) writePairings(live, storage);
+    const live = normalizeSessionPairings(decoded.filter((pairing) => !isExpired(pairing, now)));
+    if (
+      live.length !== decoded.length ||
+      live.some((pairing, index) => pairing.id !== decoded[index]?.id)
+    ) {
+      writePairings(live, storage);
+    }
     return live;
   } catch {
     return [];
@@ -146,27 +204,55 @@ export function updatePairingFromState(
   const interaction = state.session?.activeInteractions.find(
     (candidate) => candidate.status === undefined || candidate.status === "pending",
   );
-  return pairings.map((pairing) =>
-    pairing.id === pairingId
-      ? {
-          ...pairing,
-          ...(state.expiresAt ? { expiresAt: state.expiresAt } : {}),
-          ...(state.sessionId ? { sessionId: state.sessionId } : {}),
-          ...(state.session?.title ? { title: state.session.title } : {}),
-          ...(state.session?.cwd ? { cwd: state.session.cwd } : {}),
-          ...(state.session?.status ? { status: state.session.status } : {}),
-          ...(state.session?.currentModel?.label
-            ? { modelLabel: state.session.currentModel.label }
-            : {}),
-          ...(interaction?.kind === "permission" || interaction?.kind === "plan"
-            ? { attention: "approval" as const }
-            : interaction?.kind === "question"
-              ? { attention: "input" as const }
-              : { attention: undefined }),
-          lastSeenAt: now.toISOString(),
-        }
-      : pairing,
+  const target = pairings.find((pairing) => pairing.id === pairingId);
+  if (!target) return pairings;
+  const updated: StoredPairing = {
+    ...target,
+    ...(state.expiresAt ? { expiresAt: state.expiresAt } : {}),
+    ...(state.sessionId ? { sessionId: state.sessionId } : {}),
+    ...(state.session?.title ? { title: state.session.title } : {}),
+    ...(state.session?.cwd ? { cwd: state.session.cwd } : {}),
+    ...(state.session?.status ? { status: state.session.status } : {}),
+    ...(state.session?.currentModel?.label
+      ? { modelLabel: state.session.currentModel.label }
+      : {}),
+    ...(interaction?.kind === "permission" || interaction?.kind === "plan"
+      ? { attention: "approval" as const }
+      : interaction?.kind === "question"
+        ? { attention: "input" as const }
+        : { attention: undefined }),
+    lastSeenAt: now.toISOString(),
+  };
+  if (!updated.sessionId) {
+    return pairings.map((pairing) => (pairing.id === pairingId ? updated : pairing));
+  }
+
+  const stableId = pairingIdForSession(updated.baseUrl, updated.sessionId);
+  const host = pairingHost(updated.baseUrl);
+  const duplicate = pairings.find(
+    (pairing) =>
+      pairing.id !== pairingId &&
+      pairing.sessionId === updated.sessionId &&
+      pairingHost(pairing.baseUrl) === host,
   );
+  const merged: StoredPairing = {
+    ...(duplicate ?? {}),
+    ...updated,
+    id: stableId,
+    addedAt:
+      duplicate && Date.parse(duplicate.addedAt) < Date.parse(updated.addedAt)
+        ? duplicate.addedAt
+        : updated.addedAt,
+  };
+  const survivors = pairings.filter(
+    (pairing) =>
+      pairing.id !== pairingId &&
+      !(
+        pairing.sessionId === updated.sessionId &&
+        pairingHost(pairing.baseUrl) === host
+      ),
+  );
+  return [merged, ...survivors];
 }
 
 export function removePairing(pairings: StoredPairing[], pairingId: string): StoredPairing[] {

@@ -24,13 +24,27 @@ export interface RemotePlanStep {
   status?: ItemStatus;
 }
 
+export interface RemoteWorkDisclosure {
+  durationMs: number;
+  finalResponseItemId: string | null;
+  workItemIds: string[];
+}
+
 export type RemoteTimelineItem =
   | {
       id: string;
-      kind: "user" | "assistant" | "reasoning" | "system" | "error";
+      kind: "user" | "assistant" | "reasoning" | "error";
       text: string;
       status?: ItemStatus;
       createdAt?: string;
+    }
+  | {
+      id: string;
+      kind: "system";
+      text: string;
+      status?: ItemStatus;
+      createdAt?: string;
+      workDisclosure?: RemoteWorkDisclosure;
     }
   | {
       id: string;
@@ -117,6 +131,14 @@ export interface RemoteQueueItem {
   id: string;
   text: string;
   position?: number;
+  source: "shared" | "local";
+  version?: number;
+  kind?: string;
+  actions: {
+    edit: boolean;
+    steer: boolean;
+    cancel: boolean;
+  };
 }
 
 export interface RemoteTaskState {
@@ -203,10 +225,25 @@ export interface RemoteCapabilities {
   prompt: boolean;
   cancel: boolean;
   setModel: boolean;
+  fastMode: boolean;
   reasoning: boolean;
   btw: boolean;
   usage: boolean;
   resolveInteractions: boolean;
+  queueControl: boolean;
+  newSession: boolean;
+}
+
+export interface RemoteSessionCreated {
+  sessionId: string;
+  pairingUrl: string;
+  expiresAt: string;
+}
+
+export interface RemoteFastModeState {
+  supported: boolean;
+  enabled: boolean;
+  pending?: boolean;
 }
 
 export interface RemoteSessionSnapshot {
@@ -218,6 +255,7 @@ export interface RemoteSessionSnapshot {
   currentModel?: RemoteModel;
   availableModels: RemoteModel[];
   modelSwitchPending?: boolean;
+  fastMode?: RemoteFastModeState;
   reasoningEffort?: {
     current?: string;
     options: RemoteReasoningOption[];
@@ -239,7 +277,15 @@ export interface RemoteError {
   retryable?: boolean;
 }
 
-export type RemoteSessionEvent = { kind: "stateReplaced"; session: RemoteSessionSnapshot };
+export type RemoteSessionEvent =
+  | { kind: "stateReplaced"; session: RemoteSessionSnapshot }
+  | {
+      kind: "transcriptSpliced";
+      sessionId: string;
+      start: number;
+      deleteCount: number;
+      items: RemoteTimelineItem[];
+    };
 
 export type ServerMessage =
   | {
@@ -267,6 +313,11 @@ export type ServerMessage =
       commandId: string;
       outcome: { status: "ok" } | { status: "error"; error: RemoteError };
     }
+  | ({
+      type: "sessionCreated";
+      protocolVersion: number;
+      commandId: string;
+    } & RemoteSessionCreated)
   | { type: "resyncRequired"; protocolVersion: number; reason: string }
   | { type: "pong"; protocolVersion: number; commandId: string }
   | {
@@ -293,6 +344,12 @@ export interface RemoteQuestionAnswer {
   freeform?: string;
 }
 
+export interface RemotePromptImage {
+  name: string;
+  mimeType: string;
+  data: string;
+}
+
 export type ClientMessage =
   | { type: "hello"; protocolVersion: 1 }
   | {
@@ -300,12 +357,23 @@ export type ClientMessage =
       protocolVersion: 1;
       commandId: string;
       command:
-        | { type: "prompt"; text: string }
+        | { type: "prompt"; text: string; images?: RemotePromptImage[] }
         | { type: "cancel" }
         | { type: "setModel"; modelId: string; reasoningEffort: string | null }
+        | { type: "setFastMode"; enabled: boolean }
         | { type: "btw"; question: string }
         | { type: "refreshUsage" }
         | { type: "resolveInteraction"; interactionId: string; response: InteractionResponse }
+        | {
+            type: "editQueuedPrompt";
+            queueItemId: string;
+            expectedVersion: number;
+            text: string;
+          }
+        | { type: "steerQueuedPrompt"; queueItemId: string; expectedVersion: number }
+        | { type: "cancelQueuedPrompt"; queueItemId: string; expectedVersion: number }
+        | { type: "newSession" }
+        | { type: "acceptNewSession"; sessionId: string }
         | { type: "resync" }
         | { type: "ping" };
     };
@@ -586,12 +654,41 @@ function timelineBase(record: Record<string, unknown>) {
   };
 }
 
+function decodeWorkDisclosure(value: unknown): RemoteWorkDisclosure {
+  if (!isRecord(value)) throw new ProtocolDecodeError("Invalid work disclosure");
+  const finalResponseItemId = value.finalResponseItemId;
+  if (finalResponseItemId !== null && typeof finalResponseItemId !== "string") {
+    throw new ProtocolDecodeError("Invalid work disclosure final response item id");
+  }
+  if (
+    !Array.isArray(value.workItemIds) ||
+    !value.workItemIds.every((id) => typeof id === "string")
+  ) {
+    throw new ProtocolDecodeError("Invalid work disclosure item ids");
+  }
+  return {
+    durationMs: numberField(value, "durationMs"),
+    finalResponseItemId,
+    workItemIds: value.workItemIds,
+  };
+}
+
 function decodeTimelineItem(value: unknown): RemoteTimelineItem {
   if (!isRecord(value)) throw new ProtocolDecodeError("Invalid timeline item");
   const kind = stringField(value, "kind");
   const base = timelineBase(value);
-  if (["user", "assistant", "reasoning", "system", "error"].includes(kind)) {
+  if (["user", "assistant", "reasoning", "error"].includes(kind)) {
     return { ...base, kind, text: stringField(value, "text") } as RemoteTimelineItem;
+  }
+  if (kind === "system") {
+    return {
+      ...base,
+      kind,
+      text: stringField(value, "text"),
+      ...(value.workDisclosure === undefined
+        ? {}
+        : { workDisclosure: decodeWorkDisclosure(value.workDisclosure) }),
+    };
   }
   if (kind === "tool") {
     const status = optionalItemStatus(value);
@@ -758,12 +855,25 @@ function decodeSnapshot(value: unknown): RemoteSessionSnapshot {
       prompt: booleanField(value.capabilities, "prompt"),
       cancel: booleanField(value.capabilities, "cancel"),
       setModel: booleanField(value.capabilities, "setModel"),
+      fastMode: optionalBoolean(value.capabilities, "fastMode") ?? false,
       reasoning: booleanField(value.capabilities, "reasoning"),
       btw: booleanField(value.capabilities, "btw"),
       usage: optionalBoolean(value.capabilities, "usage") ?? false,
       resolveInteractions: booleanField(value.capabilities, "resolveInteractions"),
+      queueControl: optionalBoolean(value.capabilities, "queueControl") ?? false,
+      newSession: optionalBoolean(value.capabilities, "newSession") ?? false,
     },
   };
+  if (value.fastMode !== undefined && value.fastMode !== null) {
+    if (!isRecord(value.fastMode)) throw new ProtocolDecodeError("Invalid fast mode state");
+    snapshot.fastMode = {
+      supported: booleanField(value.fastMode, "supported"),
+      enabled: booleanField(value.fastMode, "enabled"),
+      ...(optionalBoolean(value.fastMode, "pending") === undefined
+        ? {}
+        : { pending: optionalBoolean(value.fastMode, "pending") }),
+    };
+  }
   if (value.reasoningEffort !== undefined && value.reasoningEffort !== null) {
     if (!isRecord(value.reasoningEffort) || !Array.isArray(value.reasoningEffort.options)) {
       throw new ProtocolDecodeError("Invalid reasoning effort");
@@ -794,6 +904,28 @@ function decodeSnapshot(value: unknown): RemoteSessionSnapshot {
         id: stringField(item, "id"),
         text: stringField(item, "text"),
         ...(position === undefined ? {} : { position }),
+        source:
+          item.source === undefined
+            ? "local"
+            : item.source === "shared" || item.source === "local"
+              ? item.source
+              : (() => {
+                  throw new ProtocolDecodeError("Invalid queue source");
+                })(),
+        ...(optionalString(item, "kind") ? { kind: optionalString(item, "kind") } : {}),
+        ...(item.version === undefined ? {} : { version: numberField(item, "version") }),
+        actions:
+          item.actions === undefined
+            ? { edit: false, steer: false, cancel: false }
+            : isRecord(item.actions)
+              ? {
+                  edit: booleanField(item.actions, "edit"),
+                  steer: booleanField(item.actions, "steer"),
+                  cancel: booleanField(item.actions, "cancel"),
+                }
+              : (() => {
+                  throw new ProtocolDecodeError("Invalid queue actions");
+                })(),
       };
     });
   }
@@ -823,8 +955,20 @@ function decodeSnapshot(value: unknown): RemoteSessionSnapshot {
 function decodeEvent(value: unknown): RemoteSessionEvent {
   if (!isRecord(value)) throw new ProtocolDecodeError("Invalid delta event");
   const kind = stringField(value, "kind");
-  if (kind !== "stateReplaced") throw new ProtocolDecodeError(`Unknown delta event: ${kind}`);
-  return { kind, session: decodeSnapshot(value.session) };
+  if (kind === "stateReplaced") return { kind, session: decodeSnapshot(value.session) };
+  if (kind === "transcriptSpliced") {
+    if (!Array.isArray(value.items)) {
+      throw new ProtocolDecodeError("Invalid transcript splice items");
+    }
+    return {
+      kind,
+      sessionId: stringField(value, "sessionId"),
+      start: numberField(value, "start"),
+      deleteCount: numberField(value, "deleteCount"),
+      items: value.items.map(decodeTimelineItem),
+    };
+  }
+  throw new ProtocolDecodeError(`Unknown delta event: ${kind}`);
 }
 
 export function decodeServerMessage(raw: string): ServerMessage {
@@ -875,6 +1019,15 @@ export function decodeServerMessage(raw: string): ServerMessage {
       }
       throw new ProtocolDecodeError("Invalid command result");
     }
+    case "sessionCreated":
+      return {
+        type,
+        protocolVersion: numberField(parsed, "protocolVersion"),
+        commandId: stringField(parsed, "commandId"),
+        sessionId: stringField(parsed, "sessionId"),
+        pairingUrl: stringField(parsed, "pairingUrl"),
+        expiresAt: stringField(parsed, "expiresAt"),
+      };
     case "resyncRequired":
       return {
         type,

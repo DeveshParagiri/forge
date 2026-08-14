@@ -2,7 +2,10 @@
  * Adapted from T3 Code's apps/web/src/components/ComposerPromptEditor.tsx
  * at b73232bdd31e83914a8a943960c7dc4b6390b39b. See ../../UPSTREAM.md.
  */
-import { forwardRef, useImperativeHandle, useRef } from "react";
+import { forwardRef, useCallback, useImperativeHandle, useLayoutEffect, useRef } from "react";
+
+const EDITOR_MIN_HEIGHT = 32;
+const EDITOR_MAX_HEIGHT = 112;
 
 export interface ComposerPromptEditorHandle {
   focus(): void;
@@ -21,6 +24,17 @@ export const ComposerPromptEditor = forwardRef<
   }
 >(function ComposerPromptEditor({ value, onChange, onSubmit, disabled, placeholder, label }, ref) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const resize = useCallback(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    input.style.height = `${EDITOR_MIN_HEIGHT}px`;
+    const height = Math.min(EDITOR_MAX_HEIGHT, Math.max(EDITOR_MIN_HEIGHT, input.scrollHeight));
+    input.style.height = `${height}px`;
+    input.style.overflowY = input.scrollHeight > EDITOR_MAX_HEIGHT ? "auto" : "hidden";
+  }, []);
+
+  useLayoutEffect(resize, [resize, value]);
+
   useImperativeHandle(ref, () => ({
     focus: () => inputRef.current?.focus(),
     focusAtEnd: () => {
@@ -30,21 +44,23 @@ export const ComposerPromptEditor = forwardRef<
       input.setSelectionRange(input.value.length, input.value.length);
     },
   }));
-  const rows = Math.min(6, Math.max(1, value.split("\n").length));
   return (
     <textarea
       ref={inputRef}
       className="composer-editor"
       aria-label={label}
       value={value}
-      rows={rows}
+      rows={1}
       disabled={disabled}
       placeholder={placeholder}
       enterKeyHint="enter"
       autoCapitalize="sentences"
       autoComplete="off"
       spellCheck="true"
-      onChange={(event) => onChange(event.target.value)}
+      onChange={(event) => {
+        onChange(event.target.value);
+        window.requestAnimationFrame(resize);
+      }}
       onFocus={(event) => {
         const input = event.currentTarget;
         window.setTimeout(() => input.scrollIntoView({ block: "nearest" }), 80);

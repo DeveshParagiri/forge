@@ -54,6 +54,7 @@ const BASIER_REGULAR_WOFF2: &[u8] =
     include_bytes!("../remote-ui/dist/assets/basier-square-regular.woff2");
 const BASIER_SEMIBOLD_WOFF2: &[u8] =
     include_bytes!("../remote-ui/dist/assets/basier-square-semibold.woff2");
+const FORGE_MARK_PNG: &[u8] = include_bytes!("../remote-ui/dist/assets/mark.png");
 const MANIFEST: &str = include_str!("../remote-ui/dist/manifest.webmanifest");
 const ICON_SVG: &str = include_str!("../remote-ui/dist/icon.svg");
 const THIRD_PARTY_NOTICES: &str = include_str!("../remote-ui/dist/THIRD_PARTY_NOTICES.txt");
@@ -1135,6 +1136,7 @@ fn gateway_router(state: GatewayState) -> Router {
         .route("/forge/{token}/", get(remote_shell))
         .route("/forge/{token}/assets/app.js", get(remote_app_js))
         .route("/forge/{token}/assets/app.css", get(remote_app_css))
+        .route("/forge/{token}/assets/mark.png", get(remote_forge_mark))
         .route(
             "/forge/{token}/assets/basier-square-regular.woff2",
             get(remote_basier_regular),
@@ -1181,6 +1183,13 @@ async fn remote_app_js(Path(token): Path<String>, State(state): State<GatewaySta
 
 async fn remote_app_css(Path(token): Path<String>, State(state): State<GatewayState>) -> Response {
     protected_asset(&token, &state, APP_CSS, "text/css; charset=utf-8", false)
+}
+
+async fn remote_forge_mark(
+    Path(token): Path<String>,
+    State(state): State<GatewayState>,
+) -> Response {
+    protected_binary_asset(&token, &state, FORGE_MARK_PNG, "image/png")
 }
 
 async fn remote_basier_regular(
@@ -2540,6 +2549,7 @@ mod tests {
             "/",
             "/assets/app.js",
             "/assets/app.css",
+            "/assets/mark.png",
             "/assets/basier-square-regular.woff2",
             "/assets/basier-square-semibold.woff2",
             "/manifest.webmanifest",
@@ -2611,6 +2621,32 @@ mod tests {
                 .unwrap();
             assert_eq!(body.as_ref(), expected);
         }
+    }
+
+    #[tokio::test]
+    async fn authenticated_forge_mark_is_exact_png_with_security_headers() {
+        let token = "a".repeat(PAIRING_BYTES * 2);
+        let app = gateway_router(test_state(&token, Instant::now() + Duration::from_secs(60)));
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!("/forge/{token}/assets/mark.png"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "image/png");
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(
+            response.headers()[header::X_CONTENT_TYPE_OPTIONS],
+            "nosniff"
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(body.as_ref(), FORGE_MARK_PNG);
     }
 
     #[tokio::test]

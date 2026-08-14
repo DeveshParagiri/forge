@@ -59,8 +59,8 @@ jobs:
           target="${{ matrix.target }}"
           suffix="${{ matrix.suffix }}"
           archive_kind="${{ matrix.archive }}"
-          src="target/${target}/release/xai-grok-pager${suffix}"
-          dst_name="grok${suffix}"
+          src="target/${target}/release/forge${suffix}"
+          dst_name="forge${suffix}"
           mkdir -p dist/package
           cp "$src" "dist/package/${dst_name}"
           if [ "$archive_kind" = "zip" ]; then

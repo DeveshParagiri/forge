@@ -4,10 +4,20 @@
  */
 import ArrowUp from "lucide-react/dist/esm/icons/arrow-up.js";
 import ChartBar from "lucide-react/dist/esm/icons/chart-bar.js";
-import ChevronDown from "lucide-react/dist/esm/icons/chevron-down.js";
-import CircleStop from "lucide-react/dist/esm/icons/circle-stop.js";
+import Bolt from "lucide-react/dist/esm/icons/bolt.js";
+import Check from "lucide-react/dist/esm/icons/check.js";
+import FileText from "lucide-react/dist/esm/icons/file-text.js";
+import Image from "lucide-react/dist/esm/icons/image.js";
 import LoaderCircle from "lucide-react/dist/esm/icons/loader-circle.js";
+import Plus from "lucide-react/dist/esm/icons/plus.js";
+import Square from "lucide-react/dist/esm/icons/square.js";
+import X from "lucide-react/dist/esm/icons/x.js";
 import { memo, useRef, useState } from "react";
+import {
+  readComposerImageFiles,
+  toRemotePromptImages,
+  type BrowserComposerAttachment,
+} from "../composerAttachments";
 import type { RemoteSessionSnapshot } from "../protocol";
 import type { ForgeRemoteCommands } from "../remoteSocket";
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
@@ -29,6 +39,17 @@ export function parseComposerSubmission(value: string): ComposerSubmission | nul
   return { type: "prompt", text: trimmed };
 }
 
+function compactModelLabel(label: string): string {
+  const normalized = label.trim().replace(/\s+/g, " ");
+  const afterProvider = normalized.includes(" · ") ? normalized.split(" · ").at(-1) ?? normalized : normalized;
+  return afterProvider.replace(/^gpt[-\s:]*(?=\d)/i, "") || label;
+}
+
+function compactReasoningLabel(label?: string): string | undefined {
+  if (!label) return undefined;
+  return /^(extra[ -]?high|xhigh)$/i.test(label.trim()) ? "Ultra" : label.trim();
+}
+
 export const ChatComposer = memo(function ChatComposer({
   session,
   commands,
@@ -46,9 +67,14 @@ export const ChatComposer = memo(function ChatComposer({
 }) {
   const [prompt, setPrompt] = useState("");
   const [expanded, setExpanded] = useState(false);
+  const [attachments, setAttachments] = useState<BrowserComposerAttachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string>();
   const editorRef = useRef<ComposerPromptEditorHandle>(null);
+  const photosInputRef = useRef<HTMLInputElement>(null);
+  const filesInputRef = useRef<HTMLInputElement>(null);
+  const attachmentMenuRef = useRef<HTMLDetailsElement>(null);
+  const settingsMenuRef = useRef<HTMLDetailsElement>(null);
   const isRunning = session.status === "running";
-  const isWorking = ["running", "waiting_for_input"].includes(session.status);
   const canPrompt = connected && session.capabilities.prompt && session.status !== "closed";
   const canBtw = connected && session.capabilities.btw && session.status !== "closed";
   const canUsage = connected && session.capabilities.usage && session.status !== "closed";
@@ -56,16 +82,19 @@ export const ChatComposer = memo(function ChatComposer({
   const wantsBtw = /^\/btw(?:\s|$)/.test(trimmedPrompt);
   const wantsUsage = trimmedPrompt === "/usage";
   const submission = parseComposerSubmission(prompt);
+  const hasAttachments = attachments.length > 0;
+  const hasDraft = trimmedPrompt.length > 0 || hasAttachments;
   const canSend = submission?.type === "btw"
     ? canBtw
     : submission?.type === "usage"
       ? canUsage
-      : submission?.type === "prompt"
+      : submission?.type === "prompt" || (!trimmedPrompt && hasAttachments)
         ? canPrompt
         : false;
-  const actionKind = wantsBtw || wantsUsage || !isRunning || !session.capabilities.cancel ? "send" : "stop";
+  const actionKind = hasDraft || wantsBtw || wantsUsage || !isRunning || !session.capabilities.cancel ? "send" : "stop";
   const selectedModel = session.currentModel?.id || "";
   const selectedEffort = session.reasoningEffort?.current || "";
+  const usagePercent = session.usage?.account?.windows[0]?.usedPercent ?? session.usage?.context?.usedPercent;
 
   const submit = () => {
     if (!canSend) return;
@@ -76,24 +105,46 @@ export const ChatComposer = memo(function ChatComposer({
       const id = submission?.type === "btw"
         ? commands.askBtw(submission.question)
         : submission?.type === "prompt"
-          ? commands.sendPrompt(submission.text)
+          ? commands.sendPrompt(submission.text, toRemotePromptImages(attachments))
+          : hasAttachments
+            ? commands.sendPrompt("", toRemotePromptImages(attachments))
           : null;
       if (!id) return;
     }
     setPrompt("");
+    setAttachments([]);
     window.requestAnimationFrame(() => editorRef.current?.focus());
   };
 
   const updateModel = (modelId: string, effort: string | null) => {
     if (!modelId || !connected || session.modelSwitchPending) return;
     commands.setModel(modelId, effort);
+    settingsMenuRef.current?.removeAttribute("open");
   };
 
+  const chooseAttachments = async (files: FileList | null) => {
+    if (!files?.length) return;
+    const result = await readComposerImageFiles(files, attachments.length);
+    if (result.attachments.length) {
+      setAttachments((current) => [...current, ...result.attachments]);
+      setExpanded(true);
+    }
+    setAttachmentError(result.error);
+    attachmentMenuRef.current?.removeAttribute("open");
+  };
+
+  const modelLabel = compactModelLabel(session.currentModel?.label || "Model");
+  const reasoningOption = session.reasoningEffort?.options.find(
+    (option) => option.id === selectedEffort,
+  );
+  const reasoningLabel = compactReasoningLabel(reasoningOption?.label ?? selectedEffort);
+  const composerExpanded = expanded || prompt.length > 0 || attachments.length > 0;
+
   return (
-    <div className="composer-dock">
+    <div className="composer-dock" data-expanded={composerExpanded}>
       <form
         className="chat-composer-shell"
-        data-expanded={expanded || prompt.length > 0}
+        data-expanded={composerExpanded}
         aria-label="Forge message composer"
         onFocusCapture={() => setExpanded(true)}
         onBlurCapture={(event) => {
@@ -107,6 +158,48 @@ export const ChatComposer = memo(function ChatComposer({
           submit();
         }}
       >
+        <input
+          ref={photosInputRef}
+          className="sr-only"
+          type="file"
+          accept="image/*"
+          multiple
+          aria-label="Choose photos"
+          onChange={(event) => {
+            void chooseAttachments(event.currentTarget.files);
+            event.currentTarget.value = "";
+          }}
+        />
+        <input
+          ref={filesInputRef}
+          className="sr-only"
+          type="file"
+          accept="image/*"
+          multiple
+          aria-label="Choose image files"
+          onChange={(event) => {
+            void chooseAttachments(event.currentTarget.files);
+            event.currentTarget.value = "";
+          }}
+        />
+        {attachments.length ? (
+          <div className="composer-attachments" aria-label="Attached images">
+            {attachments.map((attachment) => (
+              <span className="composer-attachment" key={attachment.id}>
+                <img src={attachment.previewUrl} alt="" />
+                <button
+                  type="button"
+                  aria-label={`Remove ${attachment.name}`}
+                  onClick={() =>
+                    setAttachments((current) => current.filter((item) => item.id !== attachment.id))
+                  }
+                >
+                  <X aria-hidden="true" />
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
         <ComposerPromptEditor
           ref={editorRef}
           value={prompt}
@@ -121,57 +214,97 @@ export const ChatComposer = memo(function ChatComposer({
                 ? "Ask without interrupting the current work…"
                 : wantsUsage
                   ? "Open usage for this session…"
-                : isWorking
-                  ? "Queue a message for this session…"
-                  : "Message this Forge session…"
+                : "Follow up"
           }
         />
+        {attachmentError ? (
+          <p className="composer-attachment-error" role="alert">{attachmentError}</p>
+        ) : null}
         <footer className="composer-footer">
-          <div className="composer-selects">
-            {session.capabilities.setModel && session.availableModels.length ? (
-              <label className="composer-select-label composer-model-select">
-                <span className="composer-control-prefix">Model</span>
-                {session.modelSwitchPending ? <LoaderCircle className="status-spin" aria-hidden="true" /> : null}
-                <select
-                  aria-label="Model"
-                  value={selectedModel}
-                  disabled={!connected || session.modelSwitchPending}
-                  onChange={(event) => updateModel(event.target.value, null)}
-                >
-                  {session.availableModels.map((model) => (
-                    <option key={model.id} value={model.id}>{model.label}</option>
-                  ))}
-                </select>
-                <ChevronDown aria-hidden="true" />
-              </label>
-            ) : null}
-            {session.capabilities.reasoning && session.reasoningEffort?.options.length ? (
-              <label className="composer-select-label composer-effort-select">
-                <span className="composer-control-prefix">Effort</span>
-                <select
-                  aria-label="Reasoning effort"
-                  value={selectedEffort}
-                  disabled={!connected || session.modelSwitchPending}
-                  onChange={(event) => updateModel(selectedModel, event.target.value || null)}
-                >
-                  {session.reasoningEffort.options.map((effort) => (
-                    <option key={effort.id} value={effort.id}>{effort.label}</option>
-                  ))}
-                </select>
-                <ChevronDown aria-hidden="true" />
-              </label>
-            ) : null}
-            {session.capabilities.usage ? (
-              <button
-                type="button"
-                className="composer-usage-button"
-                aria-label="Usage"
-                disabled={!connected || session.status === "closed"}
-                onClick={onOpenUsage}
-              >
-                {usagePending ? <LoaderCircle className="status-spin" aria-hidden="true" /> : <ChartBar aria-hidden="true" />}
-                <span>Usage</span>
-              </button>
+          <div className="composer-secondary-actions">
+            <details ref={attachmentMenuRef} className="composer-menu composer-attachment-menu">
+              <summary aria-label="Add photos or files"><Plus aria-hidden="true" /></summary>
+              <div className="composer-popover composer-attachment-popover">
+                <button type="button" onClick={() => photosInputRef.current?.click()}>
+                  <Image aria-hidden="true" /><span>Photos</span>
+                </button>
+                <button type="button" onClick={() => filesInputRef.current?.click()}>
+                  <FileText aria-hidden="true" /><span>Files</span>
+                </button>
+              </div>
+            </details>
+            {(session.capabilities.setModel || session.capabilities.reasoning || session.capabilities.fastMode || session.capabilities.usage) ? (
+              <details ref={settingsMenuRef} className="composer-menu composer-settings-menu">
+                <summary aria-label={`Model and reasoning, current ${[modelLabel, reasoningLabel].filter(Boolean).join(" · ")}`}>
+                  {session.modelSwitchPending ? <LoaderCircle className="status-spin" aria-hidden="true" /> : <Bolt aria-hidden="true" />}
+                  <strong>{modelLabel}</strong>
+                  {reasoningLabel ? <span>{reasoningLabel}</span> : null}
+                  {usagePercent !== undefined ? (
+                    <span className="composer-usage-compact">{Math.round(usagePercent)}%</span>
+                  ) : null}
+                </summary>
+                <div className="composer-popover composer-settings-popover">
+                  {session.capabilities.setModel && session.availableModels.length ? (
+                    <fieldset>
+                      <legend>Model</legend>
+                      {session.availableModels.map((model) => (
+                        <button
+                          type="button"
+                          key={model.id}
+                          aria-pressed={model.id === selectedModel}
+                          onClick={() => updateModel(model.id, null)}
+                        >
+                          <span>{compactModelLabel(model.label)}</span>
+                          {model.id === selectedModel ? <Check aria-hidden="true" /> : null}
+                        </button>
+                      ))}
+                    </fieldset>
+                  ) : null}
+                  {session.capabilities.reasoning && session.reasoningEffort?.options.length ? (
+                    <fieldset>
+                      <legend>Reasoning</legend>
+                      {session.reasoningEffort.options.map((effort) => (
+                        <button
+                          type="button"
+                          key={effort.id}
+                          aria-pressed={effort.id === selectedEffort}
+                          onClick={() => updateModel(selectedModel, effort.id)}
+                        >
+                          <span>{compactReasoningLabel(effort.label)}</span>
+                          {effort.id === selectedEffort ? <Check aria-hidden="true" /> : null}
+                        </button>
+                      ))}
+                    </fieldset>
+                  ) : null}
+                  {session.capabilities.fastMode && session.fastMode?.supported ? (
+                    <button
+                      type="button"
+                      className="composer-menu-fast-mode"
+                      aria-pressed={session.fastMode.enabled}
+                      disabled={!connected || session.fastMode.pending || session.modelSwitchPending}
+                      onClick={() => commands.setFastMode(!session.fastMode?.enabled)}
+                    >
+                      <Bolt aria-hidden="true" />
+                      <span>Fast mode</span>
+                      {session.fastMode.enabled ? <Check aria-hidden="true" /> : null}
+                    </button>
+                  ) : null}
+                  {session.capabilities.usage ? (
+                    <button
+                      type="button"
+                      className="composer-menu-usage"
+                      disabled={!connected || session.status === "closed"}
+                      onClick={() => {
+                        settingsMenuRef.current?.removeAttribute("open");
+                        onOpenUsage();
+                      }}
+                    >
+                      {usagePending ? <LoaderCircle className="status-spin" aria-hidden="true" /> : <ChartBar aria-hidden="true" />}
+                      <span>Usage</span>
+                    </button>
+                  ) : null}
+                </div>
+              </details>
             ) : null}
           </div>
           <div className="composer-primary-actions">
@@ -183,7 +316,7 @@ export const ChatComposer = memo(function ChatComposer({
                 disabled={!connected || commandPending}
                 onClick={() => commands.cancel()}
               >
-                <CircleStop aria-hidden="true" />
+                <Square aria-hidden="true" />
               </button>
             ) : (
               <button

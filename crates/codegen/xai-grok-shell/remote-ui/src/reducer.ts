@@ -18,8 +18,20 @@ export type ConnectionPhase =
   | "incompatible";
 
 export interface PendingCommand {
-  type: "prompt" | "cancel" | "setModel" | "btw" | "refreshUsage" | "resolveInteraction";
+  type:
+    | "prompt"
+    | "cancel"
+    | "setModel"
+    | "setFastMode"
+    | "btw"
+    | "refreshUsage"
+    | "resolveInteraction"
+    | "queue"
+    | "newSession"
+    | "acceptNewSession";
   label: string;
+  queueItemId?: string;
+  expectedVersion?: number;
 }
 
 export interface RemoteClientState {
@@ -43,6 +55,7 @@ export type RemoteClientAction =
   | { type: "serverMessage"; message: ServerMessage }
   | { type: "decodeError"; message: string }
   | { type: "commandQueued"; commandId: string; command: PendingCommand }
+  | { type: "commandSettled"; commandId: string }
   | { type: "resyncSent" }
   | { type: "clearError" };
 
@@ -54,10 +67,28 @@ export const initialRemoteClientState: RemoteClientState = {
 };
 
 export function applyRemoteEvent(
-  _session: RemoteSessionSnapshot,
+  session: RemoteSessionSnapshot,
   event: RemoteSessionEvent,
-): RemoteSessionSnapshot {
-  return event.session;
+): RemoteSessionSnapshot | null {
+  if (event.kind === "stateReplaced") return event.session;
+  if (
+    event.start < 0 ||
+    event.deleteCount < 0 ||
+    !Number.isSafeInteger(event.start) ||
+    !Number.isSafeInteger(event.deleteCount) ||
+    event.start > session.transcript.length ||
+    event.deleteCount > session.transcript.length - event.start
+  ) {
+    return null;
+  }
+  return {
+    ...session,
+    transcript: [
+      ...session.transcript.slice(0, event.start),
+      ...event.items,
+      ...session.transcript.slice(event.start + event.deleteCount),
+    ],
+  };
 }
 
 function withoutPending(
@@ -68,6 +99,39 @@ function withoutPending(
   const next = { ...pending };
   delete next[commandId];
   return next;
+}
+
+function reconcilePendingQueueCommands(
+  pending: Record<string, PendingCommand>,
+  session: RemoteSessionSnapshot,
+): Record<string, PendingCommand> {
+  let changed = false;
+  const next = { ...pending };
+  for (const [commandId, command] of Object.entries(next)) {
+    if (command.type !== "queue") continue;
+    const current = session.queue?.find((item) => item.id === command.queueItemId);
+    if (
+      current?.source === "shared" &&
+      current.version === command.expectedVersion
+    ) {
+      continue;
+    }
+    delete next[commandId];
+    changed = true;
+  }
+  return changed ? next : pending;
+}
+
+function pendingAfterSnapshot(
+  pending: Record<string, PendingCommand>,
+  session: RemoteSessionSnapshot,
+): Record<string, PendingCommand> {
+  const preserved = Object.fromEntries(
+    Object.entries(pending).filter(([, command]) =>
+      ["queue", "newSession", "acceptNewSession"].includes(command.type),
+    ),
+  );
+  return reconcilePendingQueueCommands(preserved, session);
 }
 
 function protocolCompatible(message: Extract<ServerMessage, { protocolVersion: number }>): boolean {
@@ -107,15 +171,17 @@ export function remoteClientReducer(
         return {
           ...state,
           phase: "conflict",
+          pendingCommands: {},
           lastError: "This Forge session is already open in another browser or Forge app.",
         };
       }
       if (state.session?.status === "closed" || (action.wasClean && action.code === 1000)) {
-        return { ...state, phase: "closed" };
+        return { ...state, phase: "closed", pendingCommands: {} };
       }
       return {
         ...state,
         phase: "reconnecting",
+        pendingCommands: {},
         lastError: action.reason || "The private connection was interrupted.",
       };
     }
@@ -142,6 +208,11 @@ export function remoteClientReducer(
           [action.commandId]: action.command,
         },
         lastError: undefined,
+      };
+    case "commandSettled":
+      return {
+        ...state,
+        pendingCommands: withoutPending(state.pendingCommands, action.commandId),
       };
     case "resyncSent":
       return { ...state, needsResync: false, phase: "resyncing" };
@@ -187,7 +258,7 @@ export function remoteClientReducer(
             sessionId: message.session.sessionId,
             revision: message.revision,
             session: message.session,
-            pendingCommands: {},
+            pendingCommands: pendingAfterSnapshot(state.pendingCommands, message.session),
             needsResync: false,
             reconnectAttempt: 0,
             lastError: undefined,
@@ -210,12 +281,24 @@ export function remoteClientReducer(
               lastError: "Some session updates were missed. Refreshing authoritative state.",
             };
           }
-          const session = applyRemoteEvent(state.session, message.event);
-          if (state.sessionId && session.sessionId !== state.sessionId) {
+          const eventSessionId =
+            message.event.kind === "stateReplaced"
+              ? message.event.session.sessionId
+              : message.event.sessionId;
+          if (state.sessionId && eventSessionId !== state.sessionId) {
             return {
               ...state,
               phase: "incompatible",
               lastError: "Forge sent an update for a different session. Stop this remote immediately.",
+            };
+          }
+          const session = applyRemoteEvent(state.session, message.event);
+          if (!session) {
+            return {
+              ...state,
+              phase: "resyncing",
+              needsResync: true,
+              lastError: "Forge sent an invalid transcript update. Refreshing authoritative state.",
             };
           }
           return {
@@ -223,17 +306,28 @@ export function remoteClientReducer(
             phase: session.status === "closed" ? "closed" : "live",
             revision: message.revision,
             session,
+            pendingCommands: reconcilePendingQueueCommands(state.pendingCommands, session),
             needsResync: false,
             lastError: undefined,
           };
         }
-        case "commandResult":
+        case "commandResult": {
+          const pending = state.pendingCommands[message.commandId];
+          const keepPendingQueue = pending?.type === "queue" && message.outcome.status === "ok";
           return {
             ...state,
-            pendingCommands: withoutPending(state.pendingCommands, message.commandId),
+            pendingCommands: keepPendingQueue
+              ? state.pendingCommands
+              : withoutPending(state.pendingCommands, message.commandId),
             ...(message.outcome.status === "ok"
               ? { lastError: undefined }
               : { lastError: message.outcome.error.message }),
+          };
+        }
+        case "sessionCreated":
+          return {
+            ...state,
+            pendingCommands: withoutPending(state.pendingCommands, message.commandId),
           };
         case "resyncRequired":
           return {
