@@ -303,6 +303,7 @@ public final class T3ComposerEditorView: ExpoView, UITextViewDelegate, UITextDro
   private var fontFamily = "DMSans-Regular"
   private var fontSize: CGFloat = 14
   private var lineHeight: CGFloat = 20
+  private var contentInsetHorizontal: CGFloat = 0
   private var contentInsetVertical: CGFloat = 0
   private var shouldAutoFocus = false
   private var didAutoFocus = false
@@ -436,15 +437,24 @@ public final class T3ComposerEditorView: ExpoView, UITextViewDelegate, UITextDro
     applyControlledDocument(force: true)
   }
 
-  func setContentInsetVertical(_ contentInsetVertical: CGFloat) {
-    self.contentInsetVertical = contentInsetVertical
+  private func applyContentInsets() {
     textView.textContainerInset = UIEdgeInsets(
       top: contentInsetVertical,
-      left: 0,
+      left: contentInsetHorizontal,
       bottom: contentInsetVertical,
-      right: 0
+      right: contentInsetHorizontal
     )
     setNeedsLayout()
+  }
+
+  func setContentInsetHorizontal(_ contentInsetHorizontal: CGFloat) {
+    self.contentInsetHorizontal = max(0, contentInsetHorizontal)
+    applyContentInsets()
+  }
+
+  func setContentInsetVertical(_ contentInsetVertical: CGFloat) {
+    self.contentInsetVertical = contentInsetVertical
+    applyContentInsets()
   }
 
   func setEditable(_ editable: Bool) {

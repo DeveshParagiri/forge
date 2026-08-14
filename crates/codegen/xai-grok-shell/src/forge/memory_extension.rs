@@ -6,7 +6,7 @@
 const EXTENSION: &str = r#"
 
 <forge_memory>
-As an exception to any general preference exclusion, retain durable evidence about which models, harnesses, and subagent setups work best for this user for different task types. Consider explicit direction and corrections, repeated choices, the target used, outcome quality, and the user's reactions or feedback. Preserve a short quotation attributed to the user when its wording carries the intent. Explicit user direction outweighs inference; infer only from clear or repeated evidence, and do not invent certainty from one ambiguous result. Record concise ordinary Markdown under `## Model and harness preferences`, with no scores or separate schema.
+Retain only evidence that will improve future work for this user: explicitly stated current projects, workstreams, and near-term goals; explicit preferences and corrections; stable workflow or environment facts; and clear or repeated evidence about which models, harnesses, and subagent setups work best for different task types. Label active-work context as current and replace or remove it when the user changes direction. Explicit user direction always outweighs inference. When new evidence conflicts with an older preference, update or consolidate the stale guidance instead of preserving contradictory rules. Do not save step-by-step task progress, temporary execution plans, logs, completed-work narration, unresolved failures, or conclusions from one ambiguous result. Preserve a short quotation attributed to the user only when its wording carries durable intent. Record concise ordinary Markdown under `## Model and harness preferences`, with no scores or separate schema.
 </forge_memory>"#;
 
 pub(crate) fn extend_prompt(mut prompt: String) -> String {
@@ -19,15 +19,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extends_normal_memory_with_semantic_model_and_harness_learning() {
+    fn extends_normal_memory_with_durable_model_and_harness_learning() {
         let prompt = extend_prompt("upstream memory prompt".to_owned());
 
         assert!(prompt.starts_with("upstream memory prompt"));
         assert!(prompt.contains("different task types"));
-        assert!(prompt.contains("outcome quality"));
-        assert!(prompt.contains("reactions or feedback"));
-        assert!(prompt.contains("Explicit user direction outweighs inference"));
-        assert!(prompt.contains("clear or repeated evidence"));
+        assert!(prompt.contains("current projects, workstreams, and near-term goals"));
+        assert!(prompt.contains("replace or remove it when the user changes direction"));
+        assert!(prompt.contains("explicit preferences and corrections"));
+        assert!(prompt.contains("Explicit user direction always outweighs inference"));
+        assert!(prompt.contains("update or consolidate the stale guidance"));
+        assert!(prompt.contains("Do not save step-by-step task progress"));
         assert!(prompt.contains("no scores or separate schema"));
     }
 }

@@ -8,13 +8,14 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use agent_client_protocol as acp;
 use tokio::sync::{Mutex, broadcast, mpsc, watch};
 use xai_grok_shell::remote_control::{
     RemoteCommand, RemoteCommandOutcome, RemoteCommandRequest, RemoteError,
     RemoteInteractionResponse, RemotePagerEvent, RemotePlanOutcome, RemoteRevocationReason,
-    RemoteSnapshot, RemoteTransport,
+    RemoteSessionAcceptance, RemoteSnapshot, RemoteTransport,
 };
 
 use crate::app::actions::Effect;
@@ -25,6 +26,14 @@ use crate::forge::remote_usage::RemoteUsageRequestIdentity;
 
 const COMMAND_CAPACITY: usize = 32;
 const EVENT_CAPACITY: usize = 256;
+#[cfg(not(test))]
+const SESSION_ACCEPTANCE_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(test)]
+const SESSION_ACCEPTANCE_TIMEOUT: Duration = Duration::from_millis(100);
+#[cfg(not(test))]
+const SESSION_ACCEPTANCE_COMMIT_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(test)]
+const SESSION_ACCEPTANCE_COMMIT_TIMEOUT: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RemoteTarget {
@@ -53,7 +62,18 @@ struct CommandBus {
 static BRIDGES: OnceLock<Mutex<HashMap<u64, ActiveBridge>>> = OnceLock::new();
 static COMMAND_BUS: OnceLock<CommandBus> = OnceLock::new();
 static LIFECYCLE: OnceLock<Mutex<()>> = OnceLock::new();
+static PENDING_NEW_SESSIONS: OnceLock<std::sync::Mutex<HashMap<AgentId, PendingRemoteNewSession>>> =
+    OnceLock::new();
 static NEXT_BRIDGE_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PendingRemoteNewSession {
+    pub(crate) source_binding_generation: u64,
+    pub(crate) source_gateway_generation: u64,
+    pub(crate) source_client_generation: u64,
+    pub(crate) source_session_id: String,
+    pub(crate) command_id: String,
+}
 
 fn bridges() -> &'static Mutex<HashMap<u64, ActiveBridge>> {
     BRIDGES.get_or_init(|| Mutex::new(HashMap::new()))
@@ -67,6 +87,17 @@ fn command_bus() -> &'static CommandBus {
             rx: Mutex::new(rx),
         }
     })
+}
+
+fn pending_new_sessions() -> &'static std::sync::Mutex<HashMap<AgentId, PendingRemoteNewSession>> {
+    PENDING_NEW_SESSIONS.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+pub(crate) fn take_pending_new_session(agent_id: AgentId) -> Option<PendingRemoteNewSession> {
+    pending_new_sessions()
+        .lock()
+        .expect("remote new-session pending lock poisoned")
+        .remove(&agent_id)
 }
 
 /// Serialize the complete pager+gateway lifecycle transaction. `/rc` effects
@@ -162,6 +193,31 @@ pub async fn bind_gateway_generation(
     };
     active.target.gateway_generation = Some(gateway_generation);
     active.suspended = false;
+    true
+}
+
+/// Seed a just-created binding before its gateway URL can be handed to a
+/// client. This avoids exposing a pairing that would answer hello with
+/// `snapshotUnavailable` until the next pager-loop projection.
+pub(crate) async fn seed_initial_snapshot(
+    binding_generation: u64,
+    session_id: &acp::SessionId,
+    session: serde_json::Value,
+) -> bool {
+    let mut guard = bridges().lock().await;
+    let Some(active) = guard.get_mut(&binding_generation) else {
+        return false;
+    };
+    if active.suspended || &active.target.session_id != session_id {
+        return false;
+    }
+    active.revision = 1;
+    active.last_session = Some(session.clone());
+    active.snapshot_tx.send_replace(Some(RemoteSnapshot {
+        session_id: session_id.0.to_string(),
+        revision: 1,
+        session,
+    }));
     true
 }
 
@@ -331,16 +387,300 @@ pub(crate) async fn next_request() -> RemoteInbound {
 pub(crate) struct RemoteExecution {
     bridge_generation: u64,
     session_id: String,
+    client_generation: u64,
     command_id: String,
     outcome: RemoteCommandOutcome,
     pub(crate) effects: Vec<Effect>,
     force_snapshot: bool,
+    defer_result: bool,
 }
 
 fn command_error(code: &str, message: impl Into<String>, retryable: bool) -> RemoteCommandOutcome {
     RemoteCommandOutcome::Error {
         error: RemoteError::new(code, message, retryable),
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QueuedPromptControl {
+    Edit,
+    Steer,
+    Cancel,
+}
+
+fn validate_shared_queue_item(
+    app: &AppView,
+    agent_id: AgentId,
+    queue_item_id: &str,
+    expected_version: u64,
+    control: QueuedPromptControl,
+) -> Result<(), (&'static str, &'static str, bool)> {
+    let Some(agent) = app.agents.get(&agent_id) else {
+        return Err((
+            "session_closed",
+            "The armed Forge session is no longer available.",
+            false,
+        ));
+    };
+    let Some(item) = agent
+        .shared_queue
+        .iter()
+        .find(|item| item.id == queue_item_id && item.version == expected_version)
+    else {
+        return Err((
+            "queue_item_stale",
+            "This queued message changed or is no longer queued. Refresh and try again.",
+            true,
+        ));
+    };
+    if control == QueuedPromptControl::Edit && item.kind != "prompt" {
+        return Err((
+            "queue_action_unavailable",
+            "Only plain queued prompts can be edited remotely.",
+            false,
+        ));
+    }
+    if control == QueuedPromptControl::Steer && !agent.session.state.is_turn_running() {
+        return Err((
+            "queue_action_unavailable",
+            "There is no running turn to steer.",
+            true,
+        ));
+    }
+    Ok(())
+}
+
+fn remote_queue_control_effects(
+    app: &AppView,
+    target: &RemoteTarget,
+    command: RemoteCommand,
+) -> Result<Vec<Effect>, (&'static str, &'static str, bool)> {
+    match command {
+        RemoteCommand::EditQueuedPrompt {
+            queue_item_id,
+            expected_version,
+            text,
+        } => {
+            if text.trim().is_empty() {
+                return Err((
+                    "invalid_queue_edit",
+                    "A queued message cannot be empty.",
+                    false,
+                ));
+            }
+            validate_shared_queue_item(
+                app,
+                target.agent_id,
+                &queue_item_id,
+                expected_version,
+                QueuedPromptControl::Edit,
+            )?;
+            Ok(vec![Effect::QueueEdit {
+                session_id: target.session_id.clone(),
+                id: queue_item_id,
+                new_text: text,
+                expected_version: Some(expected_version),
+            }])
+        }
+        RemoteCommand::SteerQueuedPrompt {
+            queue_item_id,
+            expected_version,
+        } => {
+            validate_shared_queue_item(
+                app,
+                target.agent_id,
+                &queue_item_id,
+                expected_version,
+                QueuedPromptControl::Steer,
+            )?;
+            Ok(vec![Effect::QueueInterject {
+                session_id: target.session_id.clone(),
+                id: queue_item_id,
+                expected_version,
+                new_text: None,
+            }])
+        }
+        RemoteCommand::CancelQueuedPrompt {
+            queue_item_id,
+            expected_version,
+        } => {
+            validate_shared_queue_item(
+                app,
+                target.agent_id,
+                &queue_item_id,
+                expected_version,
+                QueuedPromptControl::Cancel,
+            )?;
+            Ok(vec![Effect::QueueRemove {
+                session_id: target.session_id.clone(),
+                id: queue_item_id,
+                expected_version,
+            }])
+        }
+        _ => unreachable!("remote queue helper only accepts queue commands"),
+    }
+}
+
+fn source_has_pending_new_session(binding_generation: u64, gateway_generation: u64) -> bool {
+    pending_new_sessions()
+        .lock()
+        .expect("remote new-session pending lock poisoned")
+        .values()
+        .any(|pending| {
+            pending.source_binding_generation == binding_generation
+                && pending.source_gateway_generation == gateway_generation
+        })
+}
+
+pub(crate) fn register_pending_new_session(agent_id: AgentId, pending: PendingRemoteNewSession) {
+    let mut guard = pending_new_sessions()
+        .lock()
+        .expect("remote new-session pending lock poisoned");
+    guard.insert(agent_id, pending);
+}
+
+pub(crate) async fn complete_new_session_handoff_success(
+    pending: &PendingRemoteNewSession,
+    new_session_id: String,
+    pairing_url: String,
+    expires_at: String,
+) -> bool {
+    let guard = bridges().lock().await;
+    let Some(source) = guard.get(&pending.source_binding_generation) else {
+        return false;
+    };
+    if source.suspended
+        || source.target.session_id.0.as_ref() != pending.source_session_id
+        || source.target.gateway_generation != Some(pending.source_gateway_generation)
+    {
+        return false;
+    }
+    let (delivery_ack, mut delivery_result) = mpsc::unbounded_channel();
+    let published = source
+        .events
+        .send(RemotePagerEvent::SessionCreated {
+            session_id: pending.source_session_id.clone(),
+            client_generation: pending.source_client_generation,
+            command_id: pending.command_id.clone(),
+            new_session_id,
+            pairing_url,
+            expires_at,
+            delivery_ack,
+        })
+        .is_ok();
+    drop(guard);
+    if !published {
+        return false;
+    }
+    let Ok(Some(RemoteSessionAcceptance::Begin { granted })) =
+        tokio::time::timeout(SESSION_ACCEPTANCE_TIMEOUT, delivery_result.recv()).await
+    else {
+        return false;
+    };
+    if granted.send(()).is_err() {
+        return false;
+    }
+    matches!(
+        tokio::time::timeout(SESSION_ACCEPTANCE_COMMIT_TIMEOUT, delivery_result.recv()).await,
+        Ok(Some(RemoteSessionAcceptance::Commit))
+    )
+}
+
+pub(crate) async fn complete_new_session_handoff_failure(
+    pending: &PendingRemoteNewSession,
+    code: &str,
+    message: impl Into<String>,
+    retryable: bool,
+) -> bool {
+    let guard = bridges().lock().await;
+    let Some(source) = guard.get(&pending.source_binding_generation) else {
+        return false;
+    };
+    if source.suspended
+        || source.target.session_id.0.as_ref() != pending.source_session_id
+        || source.target.gateway_generation != Some(pending.source_gateway_generation)
+    {
+        return false;
+    }
+    source
+        .events
+        .send(RemotePagerEvent::CommandResult {
+            session_id: pending.source_session_id.clone(),
+            client_generation: pending.source_client_generation,
+            command_id: pending.command_id.clone(),
+            outcome: command_error(code, message, retryable),
+        })
+        .is_ok()
+}
+
+/// Revoke an armed child pairing that could not be delivered to its source
+/// socket. Generation checks ensure a stale cleanup can never stop a newer
+/// pairing for the child.
+pub(crate) async fn revoke_undelivered_new_session(
+    agent_id: AgentId,
+    session_id: &acp::SessionId,
+    session_binding_epoch: u32,
+    binding_generation: u64,
+    gateway_generation: u64,
+) -> bool {
+    suspend_target(
+        agent_id,
+        session_id,
+        session_binding_epoch,
+        RemoteRevocationReason::Stopped,
+    )
+    .await;
+    match xai_grok_shell::remote_control::stop_gateway_generation_checked(
+        binding_generation,
+        gateway_generation,
+        RemoteRevocationReason::Stopped,
+    )
+    .await
+    {
+        Ok(true) => forget_binding(binding_generation).await,
+        Ok(false) | Err(_) => false,
+    }
+}
+
+/// Retain the freshly armed child only after the exact requesting client has
+/// persisted and validated it, then completed the bounded Begin/grant/Commit
+/// handshake. Any missing acceptance, failed result write, or vanished socket
+/// makes the fresh bearer unreachable, so revoke it immediately.
+pub(crate) async fn finalize_new_session_handoff(
+    pending: &PendingRemoteNewSession,
+    agent_id: AgentId,
+    session_id: &acp::SessionId,
+    session_binding_epoch: u32,
+    binding_generation: u64,
+    gateway_generation: u64,
+    pairing_url: String,
+    expires_at: String,
+) -> bool {
+    let delivered = complete_new_session_handoff_success(
+        pending,
+        session_id.0.to_string(),
+        pairing_url,
+        expires_at,
+    )
+    .await;
+    if !delivered {
+        revoke_undelivered_new_session(
+            agent_id,
+            session_id,
+            session_binding_epoch,
+            binding_generation,
+            gateway_generation,
+        )
+        .await;
+        complete_new_session_handoff_failure(
+            pending,
+            "new_session_acceptance_failed",
+            "The new session was not accepted by the requesting client in time.",
+            true,
+        )
+        .await;
+    }
+    delivered
 }
 
 impl RemoteExecution {
@@ -353,10 +693,12 @@ impl RemoteExecution {
         Self {
             bridge_generation: inbound.bridge_generation,
             session_id: inbound.request.session_id,
+            client_generation: inbound.request.client_generation,
             command_id: inbound.request.command_id,
             outcome: command_error(code, message, retryable),
             effects: Vec::new(),
             force_snapshot: false,
+            defer_result: false,
         }
     }
 }
@@ -407,7 +749,16 @@ pub(crate) async fn execute_request(app: &mut AppView, inbound: RemoteInbound) -
         );
     }
 
-    if app.reconnect_pending && matches!(&inbound.request.command, RemoteCommand::Prompt { .. }) {
+    if app.reconnect_pending
+        && matches!(
+            &inbound.request.command,
+            RemoteCommand::Prompt { .. }
+                | RemoteCommand::NewSession { .. }
+                | RemoteCommand::EditQueuedPrompt { .. }
+                | RemoteCommand::SteerQueuedPrompt { .. }
+                | RemoteCommand::CancelQueuedPrompt { .. }
+        )
+    {
         return RemoteExecution::error(
             inbound,
             "session_reconnecting",
@@ -417,11 +768,13 @@ pub(crate) async fn execute_request(app: &mut AppView, inbound: RemoteInbound) -
     }
 
     let session_id = inbound.request.session_id.clone();
+    let client_generation = inbound.request.client_generation;
     let command_id = inbound.request.command_id.clone();
     let gateway_generation = inbound.request.gateway_generation;
     let mut effects = Vec::new();
     let mut force_snapshot = false;
     let mut rejection_code = "command_rejected";
+    let mut rejection_retryable = false;
     let result = match inbound.request.command {
         RemoteCommand::Prompt { text } => {
             if text.trim().is_empty() {
@@ -429,6 +782,59 @@ pub(crate) async fn execute_request(app: &mut AppView, inbound: RemoteInbound) -
             } else {
                 effects = crate::app::dispatch::dispatch_remote_prompt(app, target.agent_id, text);
                 Ok(())
+            }
+        }
+        RemoteCommand::NewSession { .. } => {
+            if source_has_pending_new_session(inbound.bridge_generation, gateway_generation) {
+                rejection_code = "new_session_pending";
+                rejection_retryable = true;
+                Err("A new session is already being created from this remote session.".into())
+            } else {
+                match crate::app::dispatch::dispatch_remote_new_session(app, target.agent_id) {
+                    Ok((new_agent_id, resolved)) => {
+                        let pending = PendingRemoteNewSession {
+                            source_binding_generation: inbound.bridge_generation,
+                            source_gateway_generation: gateway_generation,
+                            source_client_generation: inbound.request.client_generation,
+                            source_session_id: session_id.clone(),
+                            command_id: command_id.clone(),
+                        };
+                        register_pending_new_session(new_agent_id, pending);
+                        effects = resolved;
+                        // ACP creation and fresh route activation are asynchronous. The
+                        // source socket receives a single terminal result after both.
+                        return RemoteExecution {
+                            bridge_generation: inbound.bridge_generation,
+                            session_id,
+                            client_generation,
+                            command_id,
+                            outcome: RemoteCommandOutcome::Ok,
+                            effects,
+                            force_snapshot: false,
+                            defer_result: true,
+                        };
+                    }
+                    Err(message) => Err(message),
+                }
+            }
+        }
+        RemoteCommand::AcceptNewSession { .. } => {
+            rejection_code = "gateway_only_command";
+            Err("Session acceptance must be handled by the requesting gateway socket.".into())
+        }
+        command @ (RemoteCommand::EditQueuedPrompt { .. }
+        | RemoteCommand::SteerQueuedPrompt { .. }
+        | RemoteCommand::CancelQueuedPrompt { .. }) => {
+            match remote_queue_control_effects(app, &target, command) {
+                Ok(resolved) => {
+                    effects = resolved;
+                    Ok(())
+                }
+                Err((code, message, retryable)) => {
+                    rejection_code = code;
+                    rejection_retryable = retryable;
+                    Err(message.into())
+                }
             }
         }
         RemoteCommand::Cancel => crate::app::dispatch::dispatch_remote_cancel(app, target.agent_id)
@@ -442,13 +848,50 @@ pub(crate) async fn execute_request(app: &mut AppView, inbound: RemoteInbound) -
         RemoteCommand::SetModel {
             model_id,
             reasoning_effort,
-        } => crate::app::dispatch::dispatch_remote_switch_model(
-            app,
-            target.agent_id,
-            &model_id,
-            reasoning_effort.as_deref(),
-        )
-        .map(|resolved| effects = resolved),
+        } => {
+            let agent = app
+                .agents
+                .get(&target.agent_id)
+                .expect("remote target was validated above");
+            if agent.session.models.fast_mode_pending() {
+                rejection_code = "fast_mode_pending";
+                rejection_retryable = true;
+                Err("Wait for the Fast Mode change to finish, then retry the model switch.".into())
+            } else {
+                crate::app::dispatch::dispatch_remote_switch_model(
+                    app,
+                    target.agent_id,
+                    &model_id,
+                    reasoning_effort.as_deref(),
+                )
+                .map(|resolved| effects = resolved)
+            }
+        }
+        RemoteCommand::SetFastMode { enabled } => {
+            let agent = app
+                .agents
+                .get(&target.agent_id)
+                .expect("remote target was validated above");
+            if agent.session.model_switch_pending {
+                rejection_code = "model_switch_pending";
+                rejection_retryable = true;
+                Err("Wait for the current model switch to finish, then retry Fast Mode.".into())
+            } else if !crate::forge::fast_mode::is_supported(&agent.session.models) {
+                rejection_code = "fast_mode_unsupported";
+                Err("The current model does not support Fast Mode.".into())
+            } else if agent.session.models.fast_mode_pending() {
+                rejection_code = "fast_mode_pending";
+                rejection_retryable = true;
+                Err("A Fast Mode change is already in progress.".into())
+            } else {
+                crate::forge::fast_mode::dispatch_set_fast_mode_for_agent(
+                    app,
+                    target.agent_id,
+                    enabled,
+                )
+                .map(|resolved| effects = resolved)
+            }
+        }
         RemoteCommand::Btw { question } => {
             if question.trim().is_empty() {
                 Err("A BTW question cannot be empty.".into())
@@ -500,13 +943,15 @@ pub(crate) async fn execute_request(app: &mut AppView, inbound: RemoteInbound) -
     RemoteExecution {
         bridge_generation: inbound.bridge_generation,
         session_id,
+        client_generation,
         command_id,
         outcome: match result {
             Ok(()) => RemoteCommandOutcome::Ok,
-            Err(message) => command_error(rejection_code, message, false),
+            Err(message) => command_error(rejection_code, message, rejection_retryable),
         },
         effects,
         force_snapshot,
+        defer_result: false,
     }
 }
 
@@ -689,6 +1134,9 @@ fn publish_bridge_state(app: &AppView, active: &mut ActiveBridge) {
 /// ensures a session-closed rejection is not lost when projection revokes an
 /// invalid target.
 pub(crate) async fn finish_execution(execution: RemoteExecution) {
+    if execution.defer_result {
+        return;
+    }
     let mut guard = bridges().lock().await;
     let Some(active) = guard.get_mut(&execution.bridge_generation) else {
         return;
@@ -707,6 +1155,7 @@ pub(crate) async fn finish_execution(execution: RemoteExecution) {
     }
     let _ = active.events.send(RemotePagerEvent::CommandResult {
         session_id: execution.session_id,
+        client_generation: execution.client_generation,
         command_id: execution.command_id,
         outcome: execution.outcome,
     });
@@ -752,6 +1201,7 @@ mod tests {
             .send(RemoteCommandRequest {
                 session_id: "test-session".into(),
                 gateway_generation,
+                client_generation: 1,
                 command_id: command_id.into(),
                 command,
             })
@@ -767,6 +1217,196 @@ mod tests {
             panic!("expected command error")
         };
         error
+    }
+
+    #[tokio::test]
+    async fn remote_new_session_is_same_cwd_sibling_and_defers_for_fresh_pairing() {
+        let _test = bridge_test_lock().lock().await;
+        let mut app = crate::app::app_view::tests::test_app_with_agent();
+        let source_id = AgentId(0);
+        app.next_agent_id = 1;
+        let source_session = app.agents[&source_id].session.session_id.clone().unwrap();
+        let source_epoch = app.agents[&source_id].session_binding_epoch;
+        let source_cwd = app.agents[&source_id].session.cwd.clone();
+        let transport = arm_test_app(&app, 81).await;
+
+        let execution = execute_request(
+            &mut app,
+            receive_command(&transport, 81, "new-1", RemoteCommand::NewSession {}).await,
+        )
+        .await;
+        assert!(execution.defer_result);
+        assert!(matches!(execution.outcome, RemoteCommandOutcome::Ok));
+        let new_agent_id = match execution.effects.as_slice() {
+            [Effect::CreateSession { agent_id, cwd, .. }] => {
+                assert_eq!(cwd, &source_cwd);
+                *agent_id
+            }
+            other => panic!("expected only canonical CreateSession, got {other:?}"),
+        };
+        assert_ne!(new_agent_id, source_id);
+        assert!(app.agents.contains_key(&source_id));
+        assert!(app.agents.contains_key(&new_agent_id));
+        assert!(
+            binding_for_target(source_id, &source_session, source_epoch)
+                .await
+                .is_some()
+        );
+        assert_eq!(
+            app.agents[&source_id].session.session_id,
+            Some(source_session.clone())
+        );
+
+        let duplicate = execute_request(
+            &mut app,
+            receive_command(&transport, 81, "new-2", RemoteCommand::NewSession {}).await,
+        )
+        .await;
+        assert_eq!(outcome_error(&duplicate).code, "new_session_pending");
+        assert!(outcome_error(&duplicate).retryable);
+
+        let pending = take_pending_new_session(new_agent_id).unwrap();
+        assert_eq!(pending.command_id, "new-1");
+        assert_eq!(pending.source_session_id, source_session.0.as_ref());
+        revoke_all(RemoteRevocationReason::Stopped).await;
+    }
+
+    #[tokio::test]
+    async fn undelivered_child_pairing_is_generation_checked_and_removed() {
+        let _test = bridge_test_lock().lock().await;
+        revoke_all(RemoteRevocationReason::Stopped).await;
+        let app = crate::app::app_view::tests::test_app_with_agent();
+        let agent_id = AgentId(0);
+        let agent = &app.agents[&agent_id];
+        let session_id = agent.session.session_id.clone().unwrap();
+        let epoch = agent.session_binding_epoch;
+        let transport = arm(agent_id, session_id.clone(), epoch).await;
+        let arm =
+            xai_grok_shell::remote_control::arm_active_gateway(session_id.0.to_string(), transport)
+                .await
+                .unwrap();
+        assert!(
+            bind_gateway_generation(agent_id, &session_id, epoch, arm.gateway_generation,).await
+        );
+        assert!(
+            xai_grok_shell::remote_control::active_gateway_arm(arm.binding_generation)
+                .await
+                .is_some()
+        );
+
+        assert!(
+            revoke_undelivered_new_session(
+                agent_id,
+                &session_id,
+                epoch,
+                arm.binding_generation,
+                arm.gateway_generation,
+            )
+            .await
+        );
+        assert!(
+            xai_grok_shell::remote_control::active_gateway_arm(arm.binding_generation)
+                .await
+                .is_none()
+        );
+        assert!(
+            binding_for_target(agent_id, &session_id, epoch)
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_session_created_socket_write_revokes_the_fresh_child() {
+        let _test = bridge_test_lock().lock().await;
+        revoke_all(RemoteRevocationReason::Stopped).await;
+        let app = crate::app::app_view::tests::test_app_with_agent();
+        let child_id = AgentId(0);
+        let child = &app.agents[&child_id];
+        let child_session = child.session.session_id.clone().unwrap();
+        let child_epoch = child.session_binding_epoch;
+
+        let source_session = acp::SessionId::new("source-session");
+        let source_transport = arm(AgentId(91), source_session.clone(), 1).await;
+        assert!(bind_gateway_generation(AgentId(91), &source_session, 1, 401).await);
+        let mut source_events = source_transport.events.subscribe();
+        let pending = PendingRemoteNewSession {
+            source_binding_generation: source_transport.binding_generation,
+            source_gateway_generation: 401,
+            source_client_generation: 17,
+            source_session_id: source_session.0.to_string(),
+            command_id: "new-write-fails".into(),
+        };
+
+        let child_transport = arm(child_id, child_session.clone(), child_epoch).await;
+        let child_arm = xai_grok_shell::remote_control::arm_active_gateway(
+            child_session.0.to_string(),
+            child_transport,
+        )
+        .await
+        .unwrap();
+        assert!(
+            bind_gateway_generation(
+                child_id,
+                &child_session,
+                child_epoch,
+                child_arm.gateway_generation,
+            )
+            .await
+        );
+
+        let pending_for_task = pending.clone();
+        let child_session_for_task = child_session.clone();
+        let binding_generation = child_arm.binding_generation;
+        let gateway_generation = child_arm.gateway_generation;
+        let finalize = tokio::spawn(async move {
+            finalize_new_session_handoff(
+                &pending_for_task,
+                child_id,
+                &child_session_for_task,
+                child_epoch,
+                binding_generation,
+                gateway_generation,
+                "https://device.tail.example/forge/fresh/".into(),
+                "2030-01-02T03:04:05Z".into(),
+            )
+            .await
+        });
+        let event = tokio::time::timeout(Duration::from_secs(1), source_events.recv())
+            .await
+            .expect("source did not receive sessionCreated")
+            .expect("source event channel closed");
+        assert!(matches!(event, RemotePagerEvent::SessionCreated { .. }));
+        // Keep the event (and therefore its acceptance sender) alive without
+        // acknowledging it. This models a client that received the provisional
+        // route but never completed secure persistence/validation.
+        assert!(!finalize.await.unwrap());
+        drop(event);
+        assert!(
+            xai_grok_shell::remote_control::active_gateway_arm(binding_generation)
+                .await
+                .is_none()
+        );
+        assert!(
+            binding_for_target(child_id, &child_session, child_epoch)
+                .await
+                .is_none()
+        );
+        let terminal = tokio::time::timeout(Duration::from_secs(1), source_events.recv())
+            .await
+            .expect("acceptance timeout did not produce a terminal result")
+            .expect("source event channel closed");
+        assert!(matches!(
+            terminal,
+            RemotePagerEvent::CommandResult {
+                client_generation: 17,
+                command_id,
+                outcome: RemoteCommandOutcome::Error { ref error },
+                ..
+            } if command_id == "new-write-fails"
+                && error.code == "new_session_acceptance_failed"
+        ));
+        revoke_all(RemoteRevocationReason::Stopped).await;
     }
 
     fn attach_permission(
@@ -945,6 +1585,7 @@ mod tests {
         let request = RemoteCommandRequest {
             session_id: session.0.to_string(),
             gateway_generation: 4,
+            client_generation: 1,
             command_id: "command-1".into(),
             command: RemoteCommand::Ping,
         };
@@ -962,6 +1603,7 @@ mod tests {
             .send(RemoteCommandRequest {
                 session_id: session.0.to_string(),
                 gateway_generation: 5,
+                client_generation: 1,
                 command_id: "command-2".into(),
                 command: RemoteCommand::Ping,
             })
@@ -1056,6 +1698,7 @@ mod tests {
             .send(RemoteCommandRequest {
                 session_id: duplicate_session.0.to_string(),
                 gateway_generation: 202,
+                client_generation: 1,
                 command_id: "duplicate-second".into(),
                 command: RemoteCommand::RefreshUsage,
             })
@@ -1125,6 +1768,7 @@ mod tests {
             .send(RemoteCommandRequest {
                 session_id: new_session.0.to_string(),
                 gateway_generation: 11,
+                client_generation: 1,
                 command_id: "still-live".into(),
                 command: RemoteCommand::Ping,
             })
@@ -1206,6 +1850,114 @@ mod tests {
         revoke_all(RemoteRevocationReason::Stopped).await;
     }
 
+    #[test]
+    fn queued_prompt_controls_are_versioned_exact_target_effects() {
+        let mut app = crate::app::app_view::tests::test_app_with_agent();
+        let target = RemoteTarget {
+            agent_id: AgentId(0),
+            session_id: acp::SessionId::new("test-session"),
+            session_binding_epoch: app.agents[&AgentId(0)].session_binding_epoch,
+            bridge_generation: 91,
+            gateway_generation: Some(92),
+        };
+        {
+            let agent = app.agents.get_mut(&AgentId(0)).unwrap();
+            agent.session.state = crate::app::agent::AgentState::TurnRunning;
+            agent
+                .shared_queue
+                .push(crate::app::prompt_queue::QueueEntryWire {
+                    id: "queued-1".into(),
+                    version: 4,
+                    owner: Some("phone".into()),
+                    last_editor: None,
+                    kind: "prompt".into(),
+                    text: "follow up".into(),
+                    combined_texts: None,
+                    position: 0,
+                });
+        }
+
+        assert!(matches!(
+            remote_queue_control_effects(
+                &app,
+                &target,
+                RemoteCommand::EditQueuedPrompt {
+                    queue_item_id: "queued-1".into(),
+                    expected_version: 4,
+                    text: "edited".into(),
+                },
+            )
+            .unwrap()
+            .as_slice(),
+            [Effect::QueueEdit {
+                session_id,
+                id,
+                new_text,
+                expected_version: Some(4),
+            }] if session_id.0.as_ref() == "test-session" && id == "queued-1" && new_text == "edited"
+        ));
+        assert!(matches!(
+            remote_queue_control_effects(
+                &app,
+                &target,
+                RemoteCommand::SteerQueuedPrompt {
+                    queue_item_id: "queued-1".into(),
+                    expected_version: 4,
+                },
+            )
+            .unwrap()
+            .as_slice(),
+            [Effect::QueueInterject {
+                session_id,
+                id,
+                expected_version: 4,
+                new_text: None,
+            }] if session_id.0.as_ref() == "test-session" && id == "queued-1"
+        ));
+        assert!(matches!(
+            remote_queue_control_effects(
+                &app,
+                &target,
+                RemoteCommand::CancelQueuedPrompt {
+                    queue_item_id: "queued-1".into(),
+                    expected_version: 4,
+                },
+            )
+            .unwrap()
+            .as_slice(),
+            [Effect::QueueRemove {
+                session_id,
+                id,
+                expected_version: 4,
+            }] if session_id.0.as_ref() == "test-session" && id == "queued-1"
+        ));
+
+        let stale = remote_queue_control_effects(
+            &app,
+            &target,
+            RemoteCommand::CancelQueuedPrompt {
+                queue_item_id: "queued-1".into(),
+                expected_version: 3,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(stale.0, "queue_item_stale");
+        assert!(stale.2);
+
+        app.agents.get_mut(&AgentId(0)).unwrap().session.state =
+            crate::app::agent::AgentState::Idle;
+        let idle = remote_queue_control_effects(
+            &app,
+            &target,
+            RemoteCommand::SteerQueuedPrompt {
+                queue_item_id: "queued-1".into(),
+                expected_version: 4,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(idle.0, "queue_action_unavailable");
+    }
+
     #[tokio::test]
     async fn stale_binding_and_reconnecting_prompt_are_typed_rejections() {
         let _test = bridge_test_lock().lock().await;
@@ -1280,6 +2032,7 @@ mod tests {
             .send(RemoteCommandRequest {
                 session_id: "test-session".into(),
                 gateway_generation: 75,
+                client_generation: 1,
                 command_id: "after-shutdown".into(),
                 command: RemoteCommand::Ping,
             })
@@ -1338,6 +2091,165 @@ mod tests {
         ));
         let reconnect = transport.snapshots.clone();
         assert_eq!(reconnect.borrow().as_ref().unwrap().revision, 2);
+        revoke_all(RemoteRevocationReason::Stopped).await;
+    }
+
+    #[tokio::test]
+    async fn fast_mode_is_capability_gated_pending_and_exact_targeted() {
+        let _test = bridge_test_lock().lock().await;
+        let mut app = crate::app::app_view::tests::test_app_with_agent();
+        let id = AgentId(0);
+        let fast_id = acp::ModelId::new("remote-fast-model");
+        let fast_info = acp::ModelInfo::new(fast_id.clone(), "Remote Fast Model").meta(
+            serde_json::json!({"supportsFastMode": true})
+                .as_object()
+                .cloned(),
+        );
+        {
+            let agent = app.agents.get_mut(&id).unwrap();
+            agent
+                .session
+                .models
+                .available
+                .insert(fast_id.clone(), fast_info);
+            agent.session.models.set_current(fast_id, None);
+        }
+        let mut other = crate::app::agent_view::test_agent_view(
+            Some("other-session"),
+            std::path::PathBuf::from("/tmp/other"),
+        );
+        other.session.id = AgentId(1);
+        app.agents.insert(AgentId(1), other);
+        app.active_view = crate::app::app_view::ActiveView::Agent(AgentId(1));
+        let transport = arm_test_app(&app, 76).await;
+
+        let stale = execute_request(
+            &mut app,
+            receive_command(
+                &transport,
+                999,
+                "stale-fast",
+                RemoteCommand::SetFastMode { enabled: true },
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(outcome_error(&stale).code, "stale_binding");
+        assert!(!app.agents[&id].session.models.fast_mode_pending());
+
+        let accepted = execute_request(
+            &mut app,
+            receive_command(
+                &transport,
+                76,
+                "enable-fast",
+                RemoteCommand::SetFastMode { enabled: true },
+            )
+            .await,
+        )
+        .await;
+        assert!(matches!(accepted.outcome, RemoteCommandOutcome::Ok));
+        let (session_binding_epoch, request_id) = match accepted.effects.as_slice() {
+            [
+                Effect::SetFastMode {
+                    agent_id,
+                    session_id,
+                    session_binding_epoch,
+                    request_id,
+                    enabled: true,
+                },
+            ] => {
+                assert_eq!(*agent_id, id);
+                assert_eq!(session_id.0.as_ref(), "test-session");
+                (*session_binding_epoch, *request_id)
+            }
+            other => panic!("expected exact-target Fast Mode effect, got {other:?}"),
+        };
+        assert!(app.agents[&id].session.models.fast_mode_pending());
+        assert!(!app.agents[&AgentId(1)].session.models.fast_mode);
+
+        publish_state(&app).await;
+        let pending_snapshot = transport.snapshots.borrow().clone().unwrap();
+        assert_eq!(pending_snapshot.session["capabilities"]["fastMode"], true);
+        assert_eq!(pending_snapshot.session["fastMode"]["enabled"], false);
+        assert_eq!(pending_snapshot.session["fastMode"]["pending"], true);
+
+        let model_during_fast = execute_request(
+            &mut app,
+            receive_command(
+                &transport,
+                76,
+                "model-during-fast",
+                RemoteCommand::SetModel {
+                    model_id: "remote-fast-model".into(),
+                    reasoning_effort: None,
+                },
+            )
+            .await,
+        )
+        .await;
+        let model_error = outcome_error(&model_during_fast);
+        assert_eq!(model_error.code, "fast_mode_pending");
+        assert!(model_error.retryable);
+        assert!(model_during_fast.effects.is_empty());
+
+        let duplicate = execute_request(
+            &mut app,
+            receive_command(
+                &transport,
+                76,
+                "duplicate-fast",
+                RemoteCommand::SetFastMode { enabled: true },
+            )
+            .await,
+        )
+        .await;
+        let duplicate_error = outcome_error(&duplicate);
+        assert_eq!(duplicate_error.code, "fast_mode_pending");
+        assert!(duplicate_error.retryable);
+        assert!(duplicate.effects.is_empty());
+
+        crate::forge::fast_mode::handle_complete(
+            &mut app,
+            id,
+            acp::SessionId::new("test-session"),
+            session_binding_epoch,
+            request_id,
+            true,
+            Ok(()),
+        );
+        publish_state(&app).await;
+        let enabled_snapshot = transport.snapshots.borrow().clone().unwrap();
+        assert_eq!(enabled_snapshot.session["fastMode"]["enabled"], true);
+        assert!(
+            enabled_snapshot.session["fastMode"]
+                .get("pending")
+                .is_none()
+        );
+
+        let standard_id = acp::ModelId::new("standard-model");
+        {
+            let agent = app.agents.get_mut(&id).unwrap();
+            agent.session.models.available.insert(
+                standard_id.clone(),
+                acp::ModelInfo::new(standard_id.clone(), "Standard Model"),
+            );
+            agent.session.models.set_current(standard_id, None);
+        }
+        let unsupported = execute_request(
+            &mut app,
+            receive_command(
+                &transport,
+                76,
+                "unsupported-fast",
+                RemoteCommand::SetFastMode { enabled: true },
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(outcome_error(&unsupported).code, "fast_mode_unsupported");
+        assert!(unsupported.effects.is_empty());
+        assert!(!app.agents[&id].session.models.fast_mode);
         revoke_all(RemoteRevocationReason::Stopped).await;
     }
 
@@ -1849,6 +2761,7 @@ mod tests {
             .send(RemoteCommandRequest {
                 session_id: "test-session".into(),
                 gateway_generation: 101,
+                client_generation: 1,
                 command_id: "old-session-still-live".into(),
                 command: RemoteCommand::Ping,
             })

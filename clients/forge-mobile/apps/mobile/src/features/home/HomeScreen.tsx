@@ -19,7 +19,15 @@ import type {
   SidebarThreadSortOrder,
 } from "@t3tools/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, Platform, Pressable, View } from "react-native";
+import {
+  AccessibilityInfo,
+  ActivityIndicator,
+  FlatList,
+  LayoutAnimation,
+  Platform,
+  Pressable,
+  View,
+} from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColor } from "../../lib/useThemeColor";
@@ -67,7 +75,14 @@ import {
   type HomeProjectSortOrder,
 } from "./homeThreadList";
 import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "./thread-swipe-actions";
-import { remoteHomeEmptyState } from "./remoteHomePresentation";
+import {
+  REMOTE_HOME_DISCLOSURE_DURATION_MS,
+  readRemoteHomeGroupDisplayStates,
+  remoteHomeEmptyState,
+  remoteHomeNewSessionActionPresentation,
+  shouldAnimateRemoteHomeGroupAction,
+  writeRemoteHomeGroupDisplayState,
+} from "./remoteHomePresentation";
 
 /* ─── Types ──────────────────────────────────────────────────────────── */
 
@@ -86,6 +101,8 @@ interface HomeScreenProps {
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly threadSortOrder: SidebarThreadSortOrder;
   readonly projectGroupingMode: SidebarProjectGroupingMode;
+  /** Remote pairing projects that should share one collapsible directory row. */
+  readonly projectGroupKeyByProjectRef?: ReadonlyMap<string, string>;
   readonly onSearchQueryChange: (query: string) => void;
   readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
@@ -112,9 +129,13 @@ interface HomeScreenProps {
     direction: "up" | "down",
   ) => Promise<boolean>;
   readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => Promise<boolean>;
+  /** Local Forge alias; remote sessions do not expose a server-side rename command. */
+  readonly onRenameThread?: (thread: EnvironmentThreadShell) => void;
   readonly onSelectPendingTask: (pendingTask: PendingNewTask) => void;
   readonly onDeletePendingTask: (pendingTask: PendingNewTask) => void;
   readonly onNewThreadInProject: (project: EnvironmentProject) => void;
+  readonly isNewThreadInProjectPending?: (project: EnvironmentProject) => boolean;
+  readonly isNewThreadInProjectSupported?: (project: EnvironmentProject) => boolean;
   /** Forge Remote renders the retained list without unsupported lifecycle controls. */
   readonly remoteOnly?: boolean;
 }
@@ -123,6 +144,18 @@ interface HomeScreenProps {
 
 const ESTIMATED_THREAD_ROW_HEIGHT = 72;
 const PRE_LIQUID_GLASS_BOTTOM_TOOLBAR_HEIGHT = 44;
+const REMOTE_HOME_DISCLOSURE_LAYOUT_ANIMATION = {
+  duration: REMOTE_HOME_DISCLOSURE_DURATION_MS,
+  create: {
+    type: LayoutAnimation.Types.easeInEaseOut,
+    property: LayoutAnimation.Properties.opacity,
+  },
+  update: { type: LayoutAnimation.Types.easeInEaseOut },
+  delete: {
+    type: LayoutAnimation.Types.easeInEaseOut,
+    property: LayoutAnimation.Properties.opacity,
+  },
+} as const;
 /**
  * Top spacing between the list and the Android custom header. The Android
  * header (AndroidHomeHeader) is rendered in-flow above this screen and
@@ -206,8 +239,13 @@ function HomeTopContentSpacer() {
 export function HomeScreen(props: HomeScreenProps) {
   const [groupDisplayStates, setGroupDisplayStates] = useState<
     ReadonlyMap<string, HomeGroupDisplayState>
-  >(() => new Map());
-  const threadListV2Enabled = true;
+  >(() => (props.remoteOnly ? readRemoteHomeGroupDisplayStates() : new Map()));
+  // Forge Remote is organized by working directory and needs disclosure
+  // groups. Retain the flat v2 inbox for the canonical T3 Home unchanged.
+  const threadListV2Enabled = props.remoteOnly !== true;
+  // Default to reduced motion until the async system preference resolves, so
+  // an immediate tap after mount never animates against the user's setting.
+  const [reduceMotionEnabled, setReduceMotionEnabled] = useState(true);
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
   const listRef = useRef<LegendListRef | null>(null);
   const insets = useSafeAreaInsets();
@@ -237,12 +275,44 @@ export function HomeScreen(props: HomeScreenProps) {
   const effectiveGroupDisplayStatesRef = useRef(effectiveGroupDisplayStates);
   effectiveGroupDisplayStatesRef.current = effectiveGroupDisplayStates;
 
-  const updateGroupDisplay = useCallback((key: string, action: HomeGroupDisplayAction) => {
-    const next = new Map(effectiveGroupDisplayStatesRef.current);
-    next.set(key, nextGroupDisplayState(next.get(key) ?? DEFAULT_GROUP_DISPLAY_STATE, action));
-    effectiveGroupDisplayStatesRef.current = next;
-    setGroupDisplayStates(next);
-  }, []);
+  useEffect(() => {
+    if (!props.remoteOnly) return;
+    let active = true;
+    void AccessibilityInfo.isReduceMotionEnabled().then((enabled) => {
+      if (active) setReduceMotionEnabled(enabled);
+    });
+    const subscription = AccessibilityInfo.addEventListener(
+      "reduceMotionChanged",
+      setReduceMotionEnabled,
+    );
+    return () => {
+      active = false;
+      subscription.remove();
+    };
+  }, [props.remoteOnly]);
+
+  const updateGroupDisplay = useCallback(
+    (key: string, action: HomeGroupDisplayAction) => {
+      if (
+        shouldAnimateRemoteHomeGroupAction({
+          action,
+          reduceMotionEnabled,
+          remoteOnly: props.remoteOnly === true,
+        })
+      ) {
+        LayoutAnimation.configureNext(REMOTE_HOME_DISCLOSURE_LAYOUT_ANIMATION);
+      }
+      const next = new Map(effectiveGroupDisplayStatesRef.current);
+      const state = nextGroupDisplayState(next.get(key) ?? DEFAULT_GROUP_DISPLAY_STATE, action);
+      next.set(key, state);
+      if (props.remoteOnly) {
+        writeRemoteHomeGroupDisplayState(key, state);
+      }
+      effectiveGroupDisplayStatesRef.current = next;
+      setGroupDisplayStates(next);
+    },
+    [props.remoteOnly, reduceMotionEnabled],
+  );
 
   const handleSwipeableWillOpen = useCallback((methods: SwipeableMethods) => {
     if (openSwipeableRef.current !== methods) {
@@ -270,8 +340,14 @@ export function HomeScreen(props: HomeScreenProps) {
         projects: props.projects,
         environmentId: props.selectedEnvironmentId,
         projectGroupingMode: props.projectGroupingMode,
+        projectGroupKeyByProjectRef: props.projectGroupKeyByProjectRef,
       }),
-    [props.projectGroupingMode, props.projects, props.selectedEnvironmentId],
+    [
+      props.projectGroupKeyByProjectRef,
+      props.projectGroupingMode,
+      props.projects,
+      props.selectedEnvironmentId,
+    ],
   );
   const selectedProjectScope = useMemo(
     () =>
@@ -341,9 +417,11 @@ export function HomeScreen(props: HomeScreenProps) {
         projectSortOrder: props.projectSortOrder,
         threadSortOrder: props.threadSortOrder,
         projectGroupingMode: props.projectGroupingMode,
+        projectGroupKeyByProjectRef: props.projectGroupKeyByProjectRef,
       }),
     [
       props.projectGroupingMode,
+      props.projectGroupKeyByProjectRef,
       props.projectSortOrder,
       props.searchQuery,
       props.selectedEnvironmentId,
@@ -791,6 +869,7 @@ export function HomeScreen(props: HomeScreenProps) {
           onDeleteThread={handleDeleteThread}
           onArchiveThread={props.onArchiveThread}
           onRegenerateThreadTitle={handleRegenerateThreadTitle}
+          onRenameThread={props.onRenameThread}
           titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
           settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
           onSettleThread={handleSettleThread}
@@ -837,6 +916,7 @@ export function HomeScreen(props: HomeScreenProps) {
       projectByKey,
       projectCwdByKey,
       props.onArchiveThread,
+      props.onRenameThread,
       props.onDeletePendingTask,
       props.onSelectPendingTask,
       props.onSelectThread,
@@ -884,18 +964,41 @@ export function HomeScreen(props: HomeScreenProps) {
 
   const extraData = useMemo(
     () => ({
+      isNewThreadInProjectPending: props.isNewThreadInProjectPending,
+      isNewThreadInProjectSupported: props.isNewThreadInProjectSupported,
       projectCwdByKey,
+      reduceMotionEnabled,
       savedConnectionsById: props.savedConnectionsById,
       searchQuery: props.searchQuery,
       threadSearchMatchByKey,
     }),
-    [projectCwdByKey, props.savedConnectionsById, props.searchQuery, threadSearchMatchByKey],
+    [
+      projectCwdByKey,
+      props.isNewThreadInProjectPending,
+      props.isNewThreadInProjectSupported,
+      props.savedConnectionsById,
+      props.searchQuery,
+      reduceMotionEnabled,
+      threadSearchMatchByKey,
+    ],
   );
 
   const renderItem = useCallback(
     ({ item }: LegendListRenderItemProps<HomeListItem>) => {
       switch (item.type) {
-        case "header":
+        case "header": {
+          const candidate = item.group.newThreadTarget;
+          const newThreadTarget =
+            candidate && (props.isNewThreadInProjectSupported?.(candidate) ?? true)
+              ? candidate
+              : null;
+          const newThreadAction =
+            props.remoteOnly && newThreadTarget
+              ? remoteHomeNewSessionActionPresentation({
+                  projectTitle: item.group.title,
+                  pending: props.isNewThreadInProjectPending?.(newThreadTarget) ?? false,
+                })
+              : undefined;
           return (
             <ThreadListGroupHeader
               variant="compact"
@@ -903,17 +1006,19 @@ export function HomeScreen(props: HomeScreenProps) {
               isFirst={item.isFirst}
               groupKey={item.group.key}
               onGroupAction={updateGroupDisplay}
-              // Aggregated groups (same repo across machines) have no single
-              // target project, and `pending-project:` groups hold a placeholder
-              // built from queued-task metadata rather than a real project shell,
-              // so the quick new-thread button is single-real-project only.
-              newThreadTarget={item.group.newThreadTarget}
+              // Aggregated groups target the member with the newest activity;
+              // `pending-project:` groups have no executable project shell.
+              newThreadTarget={newThreadTarget}
+              newThreadAction={newThreadAction}
               onNewThread={props.onNewThreadInProject}
               project={item.group.representative}
               threadCount={item.group.threads.length + item.group.pendingTasks.length}
               title={item.group.title}
+              showCollapseChevron={props.remoteOnly}
+              reduceMotionEnabled={reduceMotionEnabled}
             />
           );
+        }
         case "pending-task":
           return (
             <PendingTaskListRow
@@ -952,6 +1057,11 @@ export function HomeScreen(props: HomeScreenProps) {
               onArchiveThread={props.onArchiveThread}
               onDeleteThread={props.onDeleteThread}
               onRegenerateThreadTitle={handleRegenerateThreadTitle}
+              onRenameThread={props.onRenameThread}
+              onPinThread={handlePinThread}
+              onUnpinThread={handleUnpinThread}
+              pinned={thread.pinnedAt != null}
+              remoteOnly={props.remoteOnly}
               titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
               onSelectThread={props.onSelectThread}
               onSwipeableClose={handleSwipeableClose}
@@ -974,19 +1084,26 @@ export function HomeScreen(props: HomeScreenProps) {
     [
       handleSwipeableClose,
       handleSwipeableWillOpen,
+      handlePinThread,
       handleRegenerateThreadTitle,
+      handleUnpinThread,
       projectCwdByKey,
       props.onArchiveThread,
       props.onDeletePendingTask,
       props.onDeleteThread,
+      props.isNewThreadInProjectPending,
+      props.isNewThreadInProjectSupported,
       props.onNewThreadInProject,
+      props.onRenameThread,
       props.onSelectPendingTask,
       props.onSelectThread,
+      props.remoteOnly,
       props.searchQuery,
       props.savedConnectionsById,
       threadSearchMatchByKey,
       titleRegenerationEnvironmentIds,
       updateGroupDisplay,
+      reduceMotionEnabled,
     ],
   );
 

@@ -33,6 +33,8 @@ async fn set_fast_mode_request_has_no_model_selection_fields() {
         Effect::SetFastMode {
             agent_id: AgentId(4),
             session_id: session_id.clone(),
+            session_binding_epoch: 12,
+            request_id: 34,
             enabled: true,
         },
         &mut tasks,
@@ -46,11 +48,15 @@ async fn set_fast_mode_request_has_no_model_selection_fields() {
         TaskResult::SetFastModeComplete {
             agent_id,
             session_id: completed_session,
+            session_binding_epoch,
+            request_id,
             enabled,
             result,
         } => {
             assert_eq!(agent_id, AgentId(4));
             assert_eq!(completed_session, session_id);
+            assert_eq!(session_binding_epoch, 12);
+            assert_eq!(request_id, 34);
             assert!(enabled);
             assert!(result.is_ok());
         }

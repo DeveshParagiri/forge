@@ -21,6 +21,12 @@ import type {
   ThreadFeedActivity,
   ThreadFeedEntry,
 } from "../lib/threadActivity";
+import { compactRemoteModelLabel } from "../features/threads/remoteComposerPresentation";
+import {
+  formatWorkedDisclosureLabel,
+  shouldShowWorkedDisclosure,
+  type RemoteWorkDisclosurePresentation,
+} from "../features/threads/threadMessageChrome";
 import type { ForgeSessionView } from "./state/ForgeSessionsProvider";
 import type {
   InteractionResponse,
@@ -131,49 +137,142 @@ function timelineActivity(
   };
 }
 
-function buildFeed(
-  snapshot: RemoteSessionSnapshot | null,
+function timelineFeedEntry(item: RemoteTimelineItem, fallbackDate: string): ThreadFeedEntry | null {
+  const createdAt = safeDate(item.createdAt, fallbackDate);
+  if (item.kind === "tool" || item.kind === "background") {
+    const activity = timelineActivity({ ...item, createdAt });
+    return {
+      type: "activity-group",
+      id: `activity:${item.id}`,
+      createdAt,
+      turnId: null,
+      activities: [activity],
+    };
+  }
+  const role = item.kind === "user" ? "user" : "assistant";
+  const text = itemText(item);
+  if (!text) return null;
+  const id = MessageId.make(`remote:${item.id}`);
+  return {
+    type: "message",
+    id,
+    createdAt,
+    message: {
+      id,
+      role,
+      text,
+      attachments: [],
+      turnId: null,
+      streaming: role === "assistant" && item.status === "running",
+      createdAt,
+      updatedAt: createdAt,
+    },
+  };
+}
+
+export interface PresentedRemoteTranscript {
+  readonly feed: ReadonlyArray<ThreadFeedEntry>;
+  readonly workDisclosures: ReadonlyArray<RemoteWorkDisclosurePresentation>;
+}
+
+export function presentRemoteTranscript(
+  transcript: ReadonlyArray<RemoteTimelineItem>,
+  _sessionRunning: boolean,
   fallbackDate: string,
-): ThreadFeedEntry[] {
-  if (!snapshot) return [];
+): PresentedRemoteTranscript {
   const feed: ThreadFeedEntry[] = [];
-  for (const item of snapshot.transcript) {
-    const createdAt = safeDate(item.createdAt, fallbackDate);
-    if (item.kind === "tool" || item.kind === "background") {
-      const activity = timelineActivity({ ...item, createdAt });
-      feed.push({
-        type: "activity-group",
-        id: `activity:${item.id}`,
-        createdAt,
-        turnId: null,
-        activities: [activity],
-      });
+  const workDisclosures: RemoteWorkDisclosurePresentation[] = [];
+  const entryIdByTimelineItemId = new Map<string, string>();
+  const disclosureMarkers: Array<
+    Extract<RemoteTimelineItem, { kind: "system" }> & {
+      workDisclosure: NonNullable<
+        Extract<RemoteTimelineItem, { kind: "system" }>["workDisclosure"]
+      >;
+    }
+  > = [];
+
+  for (const item of transcript) {
+    if (
+      item.kind === "system" &&
+      item.workDisclosure &&
+      !shouldShowWorkedDisclosure(item.workDisclosure.durationMs)
+    ) {
       continue;
     }
-    const role = item.kind === "user" ? "user" : "assistant";
-    const text = itemText(item);
-    if (!text) continue;
-    const id = MessageId.make(`remote:${item.id}`);
-    feed.push({
-      type: "message",
-      id,
-      createdAt,
-      message: {
-        id,
-        role,
-        text,
-        attachments: [],
-        turnId: null,
-        streaming: role === "assistant" && item.status === "running",
-        createdAt,
-        updatedAt: createdAt,
-      },
+    const entry = timelineFeedEntry(item, fallbackDate);
+    if (!entry) continue;
+    feed.push(entry);
+    entryIdByTimelineItemId.set(item.id, String(entry.id));
+    if (item.kind === "system" && item.workDisclosure) {
+      disclosureMarkers.push(item as (typeof disclosureMarkers)[number]);
+    }
+  }
+
+  for (const marker of disclosureMarkers) {
+    const markerMessageId = entryIdByTimelineItemId.get(marker.id);
+    if (!markerMessageId) continue;
+    const finalResponseMessageId = marker.workDisclosure.finalResponseItemId
+      ? entryIdByTimelineItemId.get(marker.workDisclosure.finalResponseItemId)
+      : undefined;
+    const workEntryIds = marker.workDisclosure.workItemIds.flatMap((id) => {
+      const entryId = entryIdByTimelineItemId.get(id);
+      return entryId && entryId !== markerMessageId && entryId !== finalResponseMessageId
+        ? [entryId]
+        : [];
+    });
+    if (finalResponseMessageId) {
+      const markerIndex = feed.findIndex((entry) => String(entry.id) === markerMessageId);
+      if (markerIndex >= 0) {
+        const [markerEntry] = feed.splice(markerIndex, 1);
+        const finalResponseIndex = feed.findIndex(
+          (entry) => String(entry.id) === finalResponseMessageId,
+        );
+        if (markerEntry) {
+          feed.splice(finalResponseIndex >= 0 ? finalResponseIndex : feed.length, 0, markerEntry);
+        }
+      }
+    }
+    workDisclosures.push({
+      markerMessageId,
+      label: formatWorkedDisclosureLabel(marker.workDisclosure.durationMs),
+      durationMs: marker.workDisclosure.durationMs,
+      hiddenEntryIds: new Set(workEntryIds),
     });
   }
-  if (snapshot.status === "running") {
-    feed.push({ type: "working", id: "remote:working", createdAt: fallbackDate });
+  return { feed, workDisclosures };
+}
+
+export function assistantResponseMessageIds(
+  transcript: ReadonlyArray<RemoteTimelineItem>,
+  sessionRunning: boolean,
+): ReadonlySet<string> {
+  const result = new Set<string>();
+  let sawUser = false;
+  let candidateId: string | null = null;
+  let candidateRunning = false;
+
+  const settleCandidate = () => {
+    if (candidateId && !candidateRunning) {
+      result.add(String(MessageId.make(`remote:${candidateId}`)));
+    }
+    candidateId = null;
+    candidateRunning = false;
+  };
+
+  for (const item of transcript) {
+    if (item.kind === "user") {
+      settleCandidate();
+      sawUser = true;
+      continue;
+    }
+    if (sawUser && item.kind === "assistant") {
+      candidateId = item.id;
+      candidateRunning = item.status === "running";
+    }
   }
-  return feed;
+
+  if (!sessionRunning) settleCandidate();
+  return result;
 }
 
 function modelSelection(snapshot: RemoteSessionSnapshot | null): ModelSelection {
@@ -219,7 +318,7 @@ export function buildServerConfig(snapshot: RemoteSessionSnapshot | null): Serve
             : (model.reasoningEffort?.options ?? []);
           return {
             slug: model.id,
-            name: model.label,
+            name: compactRemoteModelLabel(model.label),
             isDefault: isCurrent,
             isLegacy: false,
             capabilities:
@@ -254,6 +353,8 @@ export interface RemotePresentation {
   readonly project: EnvironmentProject;
   readonly thread: EnvironmentThreadShell;
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
+  readonly assistantResponseMessageIds: ReadonlySet<string>;
+  readonly workDisclosures: ReadonlyArray<RemoteWorkDisclosurePresentation>;
   readonly serverConfig: ServerConfig | null;
   readonly activeWorkStartedAt: string | null;
 }
@@ -273,7 +374,11 @@ export function presentRemoteSession(session: ForgeSessionView): RemotePresentat
   const pending = snapshot?.activeInteractions.filter(
     (interaction) => interaction.status === undefined || interaction.status === "pending",
   );
-  const title = snapshot?.title ?? session.pairing.metadata.title ?? "Forge session";
+  const title =
+    session.pairing.metadata.customTitle ??
+    snapshot?.title ??
+    session.pairing.metadata.title ??
+    "Forge session";
   const project: EnvironmentProject = {
     environmentId,
     id: projectId,
@@ -288,6 +393,11 @@ export function presentRemoteSession(session: ForgeSessionView): RemotePresentat
     updatedAt,
   };
   const status = sessionStatus(snapshot);
+  const transcriptPresentation = presentRemoteTranscript(
+    snapshot?.transcript ?? [],
+    snapshot?.status === "running",
+    updatedAt || now,
+  );
   const thread: EnvironmentThreadShell = {
     environmentId,
     id: threadId,
@@ -311,13 +421,13 @@ export function presentRemoteSession(session: ForgeSessionView): RemotePresentat
         : null,
     createdAt,
     updatedAt,
-    archivedAt: null,
+    archivedAt: session.pairing.metadata.archivedAt ?? null,
     settledOverride: null,
     settledAt: null,
     snoozedUntil: null,
     snoozedAt: null,
-    pinnedAt: null,
-    pinOrderKey: null,
+    pinnedAt: session.pairing.metadata.pinnedAt ?? null,
+    pinOrderKey: session.pairing.metadata.pinOrderKey ?? null,
     titleRegeneration: null,
     session: {
       threadId,
@@ -345,9 +455,17 @@ export function presentRemoteSession(session: ForgeSessionView): RemotePresentat
     environmentId,
     project,
     thread,
-    feed: buildFeed(snapshot, updatedAt || now),
+    feed: transcriptPresentation.feed,
+    assistantResponseMessageIds: assistantResponseMessageIds(
+      snapshot?.transcript ?? [],
+      snapshot?.status === "running",
+    ),
+    workDisclosures: transcriptPresentation.workDisclosures,
     serverConfig: buildServerConfig(snapshot),
-    activeWorkStartedAt: snapshot?.status === "running" ? updatedAt : null,
+    // The v1 snapshot has no authoritative turn-start timestamp. The composer
+    // already communicates live work with its Stop control, so do not invent a
+    // timer from the most recently updated transcript item.
+    activeWorkStartedAt: null,
   };
 }
 

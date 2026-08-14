@@ -21,8 +21,9 @@ const config: ExpoConfig = {
   android: {
     package: "com.exaforge.forge.dev",
     adaptiveIcon: {
-      foregroundImage: "./assets/forge/icon.png",
-      backgroundColor: "#000000",
+      foregroundImage: "./assets/forge/adaptive-icon-foreground.png",
+      monochromeImage: "./assets/forge/adaptive-icon-monochrome.png",
+      backgroundColor: "#000007",
     },
     predictiveBackGestureEnabled: true,
   },
@@ -71,12 +72,12 @@ const config: ExpoConfig = {
     [
       "expo-splash-screen",
       {
-        image: "./assets/forge/icon.png",
+        image: "./assets/forge/mark.png",
         resizeMode: "contain",
         backgroundColor: "#000000",
         imageWidth: 180,
         dark: {
-          image: "./assets/forge/icon.png",
+          image: "./assets/forge/mark.png",
           backgroundColor: "#000000",
         },
       },

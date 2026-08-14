@@ -58,9 +58,9 @@ The task tool remains the runtime source of truth for available agents, harnesse
 
 ### Evolving preferences through memory
 
-When memory is enabled, Forge gives the existing LLM-based memory pipeline one additional instruction: retain durable evidence about which models, harnesses, and subagent setups work best for this user for different task types. It considers explicit direction and corrections, repeated choices, the target used, outcome quality, and the user's reactions or feedback. This is semantic interpretation, not keyword matching.
+When memory is enabled, Forge gives the existing LLM-based memory pipeline one additional instruction: retain explicitly stated current projects and near-term goals, durable user preferences and corrections, stable workflow facts, and clear or repeated evidence about which models, harnesses, and subagent setups work best for different task types. This is semantic interpretation, not keyword matching.
 
-Explicit user direction outweighs inference. Implicit conclusions require clear or repeated evidence, while ambiguous one-off results are not treated as firm preferences. Useful user wording may be preserved as a short attributed quotation. The result remains concise ordinary Markdown; Forge adds no separate calls, timers, database, scores, or schema, and does not change when the normal memory lifecycle runs.
+Explicit user direction outweighs inference. Forge replaces stale current-work context when direction changes, consolidates contradictory guidance, and excludes step-by-step task progress, temporary execution plans, logs, completed-work narration, unresolved failures, and ambiguous one-off results. The result remains concise ordinary Markdown; Forge adds no separate calls, timers, database, scores, schema, or memory lifecycle.
 
 Current user instructions always take precedence over recalled preferences.
 

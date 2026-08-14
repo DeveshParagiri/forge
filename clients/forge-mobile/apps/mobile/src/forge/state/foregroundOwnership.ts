@@ -9,10 +9,15 @@ export function isForgeAppForeground(state: AppStateStatus): boolean {
   return state === "active";
 }
 
-export function syncForegroundOwnership(
-  sockets: Iterable<ForegroundOwnedRemoteSocket>,
+/** Only the pairing whose screen is selected may own its gateway. */
+export function syncSelectedForegroundOwnership(
+  sockets: Iterable<readonly [string, ForegroundOwnedRemoteSocket]>,
+  selectedPairingId: string | null,
   state: AppStateStatus,
 ): void {
-  const action = isForgeAppForeground(state) ? "resume" : "suspend";
-  for (const socket of sockets) socket[action]();
+  const foreground = isForgeAppForeground(state);
+  for (const [pairingId, socket] of sockets) {
+    if (foreground && pairingId === selectedPairingId) socket.resume();
+    else socket.suspend();
+  }
 }

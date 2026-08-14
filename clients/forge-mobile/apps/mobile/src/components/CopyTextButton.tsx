@@ -1,4 +1,4 @@
-import { SymbolView } from "../components/AppSymbol";
+import { type AppSymbolName, SymbolView } from "../components/AppSymbol";
 import { memo, useEffect, useRef, useState } from "react";
 import { Pressable, type ColorValue } from "react-native";
 
@@ -13,8 +13,10 @@ export const CopyTextButton = memo(function CopyTextButton(props: {
   readonly copiedTintColor?: ColorValue;
   readonly backgroundColor?: ColorValue;
   readonly borderColor?: ColorValue;
+  readonly copyIconName?: AppSymbolName;
   readonly iconSize?: number;
   readonly buttonSize?: number;
+  readonly hitSlop?: number;
 }) {
   const [copied, setCopied] = useState(false);
   const resetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -33,7 +35,7 @@ export const CopyTextButton = memo(function CopyTextButton(props: {
       accessibilityRole="button"
       accessibilityLabel={copied ? "Copied" : props.accessibilityLabel}
       disabled={props.text.length === 0}
-      hitSlop={8}
+      hitSlop={props.hitSlop ?? 8}
       onPress={() => {
         copyTextWithHaptic(props.text);
         setCopied(true);
@@ -61,7 +63,7 @@ export const CopyTextButton = memo(function CopyTextButton(props: {
         name={
           copied
             ? { ios: "checkmark", android: "check" }
-            : { ios: "doc.on.doc", android: "content_copy" }
+            : (props.copyIconName ?? { ios: "doc.on.doc", android: "content_copy" })
         }
         size={props.iconSize ?? 13}
         tintColor={copied ? (props.copiedTintColor ?? props.tintColor) : props.tintColor}

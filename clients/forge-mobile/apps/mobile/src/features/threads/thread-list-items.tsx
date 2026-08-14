@@ -6,8 +6,15 @@ import type {
 import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
 import type { MenuAction } from "@react-native-menu/menu";
 import { SymbolView } from "../../components/AppSymbol";
-import { memo, useCallback, useMemo, type ComponentProps } from "react";
-import { Pressable, useColorScheme, useWindowDimensions, View } from "react-native";
+import { memo, useCallback, useEffect, useMemo, useRef, type ComponentProps } from "react";
+import {
+  Animated,
+  type ColorValue,
+  Pressable,
+  useColorScheme,
+  useWindowDimensions,
+  View,
+} from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import Svg, { Circle, Path } from "react-native-svg";
 
@@ -76,6 +83,53 @@ function PullRequestIcon(props: { readonly size: number; readonly color: string 
 
 /* ─── Project group header ───────────────────────────────────────────── */
 
+const DisclosureChevron = memo(function DisclosureChevron(props: {
+  readonly collapsed: boolean;
+  readonly reduceMotionEnabled: boolean;
+  readonly tintColor: ColorValue;
+}) {
+  const progress = useRef(new Animated.Value(props.collapsed ? 0 : 1)).current;
+
+  useEffect(() => {
+    const target = props.collapsed ? 0 : 1;
+    progress.stopAnimation();
+    if (props.reduceMotionEnabled) {
+      progress.setValue(target);
+      return;
+    }
+    const animation = Animated.timing(progress, {
+      duration: 180,
+      toValue: target,
+      useNativeDriver: true,
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [progress, props.collapsed, props.reduceMotionEnabled]);
+
+  return (
+    <Animated.View
+      style={{
+        transform: [
+          {
+            rotate: progress.interpolate({
+              inputRange: [0, 1],
+              outputRange: ["-90deg", "0deg"],
+            }),
+          },
+        ],
+      }}
+    >
+      <SymbolView
+        name="chevron.down"
+        size={11}
+        tintColor={props.tintColor}
+        type="monochrome"
+        weight="semibold"
+      />
+    </Animated.View>
+  );
+});
+
 export const ThreadListGroupHeader = memo(function ThreadListGroupHeader(props: {
   readonly variant: ThreadListVariant;
   readonly project: EnvironmentProject;
@@ -85,8 +139,17 @@ export const ThreadListGroupHeader = memo(function ThreadListGroupHeader(props: 
   readonly isFirst: boolean;
   readonly groupKey: string;
   readonly onGroupAction: (key: string, action: HomeGroupDisplayAction) => void;
+  /** Forge Remote exposes an explicit directory disclosure indicator. */
+  readonly showCollapseChevron?: boolean;
+  /** Disables the disclosure transition when the OS Reduce Motion setting is on. */
+  readonly reduceMotionEnabled?: boolean;
   /** Project a quick new thread should target; null hides the button. */
   readonly newThreadTarget?: EnvironmentProject | null;
+  readonly newThreadAction?: {
+    readonly accessibilityLabel: string;
+    readonly disabled: boolean;
+    readonly systemImage: "plus" | "square.and.pencil";
+  };
   readonly onNewThread?: (project: EnvironmentProject) => void;
 }) {
   const iconMutedColor = useThemeColor("--color-icon-muted");
@@ -103,6 +166,10 @@ export const ThreadListGroupHeader = memo(function ThreadListGroupHeader(props: 
     }
   }, [newThreadTarget, onNewThread]);
   const showNewThreadButton = onNewThread !== undefined && newThreadTarget !== null;
+  const newThreadAccessibilityLabel =
+    props.newThreadAction?.accessibilityLabel ?? `Create new thread in ${props.title}`;
+  const newThreadDisabled = props.newThreadAction?.disabled ?? false;
+  const newThreadSystemImage = props.newThreadAction?.systemImage ?? "plus";
 
   // The new-thread button is a SIBLING of the collapse toggle, not a child:
   // nested touchables are unreachable to VoiceOver/TalkBack (the parent
@@ -116,7 +183,7 @@ export const ThreadListGroupHeader = memo(function ThreadListGroupHeader(props: 
       style={{
         minHeight: compact ? 44 : 36,
         paddingLeft: compact ? 20 : 12,
-        // Compact right padding centers the 20pt plus glyph on the thread
+        // Compact right padding centers the 20pt action glyph on the thread
         // rows' trailing chevron column (18 + 13/2 ≈ 24.5 from the edge).
         paddingRight: compact ? 14 : 12,
         paddingBottom: compact ? 12 : 8,
@@ -152,6 +219,13 @@ export const ThreadListGroupHeader = memo(function ThreadListGroupHeader(props: 
         >
           {props.title}
         </Text>
+        {props.showCollapseChevron ? (
+          <DisclosureChevron
+            collapsed={props.collapsed}
+            reduceMotionEnabled={props.reduceMotionEnabled ?? false}
+            tintColor={iconMutedColor}
+          />
+        ) : null}
         <Text
           className={
             compact
@@ -164,14 +238,18 @@ export const ThreadListGroupHeader = memo(function ThreadListGroupHeader(props: 
       </Pressable>
       {showNewThreadButton ? (
         <Pressable
-          accessibilityLabel={`Create new thread in ${props.title}`}
+          accessibilityLabel={newThreadAccessibilityLabel}
           accessibilityRole="button"
+          disabled={newThreadDisabled}
           hitSlop={{ ...verticalHitSlop, left: 10, right: 14 }}
           onPress={handleNewThread}
-          style={({ pressed }) => ({ opacity: pressed ? 0.5 : 1, paddingLeft: 12 })}
+          style={({ pressed }) => ({
+            opacity: newThreadDisabled ? 0.4 : pressed ? 0.5 : 1,
+            paddingLeft: 12,
+          })}
         >
           <SymbolView
-            name="plus"
+            name={newThreadSystemImage}
             size={compact ? 20 : 16}
             tintColor={iconMutedColor}
             type="monochrome"
@@ -433,6 +511,11 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
   readonly onDeleteThread: (thread: EnvironmentThreadShell) => void;
   readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => void;
+  readonly onRenameThread?: (thread: EnvironmentThreadShell) => void;
+  readonly onPinThread?: (thread: EnvironmentThreadShell) => void;
+  readonly onUnpinThread?: (thread: EnvironmentThreadShell) => void;
+  readonly pinned?: boolean;
+  readonly remoteOnly?: boolean;
   readonly titleRegenerationSupported: boolean;
   readonly onSwipeableWillOpen: (methods: SwipeableMethods) => void;
   readonly onSwipeableClose: (methods: SwipeableMethods) => void;
@@ -480,6 +563,15 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
     () => onRegenerateThreadTitle(thread),
     [onRegenerateThreadTitle, thread],
   );
+  const handleRename = useCallback(
+    () => props.onRenameThread?.(thread),
+    [props.onRenameThread, thread],
+  );
+  const handlePin = useCallback(() => props.onPinThread?.(thread), [props.onPinThread, thread]);
+  const handleUnpin = useCallback(
+    () => props.onUnpinThread?.(thread),
+    [props.onUnpinThread, thread],
+  );
   const menuActions = useMemo<MenuAction[]>(
     () => [
       THREAD_ROW_MENU_ACTIONS[0]!,
@@ -490,6 +582,23 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
       THREAD_ROW_MENU_ACTIONS[1]!,
     ],
     [props.titleRegenerationSupported, thread.titleRegeneration],
+  );
+  const remoteMenuActions = useMemo<MenuAction[]>(
+    () => [
+      props.pinned
+        ? { id: "unpin", title: "Unpin", image: "pin.slash" }
+        : { id: "pin", title: "Pin", image: "pin" },
+      ...(props.onRenameThread
+        ? [{ id: "rename", title: "Rename", image: "square.and.pencil" } satisfies MenuAction]
+        : []),
+      {
+        id: "archive",
+        title: "Archive",
+        image: "archivebox",
+        attributes: { destructive: true },
+      },
+    ],
+    [props.onRenameThread, props.pinned],
   );
   const primaryAction = useMemo(
     () => ({
@@ -503,10 +612,13 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
       if (nativeEvent.event === "archive") handleArchive();
+      if (nativeEvent.event === "pin") handlePin();
+      if (nativeEvent.event === "unpin") handleUnpin();
+      if (nativeEvent.event === "rename") handleRename();
       if (nativeEvent.event === "regenerate-title") handleRegenerateTitle();
       if (nativeEvent.event === "delete") handleDelete();
     },
-    [handleArchive, handleDelete, handleRegenerateTitle],
+    [handleArchive, handleDelete, handlePin, handleRegenerateTitle, handleRename, handleUnpin],
   );
 
   const statusPill = effectiveStatus ? (
@@ -556,7 +668,11 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   const rowContent = (close: () => void) =>
     compact ? (
       <Pressable
-        accessibilityHint="Swipe left for archive and delete actions"
+        accessibilityHint={
+          props.remoteOnly
+            ? "Opens the session. Long press for session actions."
+            : "Swipe left for archive and delete actions"
+        }
         accessibilityLabel={threadAccessibilityLabel}
         accessibilityRole="button"
         className="bg-screen"
@@ -668,6 +784,19 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
         </View>
       </Pressable>
     );
+
+  if (props.remoteOnly) {
+    return (
+      <ControlPillMenu
+        actions={remoteMenuActions}
+        onPressAction={handleMenuAction}
+        shouldOpenOnLongPress
+        title={thread.title}
+      >
+        {rowContent(() => undefined)}
+      </ControlPillMenu>
+    );
+  }
 
   return (
     <ThreadSwipeable

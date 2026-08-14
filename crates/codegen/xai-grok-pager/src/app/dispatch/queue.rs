@@ -1347,11 +1347,13 @@ mod tests {
                     session_id,
                     id,
                     new_text,
+                    expected_version,
                 },
             ] => {
                 assert_eq!(session_id.0.as_ref(), "test-session");
                 assert_eq!(id, "p1");
                 assert_eq!(new_text, "new body");
+                assert_eq!(*expected_version, None);
             }
             other => panic!("expected QueueEdit, got {other:?}"),
         }

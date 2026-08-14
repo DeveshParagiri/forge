@@ -55,6 +55,11 @@ pub struct ModelState {
     /// Session-scoped fast mode. This is reset whenever the active model lacks
     /// the corresponding ACP capability metadata.
     pub fast_mode: bool,
+    /// Monotonic request id for the in-flight session-only Fast Mode mutation.
+    /// The id lets completion handlers ignore replies that outlive a reconnect
+    /// or model change without putting any pager-local identity on the wire.
+    fast_mode_pending: Option<u64>,
+    next_fast_mode_request_id: u64,
     /// External override for the context window size (tokens).
     /// When set, `get_context_window()` returns this instead of
     /// reading from the current model's metadata. Used for subagent
@@ -165,6 +170,7 @@ impl ModelState {
         // not this session's choice; only re-derive when the model changed so a
         // catalog refresh can't clobber a user-set effort.
         if self.current != previous_current_model {
+            self.cancel_fast_mode_change();
             self.reasoning_effort = self
                 .current
                 .as_ref()
@@ -182,6 +188,7 @@ impl ModelState {
         model_id: acp::ModelId,
         effort_override: Option<ReasoningEffort>,
     ) {
+        self.cancel_fast_mode_change();
         self.current = Some(model_id.clone());
         self.reasoning_effort = effort_override.or_else(|| {
             self.available
@@ -189,6 +196,32 @@ impl ModelState {
                 .and_then(|info| parse_reasoning_effort_meta(info.meta.as_ref()))
         });
         crate::forge::fast_mode::reconcile(self);
+    }
+
+    pub(crate) fn fast_mode_pending(&self) -> bool {
+        self.fast_mode_pending.is_some()
+    }
+
+    pub(crate) fn begin_fast_mode_change(&mut self) -> Option<u64> {
+        if self.fast_mode_pending.is_some() {
+            return None;
+        }
+        self.next_fast_mode_request_id = self.next_fast_mode_request_id.wrapping_add(1).max(1);
+        let request_id = self.next_fast_mode_request_id;
+        self.fast_mode_pending = Some(request_id);
+        Some(request_id)
+    }
+
+    pub(crate) fn finish_fast_mode_change(&mut self, request_id: u64) -> bool {
+        if self.fast_mode_pending != Some(request_id) {
+            return false;
+        }
+        self.fast_mode_pending = None;
+        true
+    }
+
+    pub(crate) fn cancel_fast_mode_change(&mut self) {
+        self.fast_mode_pending = None;
     }
 
     /// The reasoning-effort menu for the current model. Gate-first: an unset or
@@ -336,6 +369,8 @@ impl From<Option<acp::SessionModelState>> for ModelState {
                     current: current_model,
                     reasoning_effort,
                     fast_mode: false,
+                    fast_mode_pending: None,
+                    next_fast_mode_request_id: 0,
                     context_window_override: None,
                 }
             })

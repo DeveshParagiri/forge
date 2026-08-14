@@ -28,11 +28,13 @@ function message(overrides: Record<string, unknown> = {}) {
         prompt: true,
         cancel: true,
         setModel: true,
+        fastMode: true,
         reasoning: true,
         btw: true,
         usage: true,
         resolveInteractions: true,
       },
+      fastMode: { supported: true, enabled: true, pending: false },
       usage: {
         status: "partial",
         refreshedAt: "2026-08-12T21:30:00Z",
@@ -95,6 +97,57 @@ function message(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Forge native protocol usage", () => {
+  it("decodes additive typed work-disclosure metadata without requiring it on old items", () => {
+    const decoded = decodeServerMessage(
+      message({
+        transcript: [
+          { id: "old-system", kind: "system", text: "Recap" },
+          {
+            id: "turn-complete",
+            kind: "system",
+            text: "Worked for 3m41s",
+            workDisclosure: {
+              durationMs: 221_000,
+              finalResponseItemId: "answer",
+              workItemIds: ["reasoning", "tool"],
+            },
+          },
+        ],
+      }),
+    );
+    expect(decoded.type).toBe("snapshot");
+    if (decoded.type !== "snapshot") throw new Error("Expected snapshot");
+    expect(decoded.session.transcript[0]).not.toHaveProperty("workDisclosure");
+    expect(decoded.session.transcript[1]).toMatchObject({
+      workDisclosure: {
+        durationMs: 221_000,
+        finalResponseItemId: "answer",
+        workItemIds: ["reasoning", "tool"],
+      },
+    });
+  });
+
+  it("rejects malformed work-disclosure metadata", () => {
+    expect(() =>
+      decodeServerMessage(
+        message({
+          transcript: [
+            {
+              id: "turn-complete",
+              kind: "system",
+              text: "Worked",
+              workDisclosure: {
+                durationMs: 120_000,
+                finalResponseItemId: "answer",
+                workItemIds: ["reasoning", 4],
+              },
+            },
+          ],
+        }),
+      ),
+    ).toThrow(ProtocolDecodeError);
+  });
+
   it("decodes usage and target-model reasoning metadata without losing partial state", () => {
     const decoded = decodeServerMessage(message());
     expect(decoded.type).toBe("snapshot");
@@ -104,6 +157,8 @@ describe("Forge native protocol usage", () => {
       label: "High",
       description: "More reasoning",
     });
+    expect(decoded.session.capabilities.fastMode).toBe(true);
+    expect(decoded.session.fastMode).toEqual({ supported: true, enabled: true, pending: false });
     expect(decoded.session.usage?.status).toBe("partial");
     expect(decoded.session.usage?.session?.models?.[0]?.costUsdTicks).toBe("123400000");
     expect(decoded.session.usage?.account?.windows[0]?.resetLabel).toBe("tomorrow");
@@ -121,6 +176,87 @@ describe("Forge native protocol usage", () => {
     };
     const decoded = decodeServerMessage(message({ capabilities, usage: undefined }));
     expect(decoded.type === "snapshot" && decoded.session.capabilities.usage).toBe(false);
+    expect(decoded.type === "snapshot" && decoded.session.capabilities.fastMode).toBe(false);
+    expect(decoded.type === "snapshot" && decoded.session.capabilities.queueControl).toBe(false);
+    expect(decoded.type === "snapshot" && decoded.session.capabilities.newSession).toBe(false);
+  });
+
+  it("decodes authoritative shared queue controls and safely normalizes old queue rows", () => {
+    const decoded = decodeServerMessage(
+      message({
+        capabilities: {
+          prompt: true,
+          cancel: true,
+          setModel: true,
+          fastMode: true,
+          reasoning: true,
+          btw: true,
+          usage: true,
+          resolveInteractions: true,
+          queueControl: true,
+          newSession: true,
+        },
+        queue: [
+          { id: "old", text: "Old client row" },
+          {
+            id: "shared",
+            text: "Ship it",
+            position: 2,
+            source: "shared",
+            version: 7,
+            kind: "prompt",
+            actions: { edit: true, steer: false, cancel: true },
+          },
+        ],
+      }),
+    );
+    if (decoded.type !== "snapshot") throw new Error("Expected snapshot");
+    expect(decoded.session.capabilities).toMatchObject({ queueControl: true, newSession: true });
+    expect(decoded.session.queue).toEqual([
+      {
+        id: "old",
+        text: "Old client row",
+        source: "local",
+        actions: { edit: false, steer: false, cancel: false },
+      },
+      {
+        id: "shared",
+        text: "Ship it",
+        position: 2,
+        source: "shared",
+        version: 7,
+        kind: "prompt",
+        actions: { edit: true, steer: false, cancel: true },
+      },
+    ]);
+  });
+
+  it("decodes the distinct session-created command success", () => {
+    expect(
+      decodeServerMessage(
+        JSON.stringify({
+          type: "sessionCreated",
+          protocolVersion: 1,
+          commandId: "new-session-1",
+          sessionId: "session-2",
+          pairingUrl: `https://forge.example/forge/${"b".repeat(64)}/`,
+          expiresAt: "2026-08-14T00:00:00Z",
+        }),
+      ),
+    ).toEqual({
+      type: "sessionCreated",
+      protocolVersion: 1,
+      commandId: "new-session-1",
+      sessionId: "session-2",
+      pairingUrl: `https://forge.example/forge/${"b".repeat(64)}/`,
+      expiresAt: "2026-08-14T00:00:00Z",
+    });
+  });
+
+  it("rejects malformed authoritative Fast Mode state", () => {
+    expect(() =>
+      decodeServerMessage(message({ fastMode: { supported: true, enabled: "yes" } })),
+    ).toThrow(ProtocolDecodeError);
   });
 
   it("rejects untrustworthy cost tick encodings", () => {

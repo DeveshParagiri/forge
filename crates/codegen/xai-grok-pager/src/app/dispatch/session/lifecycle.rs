@@ -351,7 +351,39 @@ pub(in crate::app::dispatch) fn dispatch_new_session_inner_with_id(
     app: &mut AppView,
     model_id: Option<acp::ModelId>,
 ) -> (AgentId, Vec<Effect>) {
-    let (previous_session_id, effective_cwd, inherit_worktree) = match get_active_agent(app) {
+    dispatch_new_session_inner_for_agent(app, model_id, None)
+}
+
+/// Start a normal, non-worktree session in the exact directory owned by a
+/// remotely bound agent. The remote client never supplies a path; deriving it
+/// from pager-owned state preserves the same cwd trust boundary as `/new`.
+pub(crate) fn dispatch_remote_new_session(
+    app: &mut AppView,
+    source_agent_id: AgentId,
+) -> Result<(AgentId, Vec<Effect>), String> {
+    let source = app
+        .agents
+        .get(&source_agent_id)
+        .ok_or_else(|| "The armed Forge session is no longer available.".to_string())?;
+    if source.session.session_id.is_none() {
+        return Err("The armed Forge session is still starting.".into());
+    }
+    Ok(dispatch_new_session_inner_for_agent(
+        app,
+        None,
+        Some(source_agent_id),
+    ))
+}
+
+fn dispatch_new_session_inner_for_agent(
+    app: &mut AppView,
+    model_id: Option<acp::ModelId>,
+    source_agent_id: Option<AgentId>,
+) -> (AgentId, Vec<Effect>) {
+    let source_agent = source_agent_id
+        .and_then(|id| app.agents.get(&id))
+        .or_else(|| get_active_agent(app));
+    let (previous_session_id, effective_cwd, inherit_worktree) = match source_agent {
         Some(a) => (
             a.session.session_id.clone(),
             a.session.cwd.clone(),
@@ -359,7 +391,14 @@ pub(in crate::app::dispatch) fn dispatch_new_session_inner_with_id(
         ),
         None => (None, app.cwd.clone(), false),
     };
-    let mut effects = unregister_session_effect(previous_session_id);
+    let mut effects = if source_agent_id.is_some() {
+        // A phone-created session is a sibling, not a replacement. Keep the
+        // source session registered and its bearer usable until explicitly
+        // stopped or expired.
+        Vec::new()
+    } else {
+        unregister_session_effect(previous_session_id)
+    };
     reseed_tip_for_new_session(app);
     let agent_id = AgentId(app.next_agent_id);
     app.next_agent_id += 1;
@@ -1009,10 +1048,13 @@ pub(in crate::app::dispatch) fn dispatch_new_session_with_id(
 }
 /// Tear down a placeholder agent that must not proceed under sticky `--chat`
 /// (local Build refuse). Never leave a half-loaded slot with a bound session id.
-pub(in crate::app::dispatch) fn refuse_chat_mode_build_agent(app: &mut AppView, agent_id: AgentId) {
+pub(in crate::app::dispatch) fn refuse_chat_mode_build_agent(
+    app: &mut AppView,
+    agent_id: AgentId,
+) -> Vec<Effect> {
     app.show_toast(crate::app::session_startup::CHAT_MODE_LOCAL_BUILD_REFUSAL);
     let fallback = app.agents.keys().copied().find(|id| *id != agent_id);
-    remove_agent_and_cleanup(app, agent_id);
+    let effects = remove_agent_and_cleanup(app, agent_id);
     if let Some(target) = fallback {
         switch_to_agent(app, target, SwitchCause::Picker);
     } else {
@@ -1032,6 +1074,7 @@ pub(in crate::app::dispatch) fn refuse_chat_mode_build_agent(app: &mut AppView, 
             });
         }
     }
+    effects
 }
 pub(in crate::app::dispatch) fn handle_session_created(
     app: &mut AppView,
@@ -1060,6 +1103,7 @@ pub(in crate::app::dispatch) fn handle_session_created(
             )));
         }
         agent.bind_session_id(session_id);
+        let session_binding_epoch = agent.session_binding_epoch;
         agent.scheduler_background_loops = scheduler_background_loops;
         if let Some(m) = new_models {
             app.models = Some(m).into();
@@ -1135,9 +1179,28 @@ pub(in crate::app::dispatch) fn handle_session_created(
             ));
         }
         effects.push(Effect::RegisterActiveSession {
-            session_id: session_id_clone,
+            session_id: session_id_clone.clone(),
             cwd: agent.session.cwd.display().to_string(),
         });
+        if let Some(pending) = crate::forge::remote_bridge::take_pending_new_session(agent_id) {
+            effects.push(Effect::CompleteForgeRemoteNewSession {
+                source_binding_generation: pending.source_binding_generation,
+                source_gateway_generation: pending.source_gateway_generation,
+                source_client_generation: pending.source_client_generation,
+                source_session_id: pending.source_session_id,
+                command_id: pending.command_id,
+                completion: crate::app::actions::ForgeRemoteNewSessionCompletion::Created {
+                    agent_id,
+                    session_id: session_id_clone,
+                    session_binding_epoch,
+                },
+                initial_snapshot: crate::forge::remote_state::project_session(
+                    agent,
+                    &mut std::collections::HashMap::new(),
+                )
+                .and_then(|snapshot| serde_json::to_value(snapshot).ok()),
+            });
+        }
         notify_session_ready(&app.notification_service, agent);
         note_peek_page_flip(app, agent_id, drain.page_flip_entry);
         return effects;
@@ -1290,6 +1353,7 @@ pub(in crate::app::dispatch) fn handle_session_failed(
     agent_id: AgentId,
     error: String,
 ) -> Vec<Effect> {
+    let pending_remote = crate::forge::remote_bridge::take_pending_new_session(agent_id);
     tracing::error!(agent = ?agent_id, error = %error, "Session creation failed");
     let msg = format!("Session creation failed: {error}");
     let is_orphan = app
@@ -1299,7 +1363,7 @@ pub(in crate::app::dispatch) fn handle_session_failed(
     if is_orphan {
         let failed_was_active = matches!(app.active_view, ActiveView::Agent(id) if id == agent_id);
         let fallback = app.agents.keys().copied().find(|id| *id != agent_id);
-        remove_agent_and_cleanup(app, agent_id);
+        let _ = remove_agent_and_cleanup(app, agent_id);
         if let Some(target) = fallback {
             if failed_was_active {
                 switch_to_agent(app, target, SwitchCause::Picker);
@@ -1338,7 +1402,18 @@ pub(in crate::app::dispatch) fn handle_session_failed(
                 elapsed,
             }));
     }
-    vec![]
+    pending_remote
+        .map(|pending| Effect::CompleteForgeRemoteNewSession {
+            source_binding_generation: pending.source_binding_generation,
+            source_gateway_generation: pending.source_gateway_generation,
+            source_client_generation: pending.source_client_generation,
+            source_session_id: pending.source_session_id,
+            command_id: pending.command_id,
+            completion: crate::app::actions::ForgeRemoteNewSessionCompletion::Failed { error: msg },
+            initial_snapshot: None,
+        })
+        .into_iter()
+        .collect()
 }
 pub(in crate::app::dispatch) fn handle_worktree_session_failed(
     app: &mut AppView,
@@ -1352,7 +1427,7 @@ pub(in crate::app::dispatch) fn handle_worktree_session_failed(
         .is_some_and(|a| a.session.session_id.is_none() && a.session.forked_from.is_none());
     if is_orphan {
         let fallback = app.agents.keys().copied().find(|id| *id != agent_id);
-        remove_agent_and_cleanup(app, agent_id);
+        let _ = remove_agent_and_cleanup(app, agent_id);
         if let Some(target) = fallback {
             switch_to_agent(app, target, SwitchCause::Picker);
             restore_dashboard_attach_after_orphan_remove(app, agent_id, Some(target));

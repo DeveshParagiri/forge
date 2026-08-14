@@ -52,11 +52,13 @@ function session(overrides: Partial<RemoteSessionSnapshot> = {}): RemoteSessionS
     status: "idle",
     transcript: [],
     availableModels: [{ id: "gpt-5", label: "GPT-5" }],
+    fastMode: { supported: true, enabled: false },
     activeInteractions: [],
     capabilities: {
       prompt: true,
       cancel: true,
       setModel: true,
+      fastMode: true,
       reasoning: true,
       btw: true,
       usage: true,
@@ -178,7 +180,7 @@ describe("Forge native remote socket", () => {
 
   it("uses hello before the first snapshot and resync after an established snapshot", () => {
     vi.useFakeTimers();
-    const { remote, socket } = harness();
+    const { remote, socket, states } = harness();
     receive(socket, {
       type: "error",
       protocolVersion: 1,
@@ -189,10 +191,11 @@ describe("Forge native remote socket", () => {
       2,
     );
     connectAndSnapshot(socket, 1);
+    const resyncCommandId = remote.resync();
     receive(socket, {
       type: "commandResult",
       protocolVersion: 1,
-      commandId: "resync-1",
+      commandId: resyncCommandId,
       outcome: {
         status: "error",
         error: { code: "snapshotUnavailable", message: "preparing", retryable: true },
@@ -286,6 +289,62 @@ describe("Forge native remote socket", () => {
     remote.stop();
   });
 
+  it("sends exact Fast Mode commands and locks settings until acknowledgement", () => {
+    const { remote, socket, states } = harness();
+    connectAndSnapshot(socket, 1);
+
+    const fastModeCommand = remote.setFastMode(true);
+    expect(fastModeCommand).not.toBeNull();
+    expect(socket.sent.map(JSON.parse)).toContainEqual(
+      expect.objectContaining({ command: { type: "setFastMode", enabled: true } }),
+    );
+    expect(states.at(-1)?.fastModeCommandPending).toBe(true);
+    expect(remote.setFastMode(true)).toBeNull();
+    expect(remote.setModel("gpt-5", "high")).toBeNull();
+
+    receive(socket, {
+      type: "commandResult",
+      protocolVersion: 1,
+      commandId: fastModeCommand,
+      outcome: { status: "ok" },
+    });
+    expect(states.at(-1)?.fastModeCommandPending).toBe(false);
+    remote.stop();
+  });
+
+  it("gates Fast Mode on authoritative support, pending state, and no-op state", () => {
+    const { remote, socket } = harness();
+    connectAndSnapshot(socket, 1);
+    receive(socket, {
+      type: "delta",
+      protocolVersion: 1,
+      baseRevision: 1,
+      revision: 2,
+      event: {
+        kind: "stateReplaced",
+        session: session({ fastMode: { supported: true, enabled: true, pending: true } }),
+      },
+    });
+    expect(remote.setFastMode(false)).toBeNull();
+
+    receive(socket, {
+      type: "delta",
+      protocolVersion: 1,
+      baseRevision: 2,
+      revision: 3,
+      event: {
+        kind: "stateReplaced",
+        session: session({
+          fastMode: { supported: true, enabled: true },
+          capabilities: { ...session().capabilities, fastMode: false },
+        }),
+      },
+    });
+    expect(remote.setFastMode(false)).toBeNull();
+    expect(remote.setFastMode(true)).toBeNull();
+    remote.stop();
+  });
+
   it("gates model and usage commands on authoritative capabilities and pending state", () => {
     const { remote, socket } = harness();
     connectAndSnapshot(socket, 1);
@@ -304,6 +363,328 @@ describe("Forge native remote socket", () => {
     });
     expect(remote.setModel("gpt-5", null)).toBeNull();
     expect(remote.refreshUsage()).toBeNull();
+    remote.stop();
+  });
+
+  it("sends only versioned authoritative queue-control commands", () => {
+    const { remote, socket, states } = harness();
+    connectAndSnapshot(socket, 1);
+    receive(socket, {
+      type: "delta",
+      protocolVersion: 1,
+      baseRevision: 1,
+      revision: 2,
+      event: {
+        kind: "stateReplaced",
+        session: session({
+          capabilities: { ...session().capabilities, queueControl: true },
+          queue: [
+            {
+              id: "shared-1",
+              text: "Original",
+              source: "shared",
+              version: 7,
+              actions: { edit: true, steer: true, cancel: true },
+            },
+            {
+              id: "local-1",
+              text: "Local",
+              source: "local",
+              actions: { edit: false, steer: false, cancel: false },
+            },
+          ],
+        }),
+      },
+    });
+
+    const edit = remote.editQueuedPrompt("shared-1", 7, "  Revised  ");
+    expect(edit).not.toBeNull();
+    expect(states.at(-1)?.pendingQueueItemIds).toEqual(["shared-1"]);
+    expect(socket.sent.map(JSON.parse)).toContainEqual(
+      expect.objectContaining({
+        command: {
+          type: "editQueuedPrompt",
+          queueItemId: "shared-1",
+          expectedVersion: 7,
+          text: "Revised",
+        },
+      }),
+    );
+    expect(remote.steerQueuedPrompt("shared-1", 7)).toBeNull();
+    expect(remote.cancelQueuedPrompt("local-1", 0)).toBeNull();
+    receive(socket, {
+      type: "commandResult",
+      protocolVersion: 1,
+      commandId: edit,
+      outcome: { status: "ok" },
+    });
+    expect(states.at(-1)?.pendingQueueItemIds).toEqual(["shared-1"]);
+    expect(remote.steerQueuedPrompt("shared-1", 7)).toBeNull();
+    receive(socket, {
+      type: "delta",
+      protocolVersion: 1,
+      baseRevision: 2,
+      revision: 3,
+      event: {
+        kind: "stateReplaced",
+        session: session({
+          capabilities: { ...session().capabilities, queueControl: true },
+          queue: [
+            {
+              id: "shared-1",
+              text: "Revised",
+              source: "shared",
+              version: 8,
+              actions: { edit: true, steer: true, cancel: true },
+            },
+          ],
+        }),
+      },
+    });
+    expect(states.at(-1)?.pendingQueueItemIds).toEqual([]);
+    expect(remote.steerQueuedPrompt("shared-1", 8)).not.toBeNull();
+    remote.stop();
+  });
+
+  it("keeps queue actions locked across same-version snapshots until authority changes", () => {
+    const { remote, socket, states } = harness();
+    connectAndSnapshot(socket, 1);
+    const queueSnapshot = session({
+      capabilities: { ...session().capabilities, queueControl: true },
+      queue: [
+        {
+          id: "shared-1",
+          text: "Original",
+          source: "shared",
+          version: 7,
+          actions: { edit: true, steer: true, cancel: true },
+        },
+      ],
+    });
+    receive(socket, {
+      type: "delta",
+      protocolVersion: 1,
+      baseRevision: 1,
+      revision: 2,
+      event: { kind: "stateReplaced", session: queueSnapshot },
+    });
+    const commandId = remote.cancelQueuedPrompt("shared-1", 7);
+    receive(socket, {
+      type: "commandResult",
+      protocolVersion: 1,
+      commandId,
+      outcome: { status: "ok" },
+    });
+    receive(socket, {
+      type: "snapshot",
+      protocolVersion: 1,
+      revision: 3,
+      session: queueSnapshot,
+    });
+    expect(states.at(-1)?.pendingQueueItemIds).toEqual(["shared-1"]);
+    expect(remote.cancelQueuedPrompt("shared-1", 7)).toBeNull();
+    receive(socket, {
+      type: "delta",
+      protocolVersion: 1,
+      baseRevision: 3,
+      revision: 4,
+      event: {
+        kind: "stateReplaced",
+        session: session({
+          capabilities: { ...session().capabilities, queueControl: true },
+          queue: [],
+        }),
+      },
+    });
+    expect(states.at(-1)?.pendingQueueItemIds).toEqual([]);
+    remote.stop();
+  });
+
+  it("resyncs and eventually unlocks a queue row if authority never publishes a change", () => {
+    vi.useFakeTimers();
+    const { remote, socket, states } = harness();
+    connectAndSnapshot(socket, 1);
+    receive(socket, {
+      type: "delta",
+      protocolVersion: 1,
+      baseRevision: 1,
+      revision: 2,
+      event: {
+        kind: "stateReplaced",
+        session: session({
+          capabilities: { ...session().capabilities, queueControl: true },
+          queue: [
+            {
+              id: "shared-1",
+              text: "Original",
+              source: "shared",
+              version: 7,
+              actions: { edit: true, steer: true, cancel: true },
+            },
+          ],
+        }),
+      },
+    });
+    const commandId = remote.cancelQueuedPrompt("shared-1", 7);
+    receive(socket, {
+      type: "commandResult",
+      protocolVersion: 1,
+      commandId,
+      outcome: { status: "ok" },
+    });
+    vi.advanceTimersByTime(8_000);
+    expect(socket.sent.map(JSON.parse)).toContainEqual(
+      expect.objectContaining({ command: { type: "resync" } }),
+    );
+    expect(states.at(-1)?.pendingQueueItemIds).toEqual(["shared-1"]);
+    vi.advanceTimersByTime(2_000);
+    expect(states.at(-1)?.pendingQueueItemIds).toEqual([]);
+    remote.stop();
+  });
+
+  it("resolves newSession only from the matching distinct sessionCreated result", async () => {
+    const { remote, socket, states } = harness();
+    connectAndSnapshot(socket, 1);
+    receive(socket, {
+      type: "delta",
+      protocolVersion: 1,
+      baseRevision: 1,
+      revision: 2,
+      event: {
+        kind: "stateReplaced",
+        session: session({ capabilities: { ...session().capabilities, newSession: true } }),
+      },
+    });
+    const created = remote.newSession();
+    expect(created).not.toBeNull();
+    const sent = socket.sent
+      .map(JSON.parse)
+      .find((message) => message.command?.type === "newSession");
+    expect(sent).toBeDefined();
+    expect(states.at(-1)?.newSessionCommandPending).toBe(true);
+    receive(socket, {
+      type: "sessionCreated",
+      protocolVersion: 1,
+      commandId: sent.commandId,
+      sessionId: "session-new",
+      pairingUrl: `https://forge.example/forge/${"b".repeat(64)}/`,
+      expiresAt: "2099-01-02T00:00:00Z",
+    });
+    await expect(created).resolves.toEqual({
+      sessionId: "session-new",
+      pairingUrl: `https://forge.example/forge/${"b".repeat(64)}/`,
+      expiresAt: "2099-01-02T00:00:00Z",
+    });
+    expect(states.at(-1)?.newSessionCommandPending).toBe(false);
+    remote.stop();
+  });
+
+  it("preserves a provisional new-session command across same-socket resync snapshots", async () => {
+    const { remote, socket, states } = harness();
+    connectAndSnapshot(socket, 1);
+    receive(socket, {
+      type: "delta",
+      protocolVersion: 1,
+      baseRevision: 1,
+      revision: 2,
+      event: {
+        kind: "stateReplaced",
+        session: session({ capabilities: { ...session().capabilities, newSession: true } }),
+      },
+    });
+    const created = remote.newSession();
+    const sent = socket.sent
+      .map(JSON.parse)
+      .find((message) => message.command?.type === "newSession");
+    receive(socket, {
+      type: "snapshot",
+      protocolVersion: 1,
+      revision: 3,
+      session: session({ capabilities: { ...session().capabilities, newSession: true } }),
+    });
+    expect(states.at(-1)?.newSessionCommandPending).toBe(true);
+    receive(socket, {
+      type: "sessionCreated",
+      protocolVersion: 1,
+      commandId: sent.commandId,
+      sessionId: "session-new",
+      pairingUrl: `https://forge.example/forge/${"b".repeat(64)}/`,
+      expiresAt: "2099-01-02T00:00:00Z",
+    });
+    await expect(created).resolves.toMatchObject({ sessionId: "session-new" });
+    remote.stop();
+  });
+
+  it("accepts a validated child session only after its terminal acknowledgement", async () => {
+    const { remote, socket } = harness();
+    connectAndSnapshot(socket, 1);
+    const accepted = remote.acceptNewSession("session-new");
+    expect(accepted).not.toBeNull();
+    const sent = socket.sent
+      .map(JSON.parse)
+      .find((message) => message.command?.type === "acceptNewSession");
+    expect(sent.command).toEqual({ type: "acceptNewSession", sessionId: "session-new" });
+    receive(socket, {
+      type: "commandResult",
+      protocolVersion: 1,
+      commandId: sent.commandId,
+      outcome: { status: "ok" },
+    });
+    await expect(accepted).resolves.toBeUndefined();
+    remote.stop();
+  });
+
+  it("pins a freshly returned pairing to its expected child session identity", () => {
+    const states: ForgeRemoteSocketState[] = [];
+    const remote = new ForgeRemoteSocket(
+      `https://forge.example-tailnet.ts.net/forge/${"a".repeat(64)}/`,
+      { onChange: (state) => states.push(state), onRevoked: vi.fn() },
+      "expected-child",
+    );
+    remote.connect();
+    const socket = FakeWebSocket.instances[0]!;
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    receive(socket, {
+      type: "connected",
+      protocolVersion: 1,
+      sessionId: "different-child",
+      expiresAt: "2099-01-01T00:00:00Z",
+    });
+    expect(states.at(-1)).toMatchObject({ phase: "error" });
+    expect(states.at(-1)?.error).toMatch(/different session/i);
+  });
+
+  it("rejects a pending new session on connection loss and ignores stale success", async () => {
+    const { remote, socket, states } = harness();
+    connectAndSnapshot(socket, 1);
+    receive(socket, {
+      type: "delta",
+      protocolVersion: 1,
+      baseRevision: 1,
+      revision: 2,
+      event: {
+        kind: "stateReplaced",
+        session: session({ capabilities: { ...session().capabilities, newSession: true } }),
+      },
+    });
+    const created = remote.newSession();
+    expect(created).not.toBeNull();
+    const sent = socket.sent
+      .map(JSON.parse)
+      .find((message) => message.command?.type === "newSession");
+    socket.emit("close", { code: 1006, reason: "lost", wasClean: false });
+    await expect(created).rejects.toThrow(/connection changed/i);
+    expect(states.at(-1)?.newSessionCommandPending).toBe(false);
+    receive(socket, {
+      type: "sessionCreated",
+      protocolVersion: 1,
+      commandId: sent.commandId,
+      sessionId: "stale-session",
+      pairingUrl: `https://forge.example/forge/${"c".repeat(64)}/`,
+      expiresAt: "2099-01-02T00:00:00Z",
+    });
+    expect(states.at(-1)?.newSessionCommandPending).toBe(false);
     remote.stop();
   });
 

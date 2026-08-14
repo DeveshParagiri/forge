@@ -474,6 +474,7 @@ impl AgentView {
             self.scrollback.remove_entry(rid);
         }
         self.session.model_switch_pending = false;
+        self.session.models.cancel_fast_mode_change();
         self.pending_adoption_updates.clear();
         let fresh = self.scrollback.fresh_continuation();
         self.session_reload = Some(SessionReload {

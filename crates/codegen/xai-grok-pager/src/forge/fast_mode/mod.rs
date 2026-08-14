@@ -24,6 +24,7 @@ pub(crate) fn is_supported(models: &ModelState) -> bool {
 pub(crate) fn reconcile(models: &mut ModelState) {
     if !is_supported(models) {
         models.fast_mode = false;
+        models.cancel_fast_mode_change();
     }
 }
 
@@ -41,23 +42,45 @@ pub(crate) fn dispatch_set_fast_mode(app: &mut AppView, enabled: bool) -> Vec<Ef
     let ActiveView::Agent(id) = app.active_view else {
         return vec![];
     };
+    match dispatch_set_fast_mode_for_agent(app, id, enabled) {
+        Ok(effects) => effects,
+        Err(message) => {
+            if let Some(agent) = app.agents.get_mut(&id) {
+                agent.scrollback.push_block(RenderBlock::system(message));
+            }
+            vec![]
+        }
+    }
+}
+
+/// Start the canonical shell mutation for one exact pager-owned agent.
+/// Remote callers use this instead of changing `active_view`, so a phone
+/// command can never spill into the terminal tab that happens to be visible.
+pub(crate) fn dispatch_set_fast_mode_for_agent(
+    app: &mut AppView,
+    id: crate::app::agent::AgentId,
+    enabled: bool,
+) -> Result<Vec<Effect>, String> {
     let Some(agent) = app.agents.get_mut(&id) else {
-        return vec![];
+        return Err("The Forge session is no longer available.".into());
     };
     let Some(session_id) = agent.session.session_id.clone() else {
-        agent
-            .scrollback
-            .push_block(RenderBlock::system("Fast mode requires an active session"));
-        return vec![];
+        return Err("Fast mode requires an active session".into());
     };
+    let Some(request_id) = agent.session.models.begin_fast_mode_change() else {
+        return Err("A Fast Mode change is already in progress.".into());
+    };
+    let session_binding_epoch = agent.session_binding_epoch;
     // Capability is deliberately not checked against the pager mirror here.
     // That mirror may lag a model switch; the shell validates the request
     // against the authoritative live sampling model under the session lock.
-    vec![Effect::SetFastMode {
+    Ok(vec![Effect::SetFastMode {
         agent_id: id,
         session_id,
+        session_binding_epoch,
+        request_id,
         enabled,
-    }]
+    }])
 }
 
 /// Apply the authoritative result of the session-only Fast Mode mutation.
@@ -65,13 +88,18 @@ pub(crate) fn handle_complete(
     app: &mut AppView,
     agent_id: crate::app::agent::AgentId,
     session_id: agent_client_protocol::SessionId,
+    session_binding_epoch: u32,
+    request_id: u64,
     enabled: bool,
     result: Result<(), String>,
 ) -> Vec<Effect> {
     let Some(agent) = app.agents.get_mut(&agent_id) else {
         return vec![];
     };
-    if agent.session.session_id.as_ref() != Some(&session_id) {
+    if agent.session.session_id.as_ref() != Some(&session_id)
+        || agent.session_binding_epoch != session_binding_epoch
+        || !agent.session.models.finish_fast_mode_change(request_id)
+    {
         return vec![];
     }
     match result {

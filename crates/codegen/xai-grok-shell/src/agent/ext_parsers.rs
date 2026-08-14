@@ -72,6 +72,7 @@ pub(super) fn parse_queue_edit_command(
         "x.ai/queue/edit" => {
             let id = params.get("id").and_then(|v| v.as_str())?.to_string();
             let new_text = params.get("newText").and_then(|v| v.as_str())?.to_string();
+            let expected_version = params.get("expectedVersion").and_then(|v| v.as_u64());
             // `owner` is the resolved attribution; for edit it represents the
             // most recent editor (recorded as `last_editor`), not the original
             // enqueuer.
@@ -79,6 +80,7 @@ pub(super) fn parse_queue_edit_command(
                 id,
                 new_text,
                 editor: owner,
+                expected_version,
             })
         }
         "x.ai/queue/hold_edit" => {
@@ -150,17 +152,19 @@ mod tests {
 
         // edit: id + newText + editor (resolved via owner/clientIdentifier).
         let p = serde_json::json!({
-            "sessionId": "s1", "id": "p9", "newText": "replacement text"
+            "sessionId": "s1", "id": "p9", "newText": "replacement text", "expectedVersion": 7
         });
         match parse_queue_edit_command("x.ai/queue/edit", &p, Some("grok-vscode".into())) {
             Some(SessionCommand::EditQueuedPrompt {
                 id,
                 new_text,
                 editor,
+                expected_version,
             }) => {
                 assert_eq!(id, "p9");
                 assert_eq!(new_text, "replacement text");
                 assert_eq!(editor.as_deref(), Some("grok-vscode"));
+                assert_eq!(expected_version, Some(7));
             }
             _ => panic!("expected EditQueuedPrompt"),
         }

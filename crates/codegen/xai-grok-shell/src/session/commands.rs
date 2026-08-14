@@ -661,6 +661,7 @@ pub enum SessionCommand {
         id: String,
         new_text: String,
         editor: Option<String>,
+        expected_version: Option<u64>,
     },
     /// Hold a queued prompt out of combine-on-promote while a client edits it
     /// in the composer. Released via [`Self::ReleaseCombineEdit`].

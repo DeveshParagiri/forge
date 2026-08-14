@@ -25,11 +25,16 @@
       "currentSha256": "0190079d16d0c8d88ecddf0ec83f35201e62a3bfcb70c332eda6b04381eb91bf"
     },
     {
-      "sourcePath": "public/apple-icon.png",
+      "sourcePath": null,
+      "currentPath": "brand/mobile-logo-source.png",
+      "relation": "exact-copy-of-user-supplied-Untitled-design-1.png",
+      "currentSha256": "4d9023783cef8d6d0dd472ebeb4c253094698e06715345b9b8aa34b64a9cae9a"
+    },
+    {
+      "sourcePath": null,
       "currentPath": "brand/apple-icon.png",
-      "relation": "source",
-      "sourceSha256": "002cb5e372d5e8c8175530738793ee8ac3dc60f0ebc2d277aadedefe90800d25",
-      "currentSha256": "002cb5e372d5e8c8175530738793ee8ac3dc60f0ebc2d277aadedefe90800d25"
+      "relation": "180x180-derived-from-brand/mobile-logo-source.png",
+      "currentSha256": "76500dbc7752d96c561b22ee680958902e5e8e87c47e881fe567c9e46fc09d90"
     },
     {
       "sourcePath": "public/icon.svg",
@@ -39,11 +44,10 @@
       "currentSha256": "263f117c0c69a44d3206a5702105c178ebaa164bca325f3c3973a13bd948f1bf"
     },
     {
-      "sourcePath": "public/logo.png",
+      "sourcePath": null,
       "currentPath": "brand/logo.png",
-      "relation": "source",
-      "sourceSha256": "ae4ef23e9d1e5a8ae20fc70401d48d2ec13a04f602e55ea237fd70a6db7fb28a",
-      "currentSha256": "ae4ef23e9d1e5a8ae20fc70401d48d2ec13a04f602e55ea237fd70a6db7fb28a"
+      "relation": "272x244-transparent-derived-from-brand/mobile-logo-source.png",
+      "currentSha256": "bc1f833374117fa881732f1555c33263b70dda78ae576b80a0ef79acc67eac94"
     },
     {
       "sourcePath": null,
@@ -66,14 +70,32 @@
     {
       "sourcePath": null,
       "currentPath": "apps/mobile/assets/forge/icon.png",
-      "relation": "1024x1024-derived-from-brand/apple-icon.png",
-      "currentSha256": "623069c5189dbd9473f8b35f2755b4741d2a15b11d762aa4a95e5b2bf1cecce7"
+      "relation": "1024x1024-derived-from-brand/mobile-logo-source.png",
+      "currentSha256": "93a44f5cc292eb8f5a0ea25c683343be9842e45ad9aeb0a1d6930180d8eb457f"
+    },
+    {
+      "sourcePath": null,
+      "currentPath": "apps/mobile/assets/forge/mark.png",
+      "relation": "1024x1024-transparent-derived-from-brand/mobile-logo-source.png",
+      "currentSha256": "39d9c549e5274bb2d0060303dd817fb60ea65ce6b7a302aaa4a27e7cfbb2c24b"
+    },
+    {
+      "sourcePath": null,
+      "currentPath": "apps/mobile/assets/forge/adaptive-icon-foreground.png",
+      "relation": "432x432-safe-zone-derived-from-brand/mobile-logo-source.png",
+      "currentSha256": "9cfe97eefd3ea04c903b1e35ba92af677fe20e545c5573c9dfdfc57669e43909"
+    },
+    {
+      "sourcePath": null,
+      "currentPath": "apps/mobile/assets/forge/adaptive-icon-monochrome.png",
+      "relation": "copy-of-apps/mobile/assets/forge/adaptive-icon-foreground.png",
+      "currentSha256": "9cfe97eefd3ea04c903b1e35ba92af677fe20e545c5573c9dfdfc57669e43909"
     },
     {
       "sourcePath": null,
       "currentPath": "apps/mobile/assets/forge/wordmark.png",
       "relation": "copy-of-brand/logo.png",
-      "currentSha256": "ae4ef23e9d1e5a8ae20fc70401d48d2ec13a04f602e55ea237fd70a6db7fb28a"
+      "currentSha256": "bc1f833374117fa881732f1555c33263b70dda78ae576b80a0ef79acc67eac94"
     },
     {
       "sourcePath": null,

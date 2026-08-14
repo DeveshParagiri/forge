@@ -1112,10 +1112,21 @@ fn fast_mode_complete_updates_only_fast_state() {
     let mut app = test_app_with_agent();
     let id = AgentId(0);
     let model_before = app.agents[&id].session.models.current.clone();
+    let session_binding_epoch = app.agents[&id].session_binding_epoch;
+    let request_id = app
+        .agents
+        .get_mut(&id)
+        .unwrap()
+        .session
+        .models
+        .begin_fast_mode_change()
+        .unwrap();
     let effects = dispatch(
         Action::TaskComplete(TaskResult::SetFastModeComplete {
             agent_id: id,
             session_id: app.agents[&id].session.session_id.clone().unwrap(),
+            session_binding_epoch,
+            request_id,
             enabled: true,
             result: Ok(()),
         }),
@@ -1124,7 +1135,45 @@ fn fast_mode_complete_updates_only_fast_state() {
 
     assert!(effects.is_empty());
     assert!(app.agents[&id].session.models.fast_mode);
+    assert!(!app.agents[&id].session.models.fast_mode_pending());
     assert_eq!(app.agents[&id].session.models.current, model_before);
+}
+
+#[test]
+fn stale_fast_mode_completion_cannot_mutate_a_rebound_session() {
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    let stale_epoch = app.agents[&id].session_binding_epoch;
+    let stale_request_id = app
+        .agents
+        .get_mut(&id)
+        .unwrap()
+        .session
+        .models
+        .begin_fast_mode_change()
+        .unwrap();
+    {
+        let agent = app.agents.get_mut(&id).unwrap();
+        agent.session_binding_epoch = agent.session_binding_epoch.wrapping_add(1);
+        agent.session.models.cancel_fast_mode_change();
+        assert!(!agent.session.models.fast_mode);
+    }
+
+    let effects = dispatch(
+        Action::TaskComplete(TaskResult::SetFastModeComplete {
+            agent_id: id,
+            session_id: app.agents[&id].session.session_id.clone().unwrap(),
+            session_binding_epoch: stale_epoch,
+            request_id: stale_request_id,
+            enabled: true,
+            result: Ok(()),
+        }),
+        &mut app,
+    );
+
+    assert!(effects.is_empty());
+    assert!(!app.agents[&id].session.models.fast_mode);
+    assert!(!app.agents[&id].session.models.fast_mode_pending());
 }
 
 #[test]

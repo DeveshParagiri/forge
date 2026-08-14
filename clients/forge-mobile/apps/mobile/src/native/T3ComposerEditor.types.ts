@@ -27,6 +27,7 @@ export interface ComposerEditorProps {
   readonly autoCorrect?: boolean;
   readonly spellCheck?: boolean;
   readonly multiline?: boolean;
+  readonly contentInsetHorizontal?: number;
   readonly contentInsetVertical?: number;
   /** Android: center a single line vertically (collapsed pill); no-op on iOS. */
   readonly singleLineCentered?: boolean;

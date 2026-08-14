@@ -401,8 +401,8 @@ impl SessionActor {
             .map(|c| c.model)
             .unwrap_or_default();
         let session_id = self.session_info.id.to_string();
-        // Forge: teach the existing Dream pass to consolidate model/harness
-        // preferences without introducing a separate preference store.
+        // Forge: teach the existing Dream pass to consolidate durable user,
+        // model, and harness preferences without introducing another store.
         let system_prompt = crate::forge::memory_extension::extend_prompt(
             crate::session::memory::dream::DREAM_SYSTEM_PROMPT.to_owned(),
         );
@@ -494,8 +494,8 @@ impl SessionActor {
             } else {
                 FLUSH_SYSTEM_PROMPT.to_owned()
             };
-            // Forge: let the existing LLM-based flush infer durable routing
-            // preferences from the interaction rather than lexical triggers.
+            // Forge: let the existing LLM-based flush infer durable preferences
+            // while excluding transient task state and one-off outcomes.
             let system_prompt = crate::forge::memory_extension::extend_prompt(system_prompt);
             let mut items: Vec<ConversationItem> = vec![ConversationItem::system(system_prompt)];
             tracing::info!(

@@ -343,6 +343,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onDeleteThread: (thread: EnvironmentThreadShell) => void;
   readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => void;
+  readonly onRenameThread?: (thread: EnvironmentThreadShell) => void;
   readonly onSettleThread: (thread: EnvironmentThreadShell) => void;
   readonly onSnoozeThread: (thread: EnvironmentThreadShell, snoozedUntil: string) => void;
   readonly onUnsnoozeThread: (thread: EnvironmentThreadShell) => void;
@@ -391,6 +392,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     onSelectThread,
     onDeleteThread,
     onRegenerateThreadTitle,
+    onRenameThread,
     onSettleThread,
     onSnoozeThread,
     onUnsnoozeThread,
@@ -428,6 +430,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     () => onRegenerateThreadTitle(thread),
     [onRegenerateThreadTitle, thread],
   );
+  const handleRename = useCallback(() => onRenameThread?.(thread), [onRenameThread, thread]);
   const handleSettle = useCallback(() => onSettleThread(thread), [onSettleThread, thread]);
   const handleSnooze = useCallback(
     (snoozedUntil: string) => onSnoozeThread(thread, snoozedUntil),
@@ -561,6 +564,23 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     () => [LEGACY_MENU_ACTIONS[0]!, ...titleRegenerationMenuItems, LEGACY_MENU_ACTIONS[1]!],
     [titleRegenerationMenuItems],
   );
+  const remoteMenuActions = useMemo<MenuAction[]>(
+    () => [
+      pinnedRow
+        ? { id: "unpin", title: "Unpin", image: "pin.slash" }
+        : { id: "pin", title: "Pin", image: "pin" },
+      ...(onRenameThread
+        ? [{ id: "rename", title: "Rename", image: "square.and.pencil" } satisfies MenuAction]
+        : []),
+      {
+        id: "archive",
+        title: "Archive",
+        image: "archivebox",
+        attributes: { destructive: true },
+      },
+    ],
+    [onRenameThread, pinnedRow],
+  );
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
       if (nativeEvent.event === "settle") handleSettle();
@@ -571,6 +591,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       if (nativeEvent.event === "move-pin-up") handleMovePinnedUp();
       if (nativeEvent.event === "move-pin-down") handleMovePinnedDown();
       if (nativeEvent.event === "archive") handleArchive();
+      if (nativeEvent.event === "rename") handleRename();
       if (nativeEvent.event === "regenerate-title") handleRegenerateTitle();
       if (nativeEvent.event === "delete") handleDelete();
       const snoozeSelection = resolveThreadListV2SnoozeMenuSelection({
@@ -588,6 +609,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       handleArchive,
       handleDelete,
       handleRegenerateTitle,
+      handleRename,
       handleMovePinnedDown,
       handleMovePinnedUp,
       handlePin,
@@ -904,7 +926,16 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     );
 
   if (props.remoteOnly) {
-    return rowContent(() => undefined);
+    return (
+      <ControlPillMenu
+        actions={remoteMenuActions}
+        onPressAction={handleMenuAction}
+        shouldOpenOnLongPress
+        title={thread.title}
+      >
+        {rowContent(() => undefined)}
+      </ControlPillMenu>
+    );
   }
 
   return (

@@ -36,6 +36,7 @@ class T3ComposerEditorView(context: Context, appContext: AppContext) : ExpoView(
   private var applyingNativeValue = false
   private var desiredLineHeightPx = 0
   private var lastContentHeight = 0
+  private var contentInsetHorizontal = 0
   private var contentInsetVertical = 0
   private var tokensJson = "[]"
   private var tokens: List<ComposerToken> = emptyList()
@@ -201,8 +202,23 @@ class T3ComposerEditorView(context: Context, appContext: AppContext) : ExpoView(
   fun setContentInsetVertical(contentInsetVertical: Int) {
     this.contentInsetVertical =
       max(0, (contentInsetVertical * resources.displayMetrics.density).toInt())
-    editor.setPadding(0, this.contentInsetVertical, 0, this.contentInsetVertical)
+    applyContentInsets()
     emitContentSizeIfNeeded()
+  }
+
+  fun setContentInsetHorizontal(contentInsetHorizontal: Int) {
+    this.contentInsetHorizontal =
+      max(0, (contentInsetHorizontal * resources.displayMetrics.density).toInt())
+    applyContentInsets()
+  }
+
+  private fun applyContentInsets() {
+    editor.setPadding(
+      contentInsetHorizontal,
+      contentInsetVertical,
+      contentInsetHorizontal,
+      contentInsetVertical,
+    )
   }
 
   fun setEditable(editable: Boolean) {

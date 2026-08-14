@@ -1,7 +1,8 @@
 import * as Haptics from "expo-haptics";
 import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
 import { type LegendListRef } from "@legendapp/list/react-native";
-import type { EnvironmentId, MessageId, ThreadId, TurnId } from "@t3tools/contracts";
+import type { MenuAction } from "@react-native-menu/menu";
+import { MessageId, type EnvironmentId, type ThreadId, type TurnId } from "@t3tools/contracts";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import { formatElapsed } from "@t3tools/shared/orchestrationTiming";
 import { SymbolView } from "../../components/AppSymbol";
@@ -59,6 +60,7 @@ import {
 
 import { AppText as Text } from "../../components/AppText";
 import { CopyTextButton } from "../../components/CopyTextButton";
+import { ControlPillMenu } from "../../components/ControlPill";
 import {
   parseReviewCommentMessageSegments,
   type ReviewInlineComment,
@@ -100,10 +102,26 @@ import {
   WORK_GROUP_TOGGLE_HEIGHT,
 } from "./thread-work-log";
 import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
+import {
+  remoteQueueActionPresentations,
+  type RemoteQueuedMessagePresentation,
+} from "./remoteQueuePresentation";
+import {
+  FORGE_REMOTE_MESSAGE_CHROME,
+  presentRemoteWorkEntries,
+  type RemoteWorkDisclosurePresentation,
+  showAssistantResponseCopy,
+  showUserMessageMeta,
+  threadFeedFixedRowHeight,
+} from "./threadMessageChrome";
 
 const WIDE_MARKDOWN_BLOCK_OPTIONS = {
   includeOrderedLists: Platform.OS === "android",
 } as const;
+const EMPTY_MESSAGE_IDS: ReadonlySet<string> = new Set();
+const EMPTY_WORK_DISCLOSURES: ReadonlyArray<RemoteWorkDisclosurePresentation> = [];
+const EMPTY_QUEUED_MESSAGES: ReadonlyArray<RemoteQueuedMessagePresentation> = [];
+const REMOTE_QUEUE_CREATED_AT = "1970-01-01T00:00:00.000Z";
 
 const MESSAGE_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",
@@ -116,16 +134,6 @@ function formatMessageTime(input: string): string {
   }
   return MESSAGE_TIME_FORMATTER.format(timestamp);
 }
-
-// Pre-measurement heights for getFixedItemSize, mirroring renderFeedEntry's
-// classNames. The fold row's min-h-11 (44px) stays taller than its single
-// text-sm line at every supported base font size (26px at the 22pt maximum),
-// so its height is a constant; a drifted value costs one correction on
-// measure, not a persistent offset.
-const TURN_FOLD_HEIGHT = 56; // min-h-11 (44) + mb-3 (12)
-// The working row has no min-height clamp — its height follows the scaled
-// text-xs line height (see workingRowHeight in ThreadFeed).
-const WORKING_ROW_VERTICAL_EXTRAS = 24; // py-1 (8) + mb-4 (16)
 
 // Entering animations must only play for rows born just now — LegendList
 // remounts rows when they scroll back into view, and replaying an entrance for
@@ -157,6 +165,14 @@ export interface ThreadFeedProps {
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
   readonly onEndFollowEnabledChange?: (enabled: boolean) => void;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
+  /** Applies Forge-only message chrome without changing retained T3 behavior. */
+  readonly remoteOnly?: boolean;
+  readonly remoteResponseMessageIds?: ReadonlySet<string>;
+  readonly remoteWorkDisclosures?: ReadonlyArray<RemoteWorkDisclosurePresentation>;
+  readonly remoteQueuedMessages?: ReadonlyArray<RemoteQueuedMessagePresentation>;
+  readonly onEditRemoteQueuedMessage?: (message: RemoteQueuedMessagePresentation) => void;
+  readonly onSteerRemoteQueuedMessage?: (message: RemoteQueuedMessagePresentation) => void;
+  readonly onCancelRemoteQueuedMessage?: (message: RemoteQueuedMessagePresentation) => void;
   /** Non-null when older turns exist beyond the loaded window. */
   readonly loadEarlier?: {
     readonly loading: boolean;
@@ -804,13 +820,25 @@ function renderFeedEntry(
     readonly copiedRowId: string | null;
     readonly expandedWorkRows: Record<string, boolean>;
     readonly terminalAssistantMessageIds: ReadonlySet<string>;
+    readonly remoteResponseMessageIds: ReadonlySet<string>;
+    readonly remoteWorkDisclosureByMessageId: ReadonlyMap<string, RemoteWorkDisclosurePresentation>;
+    readonly remoteQueuedMessageByMessageId: ReadonlyMap<string, RemoteQueuedMessagePresentation>;
+    readonly expandedRemoteWorkDisclosureIds: ReadonlySet<string>;
+    readonly remoteOnly: boolean;
     readonly unsettledTurnId: TurnId | null;
     readonly onCopyWorkRow: (rowId: string, value: string) => void;
     readonly onToggleWorkGroup: (groupId: string) => void;
     readonly onToggleWorkRow: (rowId: string) => void;
     readonly onToggleTurnFold: (turnId: TurnId) => void;
+    readonly onToggleRemoteWorkDisclosure: (markerMessageId: string) => void;
+    readonly onEditRemoteQueuedMessage?: (message: RemoteQueuedMessagePresentation) => void;
+    readonly onSteerRemoteQueuedMessage?: (message: RemoteQueuedMessagePresentation) => void;
+    readonly onCancelRemoteQueuedMessage?: (message: RemoteQueuedMessagePresentation) => void;
     readonly onPressImage: (uri: string, headers?: Record<string, string>) => void;
     readonly onMarkdownLinkPress: (href: string) => void;
+    readonly dangerForegroundColor: string | import("react-native").ColorValue;
+    readonly iconColor: string | import("react-native").ColorValue;
+    readonly iconMutedColor: string | import("react-native").ColorValue;
     readonly iconSubtleColor: string | import("react-native").ColorValue;
     readonly userBubbleColor: string | import("react-native").ColorValue;
     readonly markdownStyles: MarkdownStyleSets;
@@ -823,7 +851,7 @@ function renderFeedEntry(
   const { markdownStyles, iconSubtleColor, userBubbleColor } = props;
 
   if (entry.type === "working") {
-    return <WorkingTimelineRow startedAt={entry.createdAt} />;
+    return <WorkingTimelineRow remoteOnly={props.remoteOnly} startedAt={entry.createdAt} />;
   }
 
   if (entry.type === "turn-fold") {
@@ -832,8 +860,20 @@ function renderFeedEntry(
         accessibilityRole="button"
         accessibilityState={{ expanded: entry.expanded }}
         onPress={() => props.onToggleTurnFold(entry.turnId)}
-        hitSlop={4}
-        className="mb-3 min-h-11 flex-row items-center gap-2 border-b border-neutral-200/80 px-2 dark:border-white/[0.08]"
+        hitSlop={props.remoteOnly ? 6 : 4}
+        className={cn(
+          "flex-row items-center gap-2 border-b border-neutral-200/80 dark:border-white/[0.08]",
+          props.remoteOnly ? null : "mb-3 min-h-11 px-2",
+        )}
+        style={
+          props.remoteOnly
+            ? {
+                minHeight: FORGE_REMOTE_MESSAGE_CHROME.turnFoldMinHeight,
+                marginBottom: FORGE_REMOTE_MESSAGE_CHROME.turnFoldBottomSpacing,
+                paddingHorizontal: FORGE_REMOTE_MESSAGE_CHROME.turnFoldHorizontalPadding,
+              }
+            : undefined
+        }
       >
         <Text className="font-t3-medium text-sm tabular-nums text-foreground-muted">
           {entry.label}
@@ -877,23 +917,148 @@ function renderFeedEntry(
       message.role === "assistant" &&
       props.unsettledTurnId !== null &&
       message.turnId === props.unsettledTurnId;
-    const showAssistantMeta =
+    const showRemoteAssistantCopy =
+      props.remoteOnly &&
+      showAssistantResponseCopy({
+        isAssistant: message.role === "assistant",
+        isTerminalResponse: props.remoteResponseMessageIds.has(message.id),
+        isTurnInProgress: assistantTurnStillInProgress,
+        streaming: message.streaming,
+        text: message.text,
+      });
+    const showRetainedAssistantMeta =
+      !props.remoteOnly &&
       message.role === "assistant" &&
       props.terminalAssistantMessageIds.has(message.id) &&
       !assistantTurnStillInProgress &&
       !message.streaming;
+    const remoteWorkDisclosure = props.remoteOnly
+      ? props.remoteWorkDisclosureByMessageId.get(message.id)
+      : undefined;
+    const remoteQueuedMessage = props.remoteOnly
+      ? props.remoteQueuedMessageByMessageId.get(message.id)
+      : undefined;
 
     if (isUser) {
       const enterAnimated = isFreshTimestamp(message.createdAt);
+      if (remoteQueuedMessage) {
+        const actionPresentations = remoteQueueActionPresentations(remoteQueuedMessage, {
+          edit: props.onEditRemoteQueuedMessage !== undefined,
+          steer: props.onSteerRemoteQueuedMessage !== undefined,
+          cancel: props.onCancelRemoteQueuedMessage !== undefined,
+        });
+        const menuActions: MenuAction[] = actionPresentations.map((action) => ({
+          id: action.id,
+          title: action.title,
+          image: action.systemImage,
+          // @react-native-menu/menu's New Architecture bridge serializes an
+          // omitted imageColor as zero. Set it explicitly or SF Symbols render
+          // black-on-black in the dark native UIMenu.
+          imageColor: action.destructive ? props.dangerForegroundColor : props.iconColor,
+          ...(action.destructive ? { attributes: { destructive: true } } : {}),
+        }));
+        const handleQueueMenuAction = (event: string) => {
+          if (event === "edit") props.onEditRemoteQueuedMessage?.(remoteQueuedMessage);
+          if (event === "steer") props.onSteerRemoteQueuedMessage?.(remoteQueuedMessage);
+          if (event === "cancel") props.onCancelRemoteQueuedMessage?.(remoteQueuedMessage);
+        };
+        const bubble = (
+          <View
+            className="min-w-0 gap-2"
+            style={{
+              backgroundColor: FORGE_REMOTE_MESSAGE_CHROME.userBubbleBackgroundColor,
+              borderRadius: FORGE_REMOTE_MESSAGE_CHROME.userBubbleBorderRadius,
+              paddingHorizontal: FORGE_REMOTE_MESSAGE_CHROME.userBubbleHorizontalPadding,
+              paddingTop: FORGE_REMOTE_MESSAGE_CHROME.userBubbleTopPadding,
+              paddingBottom: FORGE_REMOTE_MESSAGE_CHROME.userBubbleBottomPadding,
+              maxWidth: props.userBubbleMaxWidth,
+              ...(hasWideBlock ? { width: props.userBubbleMaxWidth } : null),
+            }}
+          >
+            <UserMessageContent
+              text={message.text}
+              markdownStyles={styles}
+              reviewCommentColors={props.reviewCommentColors}
+              skills={props.skills}
+              onLinkPress={props.onMarkdownLinkPress}
+            />
+          </View>
+        );
+        return (
+          <Animated.View
+            className="items-end"
+            style={{ marginBottom: FORGE_REMOTE_MESSAGE_CHROME.userMessageBottomSpacing }}
+          >
+            <View className="mb-1 flex-row items-center justify-end gap-1 pr-1">
+              <SymbolView
+                name="arrow.turn.up.right"
+                size={12}
+                tintColor={iconSubtleColor}
+                type="monochrome"
+              />
+              <Text className="text-xs font-t3-medium text-foreground-muted">Queued</Text>
+              {menuActions.length > 0 ? (
+                <ControlPillMenu
+                  actions={menuActions}
+                  onPressAction={({ nativeEvent }) => handleQueueMenuAction(nativeEvent.event)}
+                >
+                  <Pressable accessibilityLabel="Queued message actions" hitSlop={8}>
+                    <SymbolView
+                      name="ellipsis"
+                      size={14}
+                      tintColor={iconSubtleColor}
+                      type="monochrome"
+                    />
+                  </Pressable>
+                </ControlPillMenu>
+              ) : null}
+            </View>
+            {menuActions.length > 0 ? (
+              <ControlPillMenu
+                actions={menuActions}
+                shouldOpenOnLongPress
+                onPressAction={({ nativeEvent }) => handleQueueMenuAction(nativeEvent.event)}
+              >
+                <Pressable
+                  accessibilityLabel="Queued message actions"
+                  accessibilityHint="Long press to edit, steer, or cancel this queued message"
+                >
+                  {bubble}
+                </Pressable>
+              </ControlPillMenu>
+            ) : (
+              bubble
+            )}
+          </Animated.View>
+        );
+      }
       return (
         <Animated.View
-          className="mb-5 items-end"
+          className={props.remoteOnly ? "items-end" : "mb-5 items-end"}
+          style={
+            props.remoteOnly
+              ? { marginBottom: FORGE_REMOTE_MESSAGE_CHROME.userMessageBottomSpacing }
+              : undefined
+          }
           {...(enterAnimated ? { entering: FadeInUp.duration(220) } : {})}
         >
           <View
-            className="min-w-0 gap-2 rounded-[20px] px-3.5 py-2.5"
+            className={cn(
+              "min-w-0 gap-2",
+              props.remoteOnly ? null : "rounded-[20px] px-3.5 py-2.5",
+            )}
             style={{
-              backgroundColor: userBubbleColor,
+              backgroundColor: props.remoteOnly
+                ? FORGE_REMOTE_MESSAGE_CHROME.userBubbleBackgroundColor
+                : userBubbleColor,
+              ...(props.remoteOnly
+                ? {
+                    borderRadius: FORGE_REMOTE_MESSAGE_CHROME.userBubbleBorderRadius,
+                    paddingHorizontal: FORGE_REMOTE_MESSAGE_CHROME.userBubbleHorizontalPadding,
+                    paddingTop: FORGE_REMOTE_MESSAGE_CHROME.userBubbleTopPadding,
+                    paddingBottom: FORGE_REMOTE_MESSAGE_CHROME.userBubbleBottomPadding,
+                  }
+                : null),
               maxWidth: props.userBubbleMaxWidth,
               ...(hasReviewCommentContext
                 ? { width: props.reviewCommentBubbleWidth }
@@ -923,20 +1088,22 @@ function renderFeedEntry(
               );
             })}
           </View>
-          <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
-            <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
-              {timestampLabel}
-            </Text>
-            {message.text.trim().length > 0 ? (
-              <CopyTextButton
-                accessibilityLabel="Copy message"
-                text={message.text}
-                tintColor={iconSubtleColor}
-                buttonSize={28}
-                iconSize={13}
-              />
-            ) : null}
-          </View>
+          {showUserMessageMeta(props.remoteOnly) ? (
+            <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
+              <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
+                {timestampLabel}
+              </Text>
+              {message.text.trim().length > 0 ? (
+                <CopyTextButton
+                  accessibilityLabel="Copy message"
+                  text={message.text}
+                  tintColor={iconSubtleColor}
+                  buttonSize={28}
+                  iconSize={13}
+                />
+              ) : null}
+            </View>
+          ) : null}
         </Animated.View>
       );
     }
@@ -947,10 +1114,86 @@ function renderFeedEntry(
       return null;
     }
 
+    if (remoteWorkDisclosure) {
+      const enterAnimated = isFreshTimestamp(message.createdAt);
+      const canExpand = remoteWorkDisclosure.hiddenEntryIds.size > 0;
+      const expanded = props.expandedRemoteWorkDisclosureIds.has(
+        remoteWorkDisclosure.markerMessageId,
+      );
+      const content = (
+        <>
+          <Text
+            selectable={!canExpand}
+            className="min-w-0 flex-1"
+            style={{
+              color: styles.nativeTextStyle.color,
+              fontSize: FORGE_REMOTE_MESSAGE_CHROME.workedDisclosureFontSize,
+              lineHeight: FORGE_REMOTE_MESSAGE_CHROME.workedDisclosureLineHeight,
+              opacity: 0.8,
+            }}
+          >
+            {remoteWorkDisclosure.label}
+          </Text>
+          {canExpand ? (
+            <View style={{ opacity: 0.8 }}>
+              <SymbolView
+                name={expanded ? "chevron.down" : "chevron.right"}
+                size={FORGE_REMOTE_MESSAGE_CHROME.workedDisclosureChevronSize}
+                tintColor={styles.nativeTextStyle.color}
+                type="monochrome"
+              />
+            </View>
+          ) : null}
+        </>
+      );
+      return (
+        <Animated.View
+          style={{ marginBottom: FORGE_REMOTE_MESSAGE_CHROME.workedDisclosureBottomSpacing }}
+          {...(enterAnimated ? { entering: FadeIn.duration(220) } : {})}
+        >
+          {canExpand ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ expanded }}
+              accessibilityLabel={`${remoteWorkDisclosure.label}. ${expanded ? "Hide" : "Show"} work details`}
+              className="flex-row items-center gap-1.5 border-b border-neutral-200/80 dark:border-white/[0.08]"
+              hitSlop={4}
+              onPress={() =>
+                props.onToggleRemoteWorkDisclosure(remoteWorkDisclosure.markerMessageId)
+              }
+              style={{
+                minHeight: FORGE_REMOTE_MESSAGE_CHROME.workedDisclosureMinHeight,
+                paddingHorizontal: FORGE_REMOTE_MESSAGE_CHROME.workedDisclosureHorizontalPadding,
+              }}
+            >
+              {content}
+            </Pressable>
+          ) : (
+            <View
+              className="flex-row items-center border-b border-neutral-200/80 dark:border-white/[0.08]"
+              style={{
+                minHeight: FORGE_REMOTE_MESSAGE_CHROME.workedDisclosureMinHeight,
+                paddingHorizontal: FORGE_REMOTE_MESSAGE_CHROME.workedDisclosureHorizontalPadding,
+              }}
+            >
+              {content}
+            </View>
+          )}
+        </Animated.View>
+      );
+    }
+
     const enterAnimated = isFreshTimestamp(message.createdAt);
     return (
       <Animated.View
-        className={cn(showAssistantMeta ? "mb-5 px-1" : "mb-2 px-1")}
+        className={
+          props.remoteOnly ? undefined : cn(showRetainedAssistantMeta ? "mb-5 px-1" : "mb-2 px-1")
+        }
+        style={
+          props.remoteOnly
+            ? { marginBottom: FORGE_REMOTE_MESSAGE_CHROME.assistantMessageBottomSpacing }
+            : undefined
+        }
         {...(enterAnimated ? { entering: FadeIn.duration(220) } : {})}
       >
         {message.text.trim().length > 0 ? (
@@ -983,7 +1226,26 @@ function renderFeedEntry(
             />
           );
         })}
-        {showAssistantMeta ? (
+        {showRemoteAssistantCopy ? (
+          <View
+            className="flex-row items-center"
+            style={{
+              marginTop: FORGE_REMOTE_MESSAGE_CHROME.assistantResponseActionTopSpacing,
+              marginLeft: FORGE_REMOTE_MESSAGE_CHROME.assistantResponseActionHorizontalOffset,
+            }}
+          >
+            <CopyTextButton
+              accessibilityLabel="Copy response"
+              text={message.text}
+              tintColor={props.iconMutedColor}
+              copiedTintColor={props.iconColor}
+              copyIconName={FORGE_REMOTE_MESSAGE_CHROME.assistantResponseActionIconName}
+              buttonSize={FORGE_REMOTE_MESSAGE_CHROME.assistantResponseActionButtonSize}
+              iconSize={FORGE_REMOTE_MESSAGE_CHROME.assistantResponseActionIconSize}
+              hitSlop={FORGE_REMOTE_MESSAGE_CHROME.assistantResponseActionHitSlop}
+            />
+          </View>
+        ) : showRetainedAssistantMeta ? (
           <View className="mt-1 flex-row items-center gap-1">
             <CopyTextButton
               accessibilityLabel="Copy message"
@@ -1013,7 +1275,10 @@ function renderFeedEntry(
   );
 }
 
-const WorkingTimelineRow = memo(function WorkingTimelineRow(props: { readonly startedAt: string }) {
+const WorkingTimelineRow = memo(function WorkingTimelineRow(props: {
+  readonly remoteOnly: boolean;
+  readonly startedAt: string;
+}) {
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
@@ -1026,7 +1291,18 @@ const WorkingTimelineRow = memo(function WorkingTimelineRow(props: { readonly st
   const durationLabel = formatElapsed(props.startedAt, new Date(nowMs).toISOString()) ?? "0s";
 
   return (
-    <View className="mb-4 flex-row items-center gap-2 px-1.5 py-1">
+    <View
+      className={cn("flex-row items-center gap-2", props.remoteOnly ? null : "mb-4 px-1.5 py-1")}
+      style={
+        props.remoteOnly
+          ? {
+              marginBottom: FORGE_REMOTE_MESSAGE_CHROME.workingRowBottomSpacing,
+              paddingHorizontal: FORGE_REMOTE_MESSAGE_CHROME.workingRowHorizontalPadding,
+              paddingVertical: FORGE_REMOTE_MESSAGE_CHROME.workingRowVerticalPadding,
+            }
+          : undefined
+      }
+    >
       <View className="flex-row items-center gap-1">
         <View className="h-1 w-1 rounded-full bg-neutral-400 dark:bg-neutral-500" />
         <View className="h-1 w-1 rounded-full bg-neutral-400/80 dark:bg-neutral-500/80" />
@@ -1354,13 +1630,21 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     readonly expandedWorkGroups: Record<string, boolean>;
     readonly expandedWorkRows: Record<string, boolean>;
     readonly expandedTurnIds: ReadonlySet<TurnId>;
+    readonly expandedRemoteWorkDisclosureIds: ReadonlySet<string>;
   }>({
     copiedRowId: null,
     expandedWorkGroups: {},
     expandedWorkRows: {},
     expandedTurnIds: new Set(),
+    expandedRemoteWorkDisclosureIds: new Set(),
   });
-  const { copiedRowId, expandedWorkGroups, expandedWorkRows, expandedTurnIds } = interactionState;
+  const {
+    copiedRowId,
+    expandedWorkGroups,
+    expandedWorkRows,
+    expandedTurnIds,
+    expandedRemoteWorkDisclosureIds,
+  } = interactionState;
   const [expandedImage, setExpandedImage] = useState<{
     uri: string;
     headers?: Record<string, string>;
@@ -1391,21 +1675,21 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     ? navigationHeaderHeight || insets.top + 44
     : topContentInset;
 
+  const dangerForegroundColor = useThemeColor("--color-danger-foreground");
+  const iconColor = useThemeColor("--color-icon");
+  const iconMutedColor = useThemeColor("--color-icon-muted");
   const iconSubtleColor = useThemeColor("--color-icon-subtle");
   const userBubbleColor = useThemeColor("--color-user-bubble");
-  const onMarkdownLinkPress = useCallback(
-    (href: string) => {
-      const presentation = resolveMarkdownLinkPresentation(href);
-      if (presentation.kind === "file") {
-        return;
-      }
+  const onMarkdownLinkPress = useCallback((href: string) => {
+    const presentation = resolveMarkdownLinkPresentation(href);
+    if (presentation.kind === "file") {
+      return;
+    }
 
-      if (presentation.href) {
-        void Linking.openURL(presentation.href);
-      }
-    },
-    [],
-  );
+    if (presentation.href) {
+      void Linking.openURL(presentation.href);
+    }
+  }, []);
   const markdownStyles = useMarkdownStyles(onMarkdownLinkPress);
   const reviewCommentColors = useReviewCommentColors();
   // LegendList does not invalidate visible rows when only the renderItem closure changes.
@@ -1416,6 +1700,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       expandedWorkRows,
       iconSubtleColor,
       markdownStyles,
+      remoteResponseMessageIds: props.remoteResponseMessageIds,
+      remoteWorkDisclosures: props.remoteWorkDisclosures,
+      remoteQueuedMessages: props.remoteQueuedMessages,
+      expandedRemoteWorkDisclosureIds,
       reviewCommentColors,
       userBubbleColor,
       viewportWidth,
@@ -1425,6 +1713,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       expandedWorkRows,
       iconSubtleColor,
       markdownStyles,
+      props.remoteResponseMessageIds,
+      props.remoteWorkDisclosures,
+      props.remoteQueuedMessages,
+      expandedRemoteWorkDisclosureIds,
       reviewCommentColors,
       userBubbleColor,
       viewportWidth,
@@ -1555,21 +1847,73 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     }
     return ids;
   }, [expandedWorkGroups]);
+  const remoteWorkDisclosures = props.remoteWorkDisclosures ?? EMPTY_WORK_DISCLOSURES;
+  const remoteQueuedMessages = props.remoteQueuedMessages ?? EMPTY_QUEUED_MESSAGES;
+  const remoteWorkDisclosureByMessageId = useMemo(
+    () =>
+      new Map(remoteWorkDisclosures.map((disclosure) => [disclosure.markerMessageId, disclosure])),
+    [remoteWorkDisclosures],
+  );
+  const remoteQueuedMessageByMessageId = useMemo(
+    () => new Map(remoteQueuedMessages.map((message) => [message.messageId, message])),
+    [remoteQueuedMessages],
+  );
+  const remoteQueueFeedEntries = useMemo<ReadonlyArray<ThreadFeedEntry>>(
+    () =>
+      remoteQueuedMessages.map((queuedMessage) => {
+        const id = MessageId.make(queuedMessage.messageId);
+        return {
+          type: "message",
+          id,
+          createdAt: REMOTE_QUEUE_CREATED_AT,
+          message: {
+            id,
+            role: "user",
+            text: queuedMessage.text,
+            attachments: [],
+            turnId: null,
+            streaming: false,
+            createdAt: REMOTE_QUEUE_CREATED_AT,
+            updatedAt: REMOTE_QUEUE_CREATED_AT,
+          },
+        };
+      }),
+    [remoteQueuedMessages],
+  );
+  const feedWithRemoteQueue = useMemo(
+    () =>
+      props.remoteOnly && remoteQueueFeedEntries.length > 0
+        ? [...props.feed, ...remoteQueueFeedEntries]
+        : props.feed,
+    [props.feed, props.remoteOnly, remoteQueueFeedEntries],
+  );
+  const sourceFeed = useMemo(
+    () =>
+      props.remoteOnly
+        ? presentRemoteWorkEntries(
+            feedWithRemoteQueue,
+            remoteWorkDisclosures,
+            expandedRemoteWorkDisclosureIds,
+          )
+        : feedWithRemoteQueue,
+    [expandedRemoteWorkDisclosureIds, feedWithRemoteQueue, props.remoteOnly, remoteWorkDisclosures],
+  );
   const presentedFeed = useMemo(
     () =>
       deriveThreadFeedPresentation(
-        props.feed,
+        sourceFeed,
         props.latestTurn,
         expandedTurnIds,
         expandedWorkGroupIds,
-        props.activeWorkStartedAt,
+        props.remoteOnly ? null : props.activeWorkStartedAt,
       ),
     [
       expandedTurnIds,
       expandedWorkGroupIds,
       props.activeWorkStartedAt,
-      props.feed,
+      props.remoteOnly,
       props.latestTurn,
+      sourceFeed,
     ],
   );
 
@@ -1580,7 +1924,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // initial scroll-to-end computes with a zero end inset and rests one
   // composer-height short of the end. Layout effect: it must land before the
   // list's first positioning tick or the one-shot initial scroll misses it.
-  const listMountKey = `${feedThreadKey}:${props.feed.length === 0 ? "empty" : "filled"}`;
+  const listMountKey = `${feedThreadKey}:${sourceFeed.length === 0 ? "empty" : "filled"}`;
   useLayoutEffect(() => {
     const bottom = props.contentInsetEndAdjustment.value;
     if (bottom > 0) {
@@ -1607,6 +1951,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     }
     return new Set(terminalIdsByTurn.values());
   }, [props.feed]);
+  const remoteResponseMessageIds = props.remoteResponseMessageIds ?? EMPTY_MESSAGE_IDS;
   const unsettledTurnId =
     props.latestTurn &&
     (props.latestTurn.completedAt === null || props.latestTurn.state === "running")
@@ -1747,6 +2092,22 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     [suspendEndScrollMaintenanceForDisclosure],
   );
 
+  const onToggleRemoteWorkDisclosure = useCallback(
+    (markerMessageId: string) => {
+      suspendEndScrollMaintenanceForDisclosure(markerMessageId);
+      setInteractionState((current) => {
+        const next = new Set(current.expandedRemoteWorkDisclosureIds);
+        if (next.has(markerMessageId)) {
+          next.delete(markerMessageId);
+        } else {
+          next.add(markerMessageId);
+        }
+        return { ...current, expandedRemoteWorkDisclosureIds: next };
+      });
+    },
+    [suspendEndScrollMaintenanceForDisclosure],
+  );
+
   const onPressImage = useCallback((uri: string, headers?: Record<string, string>) => {
     setExpandedImage({ uri, headers });
   }, []);
@@ -1758,18 +2119,30 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // exact; message rows stay undefined and use LegendList's per-type running
   // average once one of their type has been measured. Text-driven heights
   // follow the configurable base font size via scaledTypographyLineHeight.
-  const workingRowHeight =
-    WORKING_ROW_VERTICAL_EXTRAS +
-    scaledTypographyLineHeight(MOBILE_TYPOGRAPHY.label, appearance.baseFontSize);
+  const workingRowTextLineHeight = scaledTypographyLineHeight(
+    MOBILE_TYPOGRAPHY.label,
+    appearance.baseFontSize,
+  );
   const getFixedItemSize = useCallback(
     (entry: ThreadFeedEntry) => {
       switch (entry.type) {
         case "turn-fold":
-          return TURN_FOLD_HEIGHT;
+          return threadFeedFixedRowHeight({
+            kind: "turn-fold",
+            remoteOnly: props.remoteOnly === true,
+            textLineHeight: scaledTypographyLineHeight(
+              MOBILE_TYPOGRAPHY.body,
+              appearance.baseFontSize,
+            ),
+          });
         case "work-toggle":
           return WORK_GROUP_TOGGLE_HEIGHT;
         case "working":
-          return workingRowHeight;
+          return threadFeedFixedRowHeight({
+            kind: "working",
+            remoteOnly: props.remoteOnly === true,
+            textLineHeight: workingRowTextLineHeight,
+          });
         case "activity-group":
           // Expanded rows append a variable detail block — fall back to
           // measurement for those groups.
@@ -1780,7 +2153,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
           return undefined;
       }
     },
-    [expandedWorkRows, workingRowHeight, appearance.baseFontSize],
+    [expandedWorkRows, workingRowTextLineHeight, appearance.baseFontSize, props.remoteOnly],
   );
 
   const renderItem = useCallback(
@@ -1790,13 +2163,25 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
         copiedRowId,
         expandedWorkRows,
         terminalAssistantMessageIds,
+        remoteResponseMessageIds,
+        remoteWorkDisclosureByMessageId,
+        remoteQueuedMessageByMessageId,
+        expandedRemoteWorkDisclosureIds,
+        remoteOnly: props.remoteOnly === true,
         unsettledTurnId,
         onCopyWorkRow,
         onToggleWorkGroup,
         onToggleWorkRow,
         onToggleTurnFold,
+        onToggleRemoteWorkDisclosure,
+        onEditRemoteQueuedMessage: props.onEditRemoteQueuedMessage,
+        onSteerRemoteQueuedMessage: props.onSteerRemoteQueuedMessage,
+        onCancelRemoteQueuedMessage: props.onCancelRemoteQueuedMessage,
         onPressImage,
         onMarkdownLinkPress,
+        dangerForegroundColor,
+        iconColor,
+        iconMutedColor,
         iconSubtleColor,
         userBubbleColor,
         markdownStyles,
@@ -1809,7 +2194,14 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       copiedRowId,
       expandedWorkRows,
       terminalAssistantMessageIds,
+      remoteResponseMessageIds,
+      remoteWorkDisclosureByMessageId,
+      remoteQueuedMessageByMessageId,
+      expandedRemoteWorkDisclosureIds,
       unsettledTurnId,
+      dangerForegroundColor,
+      iconColor,
+      iconMutedColor,
       iconSubtleColor,
       userBubbleColor,
       markdownStyles,
@@ -1820,9 +2212,14 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       onMarkdownLinkPress,
       onPressImage,
       onToggleTurnFold,
+      onToggleRemoteWorkDisclosure,
       onToggleWorkGroup,
       onToggleWorkRow,
       props.environmentId,
+      props.onEditRemoteQueuedMessage,
+      props.onSteerRemoteQueuedMessage,
+      props.onCancelRemoteQueuedMessage,
+      props.remoteOnly,
       props.skills,
     ],
   );
@@ -1972,7 +2369,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             }}
           />
         </View>
-        {props.feed.length === 0 &&
+        {presentedFeed.length === 0 &&
         props.activeWorkStartedAt === null &&
         props.contentPresentation.kind === "ready" ? (
           <View pointerEvents="none" style={StyleSheet.absoluteFill}>

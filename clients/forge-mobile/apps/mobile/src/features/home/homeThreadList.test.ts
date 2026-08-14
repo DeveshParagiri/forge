@@ -6,6 +6,7 @@ import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-searc
 import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
+import { scopedProjectKey } from "../../lib/scopedEntities";
 import {
   buildHomeProjectScopes,
   buildHomeThreadGroups,
@@ -72,6 +73,62 @@ function buildGroups(
 }
 
 describe("buildHomeThreadGroups", () => {
+  it("groups Forge pairings by an explicit host-and-directory identity", () => {
+    const firstEnvironmentId = EnvironmentId.make("pairing:first");
+    const secondEnvironmentId = EnvironmentId.make("pairing:second");
+    const firstProject = makeProject({
+      environmentId: firstEnvironmentId,
+      id: ProjectId.make("first-project"),
+      title: "forge",
+      workspaceRoot: "/Users/dev/forge",
+    });
+    const secondProject = makeProject({
+      environmentId: secondEnvironmentId,
+      id: ProjectId.make("second-project"),
+      title: "forge",
+      workspaceRoot: "/Users/dev/forge",
+    });
+    const projectGroupKeyByProjectRef = new Map([
+      [
+        scopedProjectKey(firstEnvironmentId, firstProject.id),
+        "remote-project:mac:/Users/dev/forge",
+      ],
+      [
+        scopedProjectKey(secondEnvironmentId, secondProject.id),
+        "remote-project:mac:/Users/dev/forge",
+      ],
+    ]);
+
+    const groups = buildGroups(
+      [firstProject, secondProject],
+      [
+        makeThread({
+          environmentId: firstEnvironmentId,
+          id: ThreadId.make("first-thread"),
+          projectId: firstProject.id,
+          title: "First session",
+        }),
+        makeThread({
+          environmentId: secondEnvironmentId,
+          id: ThreadId.make("second-thread"),
+          projectId: secondProject.id,
+          title: "Second session",
+          updatedAt: "2026-06-02T00:00:00.000Z",
+        }),
+      ],
+      { projectGroupKeyByProjectRef },
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.key).toBe("remote-project:mac:/Users/dev/forge");
+    expect(groups[0]?.threads.map((thread) => thread.title)).toEqual([
+      "Second session",
+      "First session",
+    ]);
+    expect(groups[0]?.projects).toHaveLength(2);
+    expect(groups[0]?.newThreadTarget).toBe(secondProject);
+  });
+
   it("builds one v2 scope for the same repository across environments", () => {
     const localEnvironmentId = EnvironmentId.make("environment-local");
     const remoteEnvironmentId = EnvironmentId.make("environment-remote");

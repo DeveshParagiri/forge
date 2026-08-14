@@ -1,9 +1,9 @@
 # T3 Code b73232bdd31e83914a8a943960c7dc4b6390b39b to Forge Mobile adaptation patch
 diff --git aa/apps/mobile/app.config.ts bb/apps/mobile/app.config.ts
-index 3813a10..ad7f283 100644
+index 3813a10..16a2ed1 100644
 --- aa/apps/mobile/app.config.ts
 +++ bb/apps/mobile/app.config.ts
-@@ -1,375 +1,95 @@
+@@ -1,375 +1,96 @@
  import type { ExpoConfig } from "expo/config";
  
 -import { BRAND_ASSET_PATHS } from "../../scripts/lib/brand-assets.ts";
@@ -240,8 +240,9 @@ index 3813a10..ad7f283 100644
 -      backgroundColor: variant.assets.androidAdaptiveBackgroundColor,
 -      foregroundImage: variant.assets.androidAdaptiveForeground,
 -      monochromeImage: variant.assets.androidMonochromeIcon,
-+      foregroundImage: "./assets/forge/icon.png",
-+      backgroundColor: "#000000",
++      foregroundImage: "./assets/forge/adaptive-icon-foreground.png",
++      monochromeImage: "./assets/forge/adaptive-icon-monochrome.png",
++      backgroundColor: "#000007",
      },
 -    // Opts into OnBackInvokedCallback-based back dispatch (Android 13+).
 -    // JS back handling survives it via react-native's Android 16 shim plus
@@ -337,7 +338,7 @@ index 3813a10..ad7f283 100644
        "expo-splash-screen",
        {
 -        image: variant.assets.splashIcon,
-+        image: "./assets/forge/icon.png",
++        image: "./assets/forge/mark.png",
          resizeMode: "contain",
 -        backgroundColor: "#ffffff",
 -        imageWidth: 220,
@@ -346,7 +347,7 @@ index 3813a10..ad7f283 100644
          dark: {
 -          image: variant.assets.splashIcon,
 -          backgroundColor: "#0a0a0a",
-+          image: "./assets/forge/icon.png",
++          image: "./assets/forge/mark.png",
 +          backgroundColor: "#000000",
          },
        },
@@ -515,8 +516,121 @@ index 9b887f5..47acc98 100644
  
  // Required for react-native-screens' iOS FormSheet sizing fix when a nested
  // native stack is rendered inside a non-fitToContents formSheet.
+diff --git aa/apps/mobile/modules/t3-composer-editor/android/src/main/java/expo/modules/t3composereditor/T3ComposerEditorModule.kt bb/apps/mobile/modules/t3-composer-editor/android/src/main/java/expo/modules/t3composereditor/T3ComposerEditorModule.kt
+index e11181e..01a44e9 100644
+--- aa/apps/mobile/modules/t3-composer-editor/android/src/main/java/expo/modules/t3composereditor/T3ComposerEditorModule.kt
++++ bb/apps/mobile/modules/t3-composer-editor/android/src/main/java/expo/modules/t3composereditor/T3ComposerEditorModule.kt
+@@ -29,6 +29,11 @@ class T3ComposerEditorModule : Module() {
+       Prop("contentInsetVertical") { view: T3ComposerEditorView, contentInsetVertical: Double ->
+         view.setContentInsetVertical(contentInsetVertical.toInt())
+       }
++      Prop("contentInsetHorizontal") {
++        view: T3ComposerEditorView,
++        contentInsetHorizontal: Double ->
++        view.setContentInsetHorizontal(contentInsetHorizontal.toInt())
++      }
+ 
+       Prop("singleLineCentered") { view: T3ComposerEditorView, singleLineCentered: Boolean ->
+         view.setSingleLineCentered(singleLineCentered)
+diff --git aa/apps/mobile/modules/t3-composer-editor/android/src/main/java/expo/modules/t3composereditor/T3ComposerEditorView.kt bb/apps/mobile/modules/t3-composer-editor/android/src/main/java/expo/modules/t3composereditor/T3ComposerEditorView.kt
+index e13c0a5..94ffe8c 100644
+--- aa/apps/mobile/modules/t3-composer-editor/android/src/main/java/expo/modules/t3composereditor/T3ComposerEditorView.kt
++++ bb/apps/mobile/modules/t3-composer-editor/android/src/main/java/expo/modules/t3composereditor/T3ComposerEditorView.kt
+@@ -36,6 +36,7 @@ class T3ComposerEditorView(context: Context, appContext: AppContext) : ExpoView(
+   private var applyingNativeValue = false
+   private var desiredLineHeightPx = 0
+   private var lastContentHeight = 0
++  private var contentInsetHorizontal = 0
+   private var contentInsetVertical = 0
+   private var tokensJson = "[]"
+   private var tokens: List<ComposerToken> = emptyList()
+@@ -201,10 +202,25 @@ class T3ComposerEditorView(context: Context, appContext: AppContext) : ExpoView(
+   fun setContentInsetVertical(contentInsetVertical: Int) {
+     this.contentInsetVertical =
+       max(0, (contentInsetVertical * resources.displayMetrics.density).toInt())
+-    editor.setPadding(0, this.contentInsetVertical, 0, this.contentInsetVertical)
++    applyContentInsets()
+     emitContentSizeIfNeeded()
+   }
+ 
++  fun setContentInsetHorizontal(contentInsetHorizontal: Int) {
++    this.contentInsetHorizontal =
++      max(0, (contentInsetHorizontal * resources.displayMetrics.density).toInt())
++    applyContentInsets()
++  }
++
++  private fun applyContentInsets() {
++    editor.setPadding(
++      contentInsetHorizontal,
++      contentInsetVertical,
++      contentInsetHorizontal,
++      contentInsetVertical,
++    )
++  }
++
+   fun setEditable(editable: Boolean) {
+     editor.isEnabled = editable
+     editor.isFocusable = editable
+diff --git aa/apps/mobile/modules/t3-composer-editor/ios/T3ComposerEditorModule.swift bb/apps/mobile/modules/t3-composer-editor/ios/T3ComposerEditorModule.swift
+index a56619b..8b5977d 100644
+--- aa/apps/mobile/modules/t3-composer-editor/ios/T3ComposerEditorModule.swift
++++ bb/apps/mobile/modules/t3-composer-editor/ios/T3ComposerEditorModule.swift
+@@ -23,6 +23,10 @@ public class T3ComposerEditorModule: Module {
+       Prop("lineHeight") { (view: T3ComposerEditorView, lineHeight: Double) in
+         view.setLineHeight(CGFloat(lineHeight))
+       }
++      Prop("contentInsetHorizontal") {
++        (view: T3ComposerEditorView, contentInsetHorizontal: Double) in
++        view.setContentInsetHorizontal(CGFloat(contentInsetHorizontal))
++      }
+       Prop("contentInsetVertical") { (view: T3ComposerEditorView, contentInsetVertical: Double) in
+         view.setContentInsetVertical(CGFloat(contentInsetVertical))
+       }
+diff --git aa/apps/mobile/modules/t3-composer-editor/ios/T3ComposerEditorView.swift bb/apps/mobile/modules/t3-composer-editor/ios/T3ComposerEditorView.swift
+index ec5b54a..edd3e78 100644
+--- aa/apps/mobile/modules/t3-composer-editor/ios/T3ComposerEditorView.swift
++++ bb/apps/mobile/modules/t3-composer-editor/ios/T3ComposerEditorView.swift
+@@ -303,6 +303,7 @@ public final class T3ComposerEditorView: ExpoView, UITextViewDelegate, UITextDro
+   private var fontFamily = "DMSans-Regular"
+   private var fontSize: CGFloat = 14
+   private var lineHeight: CGFloat = 20
++  private var contentInsetHorizontal: CGFloat = 0
+   private var contentInsetVertical: CGFloat = 0
+   private var shouldAutoFocus = false
+   private var didAutoFocus = false
+@@ -436,17 +437,26 @@ public final class T3ComposerEditorView: ExpoView, UITextViewDelegate, UITextDro
+     applyControlledDocument(force: true)
+   }
+ 
+-  func setContentInsetVertical(_ contentInsetVertical: CGFloat) {
+-    self.contentInsetVertical = contentInsetVertical
++  private func applyContentInsets() {
+     textView.textContainerInset = UIEdgeInsets(
+       top: contentInsetVertical,
+-      left: 0,
++      left: contentInsetHorizontal,
+       bottom: contentInsetVertical,
+-      right: 0
++      right: contentInsetHorizontal
+     )
+     setNeedsLayout()
+   }
+ 
++  func setContentInsetHorizontal(_ contentInsetHorizontal: CGFloat) {
++    self.contentInsetHorizontal = max(0, contentInsetHorizontal)
++    applyContentInsets()
++  }
++
++  func setContentInsetVertical(_ contentInsetVertical: CGFloat) {
++    self.contentInsetVertical = contentInsetVertical
++    applyContentInsets()
++  }
++
+   func setEditable(_ editable: Bool) {
+     textView.isEditable = editable
+   }
 diff --git aa/apps/mobile/package.json bb/apps/mobile/package.json
-index de53a37..5a71d85 100644
+index de53a37..88baf41 100644
 --- aa/apps/mobile/package.json
 +++ bb/apps/mobile/package.json
 @@ -1,52 +1,20 @@
@@ -568,7 +682,7 @@ index de53a37..5a71d85 100644
 +    "ios": "EXPO_NO_GIT_STATUS=1 expo run:ios",
 +    "typecheck": "tsc -p tsconfig.forge.json --noEmit",
 +    "prebuild:ios": "EXPO_NO_GIT_STATUS=1 expo prebuild --clean --platform ios",
-+    "test": "vp test run src/forge"
++    "test": "vp test run src/forge src/features/home/remoteHomePresentation.test.ts src/features/threads/remoteComposerLayout.test.ts src/features/threads/remoteComposerPresentation.test.ts src/features/threads/remoteNewSessionPresentation.test.ts src/features/threads/remoteQueuePresentation.test.ts src/features/threads/threadMessageChrome.test.ts src/features/threads/thread-settings-menu.test.ts"
    },
    "dependencies": {
      "@callstack/liquid-glass": "^0.7.1",
@@ -774,6 +888,85 @@ index 0eb865c..0a896ad 100644
 -vp run eas:android:preview
 -```
 +This package contains the Expo and React Native app. Its active entry is [`src/forge/ForgeApp.tsx`](src/forge/ForgeApp.tsx). Run package checks from the workspace root with `pnpm typecheck` and `pnpm test`. Regenerate the ignored native iOS project with `pnpm prebuild:ios`; keep persistent native changes in [`app.config.ts`](app.config.ts) or [`plugins`](plugins).
+diff --git aa/apps/mobile/src/components/AppSymbol.tsx bb/apps/mobile/src/components/AppSymbol.tsx
+index 89dc0cc..4f66b6e 100644
+--- aa/apps/mobile/src/components/AppSymbol.tsx
++++ bb/apps/mobile/src/components/AppSymbol.tsx
+@@ -24,6 +24,7 @@ import {
+   IconCircleCheck,
+   IconCircleXFilled,
+   IconClock,
++  IconCornerDownRight,
+   IconCopy,
+   IconDeviceDesktop,
+   IconDots,
+@@ -85,6 +86,7 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
+   "arrow.right.circle": IconArrowRightCircle,
+   "arrow.triangle.branch": IconGitBranch,
+   "arrow.triangle.pull": IconGitPullRequest,
++  "arrow.turn.down.right": IconCornerDownRight,
+   "arrow.turn.left.up": IconArrowBackUp,
+   "arrow.up": IconArrowUp,
+   "arrow.up.circle": IconArrowUpCircle,
+@@ -95,9 +97,11 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
+   archivebox: IconArchive,
+   "archivebox.fill": IconArchive,
+   "bell.badge": IconBellRinging,
++  "bolt.fill": IconBolt,
+   "bolt.circle": IconBolt,
+   "bolt.horizontal.circle": IconBolt,
+   camera: IconCamera,
++  "chart.bar": IconChartBar,
+   "chart.bar.xaxis": IconChartBar,
+   checkmark: IconCheck,
+   "checkmark.circle": IconCircleCheck,
+@@ -124,6 +128,7 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
+   "line.3.horizontal.decrease.circle.fill": IconFilter,
+   magnifyingglass: IconSearch,
+   paintbrush: IconPalette,
++  pencil: IconEdit,
+   "person.crop.circle": IconUserCircle,
+   pin: IconPin,
+   "pin.slash": IconPinnedOff,
+diff --git aa/apps/mobile/src/components/CopyTextButton.tsx bb/apps/mobile/src/components/CopyTextButton.tsx
+index 7f4e060..10cff0e 100644
+--- aa/apps/mobile/src/components/CopyTextButton.tsx
++++ bb/apps/mobile/src/components/CopyTextButton.tsx
+@@ -1,4 +1,4 @@
+-import { SymbolView } from "../components/AppSymbol";
++import { type AppSymbolName, SymbolView } from "../components/AppSymbol";
+ import { memo, useEffect, useRef, useState } from "react";
+ import { Pressable, type ColorValue } from "react-native";
+ 
+@@ -13,8 +13,10 @@ export const CopyTextButton = memo(function CopyTextButton(props: {
+   readonly copiedTintColor?: ColorValue;
+   readonly backgroundColor?: ColorValue;
+   readonly borderColor?: ColorValue;
++  readonly copyIconName?: AppSymbolName;
+   readonly iconSize?: number;
+   readonly buttonSize?: number;
++  readonly hitSlop?: number;
+ }) {
+   const [copied, setCopied] = useState(false);
+   const resetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+@@ -33,7 +35,7 @@ export const CopyTextButton = memo(function CopyTextButton(props: {
+       accessibilityRole="button"
+       accessibilityLabel={copied ? "Copied" : props.accessibilityLabel}
+       disabled={props.text.length === 0}
+-      hitSlop={8}
++      hitSlop={props.hitSlop ?? 8}
+       onPress={() => {
+         copyTextWithHaptic(props.text);
+         setCopied(true);
+@@ -61,7 +63,7 @@ export const CopyTextButton = memo(function CopyTextButton(props: {
+         name={
+           copied
+             ? { ios: "checkmark", android: "check" }
+-            : { ios: "doc.on.doc", android: "content_copy" }
++            : (props.copyIconName ?? { ios: "doc.on.doc", android: "content_copy" })
+         }
+         size={props.iconSize ?? 13}
+         tintColor={copied ? (props.copiedTintColor ?? props.tintColor) : props.tintColor}
 diff --git aa/apps/mobile/src/components/ProjectFavicon.tsx bb/apps/mobile/src/components/ProjectFavicon.tsx
 index c4297f2..3b68213 100644
 --- aa/apps/mobile/src/components/ProjectFavicon.tsx
@@ -927,10 +1120,10 @@ index c4297f2..3b68213 100644
    );
  }
 diff --git aa/apps/mobile/src/features/home/HomeScreen.tsx bb/apps/mobile/src/features/home/HomeScreen.tsx
-index 6c36478..1b1d7ec 100644
+index 6c36478..c71c93b 100644
 --- aa/apps/mobile/src/features/home/HomeScreen.tsx
 +++ bb/apps/mobile/src/features/home/HomeScreen.tsx
-@@ -14,11 +14,10 @@ import {
+@@ -14,13 +14,20 @@ import {
  import { sortPinnedThreadsByOrderKey } from "@t3tools/client-runtime/state/thread-sort";
  import type {
    EnvironmentId,
@@ -941,9 +1134,20 @@ index 6c36478..1b1d7ec 100644
 -import { useAtomSet, useAtomValue } from "@effect/atom-react";
 -import { AsyncResult } from "effect/unstable/reactivity";
  import { useCallback, useEffect, useMemo, useRef, useState } from "react";
- import { ActivityIndicator, FlatList, Platform, Pressable, View } from "react-native";
+-import { ActivityIndicator, FlatList, Platform, Pressable, View } from "react-native";
++import {
++  AccessibilityInfo,
++  ActivityIndicator,
++  FlatList,
++  LayoutAnimation,
++  Platform,
++  Pressable,
++  View,
++} from "react-native";
  import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
-@@ -31,10 +30,6 @@ import type { WorkspaceEnvironment, WorkspaceState } from "../../state/workspace
+ import { useSafeAreaInsets } from "react-native-safe-area-context";
+ import { useThemeColor } from "../../lib/useThemeColor";
+@@ -31,10 +38,6 @@ import type { WorkspaceEnvironment, WorkspaceState } from "../../state/workspace
  import type { SavedRemoteConnection } from "../../lib/connection";
  import { scopedProjectKey } from "../../lib/scopedEntities";
  import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
@@ -954,24 +1158,65 @@ index 6c36478..1b1d7ec 100644
  import type { PendingNewTask } from "../../state/use-pending-new-tasks";
  import {
    PendingTaskListRow,
-@@ -72,6 +67,7 @@ import {
+@@ -72,6 +75,14 @@ import {
    type HomeProjectSortOrder,
  } from "./homeThreadList";
  import { SwipeableScrollGateProvider, useSwipeableScrollGate } from "./thread-swipe-actions";
-+import { remoteHomeEmptyState } from "./remoteHomePresentation";
++import {
++  REMOTE_HOME_DISCLOSURE_DURATION_MS,
++  readRemoteHomeGroupDisplayStates,
++  remoteHomeEmptyState,
++  remoteHomeNewSessionActionPresentation,
++  shouldAnimateRemoteHomeGroupAction,
++  writeRemoteHomeGroupDisplayState,
++} from "./remoteHomePresentation";
  
  /* ─── Types ──────────────────────────────────────────────────────────── */
  
-@@ -119,6 +115,8 @@ interface HomeScreenProps {
+@@ -90,6 +101,8 @@ interface HomeScreenProps {
+   readonly projectSortOrder: HomeProjectSortOrder;
+   readonly threadSortOrder: SidebarThreadSortOrder;
+   readonly projectGroupingMode: SidebarProjectGroupingMode;
++  /** Remote pairing projects that should share one collapsible directory row. */
++  readonly projectGroupKeyByProjectRef?: ReadonlyMap<string, string>;
+   readonly onSearchQueryChange: (query: string) => void;
+   readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
+   readonly onProjectChange: (projectKey: string | null) => void;
+@@ -116,15 +129,33 @@ interface HomeScreenProps {
+     direction: "up" | "down",
+   ) => Promise<boolean>;
+   readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => Promise<boolean>;
++  /** Local Forge alias; remote sessions do not expose a server-side rename command. */
++  readonly onRenameThread?: (thread: EnvironmentThreadShell) => void;
    readonly onSelectPendingTask: (pendingTask: PendingNewTask) => void;
    readonly onDeletePendingTask: (pendingTask: PendingNewTask) => void;
    readonly onNewThreadInProject: (project: EnvironmentProject) => void;
++  readonly isNewThreadInProjectPending?: (project: EnvironmentProject) => boolean;
++  readonly isNewThreadInProjectSupported?: (project: EnvironmentProject) => boolean;
 +  /** Forge Remote renders the retained list without unsupported lifecycle controls. */
 +  readonly remoteOnly?: boolean;
  }
  
  /* ─── Layout constants ───────────────────────────────────────────────── */
-@@ -135,8 +133,12 @@ const PRE_LIQUID_GLASS_BOTTOM_TOOLBAR_HEIGHT = 44;
+ 
+ const ESTIMATED_THREAD_ROW_HEIGHT = 72;
+ const PRE_LIQUID_GLASS_BOTTOM_TOOLBAR_HEIGHT = 44;
++const REMOTE_HOME_DISCLOSURE_LAYOUT_ANIMATION = {
++  duration: REMOTE_HOME_DISCLOSURE_DURATION_MS,
++  create: {
++    type: LayoutAnimation.Types.easeInEaseOut,
++    property: LayoutAnimation.Properties.opacity,
++  },
++  update: { type: LayoutAnimation.Types.easeInEaseOut },
++  delete: {
++    type: LayoutAnimation.Types.easeInEaseOut,
++    property: LayoutAnimation.Properties.opacity,
++  },
++} as const;
+ /**
+  * Top spacing between the list and the Android custom header. The Android
+  * header (AndroidHomeHeader) is rendered in-flow above this screen and
+@@ -135,8 +166,12 @@ const PRE_LIQUID_GLASS_BOTTOM_TOOLBAR_HEIGHT = 44;
  function deriveEmptyState(props: {
    readonly catalogState: WorkspaceState;
    readonly projectCount: number;
@@ -984,18 +1229,25 @@ index 6c36478..1b1d7ec 100644
    if (catalogState.isLoadingConnections) {
      return {
        title: "Loading environments",
-@@ -205,9 +207,7 @@ export function HomeScreen(props: HomeScreenProps) {
+@@ -204,10 +239,13 @@ function HomeTopContentSpacer() {
+ export function HomeScreen(props: HomeScreenProps) {
    const [groupDisplayStates, setGroupDisplayStates] = useState<
      ReadonlyMap<string, HomeGroupDisplayState>
-   >(() => new Map());
+-  >(() => new Map());
 -  const preferencesResult = useAtomValue(mobilePreferencesAtom);
 -  const threadListV2Enabled = useThreadListV2Enabled();
 -  const savePreferences = useAtomSet(updateMobilePreferencesAtom);
-+  const threadListV2Enabled = true;
++  >(() => (props.remoteOnly ? readRemoteHomeGroupDisplayStates() : new Map()));
++  // Forge Remote is organized by working directory and needs disclosure
++  // groups. Retain the flat v2 inbox for the canonical T3 Home unchanged.
++  const threadListV2Enabled = props.remoteOnly !== true;
++  // Default to reduced motion until the async system preference resolves, so
++  // an immediate tap after mount never animates against the user's setting.
++  const [reduceMotionEnabled, setReduceMotionEnabled] = useState(true);
    const openSwipeableRef = useRef<SwipeableMethods | null>(null);
    const listRef = useRef<LegendListRef | null>(null);
    const insets = useSafeAreaInsets();
-@@ -216,22 +216,10 @@ export function HomeScreen(props: HomeScreenProps) {
+@@ -216,22 +254,10 @@ export function HomeScreen(props: HomeScreenProps) {
      Platform.OS === "ios" && !NATIVE_LIQUID_GLASS_SUPPORTED
        ? PRE_LIQUID_GLASS_BOTTOM_TOOLBAR_HEIGHT
        : 0;
@@ -1022,7 +1274,7 @@ index 6c36478..1b1d7ec 100644
    const threadSearchMatchByKey = useMemo(() => {
      const matches = new Map<string, EnvironmentThreadSearchMatch>();
      for (const match of threadSearch.matches) {
-@@ -245,41 +233,16 @@ export function HomeScreen(props: HomeScreenProps) {
+@@ -245,40 +271,47 @@ export function HomeScreen(props: HomeScreenProps) {
      () => new Set(threadSearch.matches.map(threadSearchMatchKey)),
      [threadSearch.matches],
    );
@@ -1044,12 +1296,42 @@ index 6c36478..1b1d7ec 100644
    const effectiveGroupDisplayStatesRef = useRef(effectiveGroupDisplayStates);
    effectiveGroupDisplayStatesRef.current = effectiveGroupDisplayStates;
  
--  const updateGroupDisplay = useCallback(
--    (key: string, action: HomeGroupDisplayAction) => {
--      const next = new Map(effectiveGroupDisplayStatesRef.current);
++  useEffect(() => {
++    if (!props.remoteOnly) return;
++    let active = true;
++    void AccessibilityInfo.isReduceMotionEnabled().then((enabled) => {
++      if (active) setReduceMotionEnabled(enabled);
++    });
++    const subscription = AccessibilityInfo.addEventListener(
++      "reduceMotionChanged",
++      setReduceMotionEnabled,
++    );
++    return () => {
++      active = false;
++      subscription.remove();
++    };
++  }, [props.remoteOnly]);
++
+   const updateGroupDisplay = useCallback(
+     (key: string, action: HomeGroupDisplayAction) => {
++      if (
++        shouldAnimateRemoteHomeGroupAction({
++          action,
++          reduceMotionEnabled,
++          remoteOnly: props.remoteOnly === true,
++        })
++      ) {
++        LayoutAnimation.configureNext(REMOTE_HOME_DISCLOSURE_LAYOUT_ANIMATION);
++      }
+       const next = new Map(effectiveGroupDisplayStatesRef.current);
 -      next.set(key, nextGroupDisplayState(next.get(key) ?? DEFAULT_GROUP_DISPLAY_STATE, action));
--      effectiveGroupDisplayStatesRef.current = next;
--      setGroupDisplayStates(next);
++      const state = nextGroupDisplayState(next.get(key) ?? DEFAULT_GROUP_DISPLAY_STATE, action);
++      next.set(key, state);
++      if (props.remoteOnly) {
++        writeRemoteHomeGroupDisplayState(key, state);
++      }
+       effectiveGroupDisplayStatesRef.current = next;
+       setGroupDisplayStates(next);
 -      if (action === "toggle-collapsed") {
 -        const collapsedProjectGroups: string[] = [];
 -        for (const [groupKey, state] of next) {
@@ -1059,19 +1341,41 @@ index 6c36478..1b1d7ec 100644
 -        }
 -        savePreferences({ collapsedProjectGroups });
 -      }
--    },
+     },
 -    [savePreferences],
--  );
-+  const updateGroupDisplay = useCallback((key: string, action: HomeGroupDisplayAction) => {
-+    const next = new Map(effectiveGroupDisplayStatesRef.current);
-+    next.set(key, nextGroupDisplayState(next.get(key) ?? DEFAULT_GROUP_DISPLAY_STATE, action));
-+    effectiveGroupDisplayStatesRef.current = next;
-+    setGroupDisplayStates(next);
-+  }, []);
++    [props.remoteOnly, reduceMotionEnabled],
+   );
  
    const handleSwipeableWillOpen = useCallback((methods: SwipeableMethods) => {
-     if (openSwipeableRef.current !== methods) {
-@@ -585,7 +548,7 @@ export function HomeScreen(props: HomeScreenProps) {
+@@ -307,8 +340,14 @@ export function HomeScreen(props: HomeScreenProps) {
+         projects: props.projects,
+         environmentId: props.selectedEnvironmentId,
+         projectGroupingMode: props.projectGroupingMode,
++        projectGroupKeyByProjectRef: props.projectGroupKeyByProjectRef,
+       }),
+-    [props.projectGroupingMode, props.projects, props.selectedEnvironmentId],
++    [
++      props.projectGroupKeyByProjectRef,
++      props.projectGroupingMode,
++      props.projects,
++      props.selectedEnvironmentId,
++    ],
+   );
+   const selectedProjectScope = useMemo(
+     () =>
+@@ -378,9 +417,11 @@ export function HomeScreen(props: HomeScreenProps) {
+         projectSortOrder: props.projectSortOrder,
+         threadSortOrder: props.threadSortOrder,
+         projectGroupingMode: props.projectGroupingMode,
++        projectGroupKeyByProjectRef: props.projectGroupKeyByProjectRef,
+       }),
+     [
+       props.projectGroupingMode,
++      props.projectGroupKeyByProjectRef,
+       props.projectSortOrder,
+       props.searchQuery,
+       props.selectedEnvironmentId,
+@@ -585,7 +626,7 @@ export function HomeScreen(props: HomeScreenProps) {
    }, [threadListV2Enabled]);
    // Threads on servers without the settlement capability never classify as
    // settled (the user could neither un-settle nor pin them).
@@ -1080,7 +1384,15 @@ index 6c36478..1b1d7ec 100644
    const settlementEnvironmentIds = useMemo(() => {
      const supported = new Set<EnvironmentId>();
      for (const [environmentId, config] of serverConfigs) {
-@@ -846,6 +809,7 @@ export function HomeScreen(props: HomeScreenProps) {
+@@ -828,6 +869,7 @@ export function HomeScreen(props: HomeScreenProps) {
+           onDeleteThread={handleDeleteThread}
+           onArchiveThread={props.onArchiveThread}
+           onRegenerateThreadTitle={handleRegenerateThreadTitle}
++          onRenameThread={props.onRenameThread}
+           titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
+           settlementSupported={settlementEnvironmentIds.has(thread.environmentId)}
+           onSettleThread={handleSettleThread}
+@@ -846,6 +888,7 @@ export function HomeScreen(props: HomeScreenProps) {
            onUnpinThread={handleUnpinThread}
            onMovePinnedThread={handleMovePinnedThread}
            onChangeRequestState={handleChangeRequestState}
@@ -1088,7 +1400,123 @@ index 6c36478..1b1d7ec 100644
            projectCwd={
              projectCwdByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ?? null
            }
-@@ -1047,6 +1011,7 @@ export function HomeScreen(props: HomeScreenProps) {
+@@ -873,6 +916,7 @@ export function HomeScreen(props: HomeScreenProps) {
+       projectByKey,
+       projectCwdByKey,
+       props.onArchiveThread,
++      props.onRenameThread,
+       props.onDeletePendingTask,
+       props.onSelectPendingTask,
+       props.onSelectThread,
+@@ -920,18 +964,41 @@ export function HomeScreen(props: HomeScreenProps) {
+ 
+   const extraData = useMemo(
+     () => ({
++      isNewThreadInProjectPending: props.isNewThreadInProjectPending,
++      isNewThreadInProjectSupported: props.isNewThreadInProjectSupported,
+       projectCwdByKey,
++      reduceMotionEnabled,
+       savedConnectionsById: props.savedConnectionsById,
+       searchQuery: props.searchQuery,
+       threadSearchMatchByKey,
+     }),
+-    [projectCwdByKey, props.savedConnectionsById, props.searchQuery, threadSearchMatchByKey],
++    [
++      projectCwdByKey,
++      props.isNewThreadInProjectPending,
++      props.isNewThreadInProjectSupported,
++      props.savedConnectionsById,
++      props.searchQuery,
++      reduceMotionEnabled,
++      threadSearchMatchByKey,
++    ],
+   );
+ 
+   const renderItem = useCallback(
+     ({ item }: LegendListRenderItemProps<HomeListItem>) => {
+       switch (item.type) {
+-        case "header":
++        case "header": {
++          const candidate = item.group.newThreadTarget;
++          const newThreadTarget =
++            candidate && (props.isNewThreadInProjectSupported?.(candidate) ?? true)
++              ? candidate
++              : null;
++          const newThreadAction =
++            props.remoteOnly && newThreadTarget
++              ? remoteHomeNewSessionActionPresentation({
++                  projectTitle: item.group.title,
++                  pending: props.isNewThreadInProjectPending?.(newThreadTarget) ?? false,
++                })
++              : undefined;
+           return (
+             <ThreadListGroupHeader
+               variant="compact"
+@@ -939,17 +1006,19 @@ export function HomeScreen(props: HomeScreenProps) {
+               isFirst={item.isFirst}
+               groupKey={item.group.key}
+               onGroupAction={updateGroupDisplay}
+-              // Aggregated groups (same repo across machines) have no single
+-              // target project, and `pending-project:` groups hold a placeholder
+-              // built from queued-task metadata rather than a real project shell,
+-              // so the quick new-thread button is single-real-project only.
+-              newThreadTarget={item.group.newThreadTarget}
++              // Aggregated groups target the member with the newest activity;
++              // `pending-project:` groups have no executable project shell.
++              newThreadTarget={newThreadTarget}
++              newThreadAction={newThreadAction}
+               onNewThread={props.onNewThreadInProject}
+               project={item.group.representative}
+               threadCount={item.group.threads.length + item.group.pendingTasks.length}
+               title={item.group.title}
++              showCollapseChevron={props.remoteOnly}
++              reduceMotionEnabled={reduceMotionEnabled}
+             />
+           );
++        }
+         case "pending-task":
+           return (
+             <PendingTaskListRow
+@@ -988,6 +1057,11 @@ export function HomeScreen(props: HomeScreenProps) {
+               onArchiveThread={props.onArchiveThread}
+               onDeleteThread={props.onDeleteThread}
+               onRegenerateThreadTitle={handleRegenerateThreadTitle}
++              onRenameThread={props.onRenameThread}
++              onPinThread={handlePinThread}
++              onUnpinThread={handleUnpinThread}
++              pinned={thread.pinnedAt != null}
++              remoteOnly={props.remoteOnly}
+               titleRegenerationSupported={titleRegenerationEnvironmentIds.has(thread.environmentId)}
+               onSelectThread={props.onSelectThread}
+               onSwipeableClose={handleSwipeableClose}
+@@ -1010,19 +1084,26 @@ export function HomeScreen(props: HomeScreenProps) {
+     [
+       handleSwipeableClose,
+       handleSwipeableWillOpen,
++      handlePinThread,
+       handleRegenerateThreadTitle,
++      handleUnpinThread,
+       projectCwdByKey,
+       props.onArchiveThread,
+       props.onDeletePendingTask,
+       props.onDeleteThread,
++      props.isNewThreadInProjectPending,
++      props.isNewThreadInProjectSupported,
+       props.onNewThreadInProject,
++      props.onRenameThread,
+       props.onSelectPendingTask,
+       props.onSelectThread,
++      props.remoteOnly,
+       props.searchQuery,
+       props.savedConnectionsById,
+       threadSearchMatchByKey,
+       titleRegenerationEnvironmentIds,
+       updateGroupDisplay,
++      reduceMotionEnabled,
+     ],
+   );
+ 
+@@ -1047,6 +1128,7 @@ export function HomeScreen(props: HomeScreenProps) {
    const emptyState = deriveEmptyState({
      catalogState: props.catalogState,
      projectCount: props.projects.length,
@@ -1096,7 +1524,7 @@ index 6c36478..1b1d7ec 100644
    });
  
    if (!hasAnyThreads) {
-@@ -1062,7 +1027,7 @@ export function HomeScreen(props: HomeScreenProps) {
+@@ -1062,7 +1144,7 @@ export function HomeScreen(props: HomeScreenProps) {
            <EmptyState
              title={emptyState.title}
              detail={emptyState.detail}
@@ -1105,6 +1533,141 @@ index 6c36478..1b1d7ec 100644
              onAction={!props.catalogState.hasReadyEnvironment ? props.onAddConnection : undefined}
              variant="plain"
            />
+diff --git aa/apps/mobile/src/features/home/homeThreadList.test.ts bb/apps/mobile/src/features/home/homeThreadList.test.ts
+index 60d3ab2..cdf7903 100644
+--- aa/apps/mobile/src/features/home/homeThreadList.test.ts
++++ bb/apps/mobile/src/features/home/homeThreadList.test.ts
+@@ -6,6 +6,7 @@ import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-searc
+ import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+ import { describe, expect, it } from "vite-plus/test";
+ 
++import { scopedProjectKey } from "../../lib/scopedEntities";
+ import {
+   buildHomeProjectScopes,
+   buildHomeThreadGroups,
+@@ -72,6 +73,62 @@ function buildGroups(
+ }
+ 
+ describe("buildHomeThreadGroups", () => {
++  it("groups Forge pairings by an explicit host-and-directory identity", () => {
++    const firstEnvironmentId = EnvironmentId.make("pairing:first");
++    const secondEnvironmentId = EnvironmentId.make("pairing:second");
++    const firstProject = makeProject({
++      environmentId: firstEnvironmentId,
++      id: ProjectId.make("first-project"),
++      title: "forge",
++      workspaceRoot: "/Users/dev/forge",
++    });
++    const secondProject = makeProject({
++      environmentId: secondEnvironmentId,
++      id: ProjectId.make("second-project"),
++      title: "forge",
++      workspaceRoot: "/Users/dev/forge",
++    });
++    const projectGroupKeyByProjectRef = new Map([
++      [
++        scopedProjectKey(firstEnvironmentId, firstProject.id),
++        "remote-project:mac:/Users/dev/forge",
++      ],
++      [
++        scopedProjectKey(secondEnvironmentId, secondProject.id),
++        "remote-project:mac:/Users/dev/forge",
++      ],
++    ]);
++
++    const groups = buildGroups(
++      [firstProject, secondProject],
++      [
++        makeThread({
++          environmentId: firstEnvironmentId,
++          id: ThreadId.make("first-thread"),
++          projectId: firstProject.id,
++          title: "First session",
++        }),
++        makeThread({
++          environmentId: secondEnvironmentId,
++          id: ThreadId.make("second-thread"),
++          projectId: secondProject.id,
++          title: "Second session",
++          updatedAt: "2026-06-02T00:00:00.000Z",
++        }),
++      ],
++      { projectGroupKeyByProjectRef },
++    );
++
++    expect(groups).toHaveLength(1);
++    expect(groups[0]?.key).toBe("remote-project:mac:/Users/dev/forge");
++    expect(groups[0]?.threads.map((thread) => thread.title)).toEqual([
++      "Second session",
++      "First session",
++    ]);
++    expect(groups[0]?.projects).toHaveLength(2);
++    expect(groups[0]?.newThreadTarget).toBe(secondProject);
++  });
++
+   it("builds one v2 scope for the same repository across environments", () => {
+     const localEnvironmentId = EnvironmentId.make("environment-local");
+     const remoteEnvironmentId = EnvironmentId.make("environment-remote");
+diff --git aa/apps/mobile/src/features/home/homeThreadList.ts bb/apps/mobile/src/features/home/homeThreadList.ts
+index 2a9e0ec..c6281f2 100644
+--- aa/apps/mobile/src/features/home/homeThreadList.ts
++++ bb/apps/mobile/src/features/home/homeThreadList.ts
+@@ -52,10 +52,47 @@ export function buildHomeProjectScopes(input: {
+   readonly projects: ReadonlyArray<EnvironmentProject>;
+   readonly environmentId: EnvironmentId | null;
+   readonly projectGroupingMode: SidebarProjectGroupingMode;
++  /**
++   * Remote-only grouping override keyed by scoped project ref. Forge pairings
++   * use one synthetic environment per bearer, so the canonical T3 grouping
++   * key cannot otherwise recognize sibling sessions in the same directory.
++   */
++  readonly projectGroupKeyByProjectRef?: ReadonlyMap<string, string>;
+ }): ReadonlyArray<HomeProjectScope> {
+   const projects = input.projects.filter(
+     (project) => input.environmentId === null || project.environmentId === input.environmentId,
+   );
++  if (input.projectGroupKeyByProjectRef) {
++    const grouped = new Map<string, EnvironmentProject[]>();
++    for (const project of projects) {
++      const projectRefKey = scopedProjectKey(project.environmentId, project.id);
++      const key = input.projectGroupKeyByProjectRef.get(projectRefKey) ?? projectRefKey;
++      const members = grouped.get(key);
++      if (members) {
++        members.push(project);
++      } else {
++        grouped.set(key, [project]);
++      }
++    }
++    return Array.from(grouped, ([key, members]) => {
++      const representative = members.reduce((current, candidate) =>
++        getProjectSortTimestamp(candidate, "updated_at") >
++        getProjectSortTimestamp(current, "updated_at")
++          ? candidate
++          : current,
++      );
++      return {
++        key,
++        title: representative.title,
++        representative,
++        projects: members,
++        projectRefs: members.map((project) => ({
++          environmentId: project.environmentId,
++          projectId: project.id,
++        })),
++      };
++    });
++  }
+   return buildProjectGroups({
+     projects,
+     settings: {
+@@ -210,6 +247,7 @@ export function buildHomeThreadGroups(input: {
+   readonly projectSortOrder: HomeProjectSortOrder;
+   readonly threadSortOrder: SidebarThreadSortOrder;
+   readonly projectGroupingMode: SidebarProjectGroupingMode;
++  readonly projectGroupKeyByProjectRef?: ReadonlyMap<string, string>;
+   /** Current time used for the recency window; defaults to now. Injectable for tests. */
+   readonly now?: number;
+ }): ReadonlyArray<HomeThreadGroup> {
 diff --git aa/apps/mobile/src/features/settings/appearance/AppearancePreferencesProvider.tsx bb/apps/mobile/src/features/settings/appearance/AppearancePreferencesProvider.tsx
 index 7eaafc0..b3d4f5f 100644
 --- aa/apps/mobile/src/features/settings/appearance/AppearancePreferencesProvider.tsx
@@ -1454,10 +2017,28 @@ index ddb625f..656f0a0 100644
            );
          })}
 diff --git aa/apps/mobile/src/features/threads/thread-list-items.tsx bb/apps/mobile/src/features/threads/thread-list-items.tsx
-index 24feb0b..ea71e44 100644
+index 24feb0b..f96218c 100644
 --- aa/apps/mobile/src/features/threads/thread-list-items.tsx
 +++ bb/apps/mobile/src/features/threads/thread-list-items.tsx
-@@ -19,7 +19,8 @@ import { HOME_HORIZONTAL_INSET } from "../../lib/layoutMetrics";
+@@ -6,8 +6,15 @@ import type {
+ import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
+ import type { MenuAction } from "@react-native-menu/menu";
+ import { SymbolView } from "../../components/AppSymbol";
+-import { memo, useCallback, useMemo, type ComponentProps } from "react";
+-import { Pressable, useColorScheme, useWindowDimensions, View } from "react-native";
++import { memo, useCallback, useEffect, useMemo, useRef, type ComponentProps } from "react";
++import {
++  Animated,
++  type ColorValue,
++  Pressable,
++  useColorScheme,
++  useWindowDimensions,
++  View,
++} from "react-native";
+ import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
+ import Svg, { Circle, Path } from "react-native-svg";
+ 
+@@ -19,7 +26,8 @@ import { HOME_HORIZONTAL_INSET } from "../../lib/layoutMetrics";
  import { relativeTime } from "../../lib/time";
  import { useThemeColor } from "../../lib/useThemeColor";
  import type { PendingNewTask } from "../../state/use-pending-new-tasks";
@@ -1467,7 +2048,147 @@ index 24feb0b..ea71e44 100644
  import type { HomeGroupDisplayAction } from "../home/homeListItems";
  import { ThreadSwipeable } from "../home/thread-swipe-actions";
  import { buildThreadTitleRegenerationMenuItems } from "./thread-title-regeneration-menu";
-@@ -457,7 +458,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
+@@ -75,6 +83,53 @@ function PullRequestIcon(props: { readonly size: number; readonly color: string
+ 
+ /* ─── Project group header ───────────────────────────────────────────── */
+ 
++const DisclosureChevron = memo(function DisclosureChevron(props: {
++  readonly collapsed: boolean;
++  readonly reduceMotionEnabled: boolean;
++  readonly tintColor: ColorValue;
++}) {
++  const progress = useRef(new Animated.Value(props.collapsed ? 0 : 1)).current;
++
++  useEffect(() => {
++    const target = props.collapsed ? 0 : 1;
++    progress.stopAnimation();
++    if (props.reduceMotionEnabled) {
++      progress.setValue(target);
++      return;
++    }
++    const animation = Animated.timing(progress, {
++      duration: 180,
++      toValue: target,
++      useNativeDriver: true,
++    });
++    animation.start();
++    return () => animation.stop();
++  }, [progress, props.collapsed, props.reduceMotionEnabled]);
++
++  return (
++    <Animated.View
++      style={{
++        transform: [
++          {
++            rotate: progress.interpolate({
++              inputRange: [0, 1],
++              outputRange: ["-90deg", "0deg"],
++            }),
++          },
++        ],
++      }}
++    >
++      <SymbolView
++        name="chevron.down"
++        size={11}
++        tintColor={props.tintColor}
++        type="monochrome"
++        weight="semibold"
++      />
++    </Animated.View>
++  );
++});
++
+ export const ThreadListGroupHeader = memo(function ThreadListGroupHeader(props: {
+   readonly variant: ThreadListVariant;
+   readonly project: EnvironmentProject;
+@@ -84,8 +139,17 @@ export const ThreadListGroupHeader = memo(function ThreadListGroupHeader(props:
+   readonly isFirst: boolean;
+   readonly groupKey: string;
+   readonly onGroupAction: (key: string, action: HomeGroupDisplayAction) => void;
++  /** Forge Remote exposes an explicit directory disclosure indicator. */
++  readonly showCollapseChevron?: boolean;
++  /** Disables the disclosure transition when the OS Reduce Motion setting is on. */
++  readonly reduceMotionEnabled?: boolean;
+   /** Project a quick new thread should target; null hides the button. */
+   readonly newThreadTarget?: EnvironmentProject | null;
++  readonly newThreadAction?: {
++    readonly accessibilityLabel: string;
++    readonly disabled: boolean;
++    readonly systemImage: "plus" | "square.and.pencil";
++  };
+   readonly onNewThread?: (project: EnvironmentProject) => void;
+ }) {
+   const iconMutedColor = useThemeColor("--color-icon-muted");
+@@ -102,6 +166,10 @@ export const ThreadListGroupHeader = memo(function ThreadListGroupHeader(props:
+     }
+   }, [newThreadTarget, onNewThread]);
+   const showNewThreadButton = onNewThread !== undefined && newThreadTarget !== null;
++  const newThreadAccessibilityLabel =
++    props.newThreadAction?.accessibilityLabel ?? `Create new thread in ${props.title}`;
++  const newThreadDisabled = props.newThreadAction?.disabled ?? false;
++  const newThreadSystemImage = props.newThreadAction?.systemImage ?? "plus";
+ 
+   // The new-thread button is a SIBLING of the collapse toggle, not a child:
+   // nested touchables are unreachable to VoiceOver/TalkBack (the parent
+@@ -115,7 +183,7 @@ export const ThreadListGroupHeader = memo(function ThreadListGroupHeader(props:
+       style={{
+         minHeight: compact ? 44 : 36,
+         paddingLeft: compact ? 20 : 12,
+-        // Compact right padding centers the 20pt plus glyph on the thread
++        // Compact right padding centers the 20pt action glyph on the thread
+         // rows' trailing chevron column (18 + 13/2 ≈ 24.5 from the edge).
+         paddingRight: compact ? 14 : 12,
+         paddingBottom: compact ? 12 : 8,
+@@ -151,6 +219,13 @@ export const ThreadListGroupHeader = memo(function ThreadListGroupHeader(props:
+         >
+           {props.title}
+         </Text>
++        {props.showCollapseChevron ? (
++          <DisclosureChevron
++            collapsed={props.collapsed}
++            reduceMotionEnabled={props.reduceMotionEnabled ?? false}
++            tintColor={iconMutedColor}
++          />
++        ) : null}
+         <Text
+           className={
+             compact
+@@ -163,14 +238,18 @@ export const ThreadListGroupHeader = memo(function ThreadListGroupHeader(props:
+       </Pressable>
+       {showNewThreadButton ? (
+         <Pressable
+-          accessibilityLabel={`Create new thread in ${props.title}`}
++          accessibilityLabel={newThreadAccessibilityLabel}
+           accessibilityRole="button"
++          disabled={newThreadDisabled}
+           hitSlop={{ ...verticalHitSlop, left: 10, right: 14 }}
+           onPress={handleNewThread}
+-          style={({ pressed }) => ({ opacity: pressed ? 0.5 : 1, paddingLeft: 12 })}
++          style={({ pressed }) => ({
++            opacity: newThreadDisabled ? 0.4 : pressed ? 0.5 : 1,
++            paddingLeft: 12,
++          })}
+         >
+           <SymbolView
+-            name="plus"
++            name={newThreadSystemImage}
+             size={compact ? 20 : 16}
+             tintColor={iconMutedColor}
+             type="monochrome"
+@@ -432,6 +511,11 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
+   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
+   readonly onDeleteThread: (thread: EnvironmentThreadShell) => void;
+   readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => void;
++  readonly onRenameThread?: (thread: EnvironmentThreadShell) => void;
++  readonly onPinThread?: (thread: EnvironmentThreadShell) => void;
++  readonly onUnpinThread?: (thread: EnvironmentThreadShell) => void;
++  readonly pinned?: boolean;
++  readonly remoteOnly?: boolean;
+   readonly titleRegenerationSupported: boolean;
+   readonly onSwipeableWillOpen: (methods: SwipeableMethods) => void;
+   readonly onSwipeableClose: (methods: SwipeableMethods) => void;
+@@ -457,7 +541,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
    const { thread, onSelectThread, onArchiveThread, onDeleteThread, onRegenerateThreadTitle } =
      props;
    const status = resolveThreadStatus(thread);
@@ -1476,8 +2197,96 @@ index 24feb0b..ea71e44 100644
    const timestamp = relativeTime(
      thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
    );
+@@ -479,6 +563,15 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
+     () => onRegenerateThreadTitle(thread),
+     [onRegenerateThreadTitle, thread],
+   );
++  const handleRename = useCallback(
++    () => props.onRenameThread?.(thread),
++    [props.onRenameThread, thread],
++  );
++  const handlePin = useCallback(() => props.onPinThread?.(thread), [props.onPinThread, thread]);
++  const handleUnpin = useCallback(
++    () => props.onUnpinThread?.(thread),
++    [props.onUnpinThread, thread],
++  );
+   const menuActions = useMemo<MenuAction[]>(
+     () => [
+       THREAD_ROW_MENU_ACTIONS[0]!,
+@@ -490,6 +583,23 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
+     ],
+     [props.titleRegenerationSupported, thread.titleRegeneration],
+   );
++  const remoteMenuActions = useMemo<MenuAction[]>(
++    () => [
++      props.pinned
++        ? { id: "unpin", title: "Unpin", image: "pin.slash" }
++        : { id: "pin", title: "Pin", image: "pin" },
++      ...(props.onRenameThread
++        ? [{ id: "rename", title: "Rename", image: "square.and.pencil" } satisfies MenuAction]
++        : []),
++      {
++        id: "archive",
++        title: "Archive",
++        image: "archivebox",
++        attributes: { destructive: true },
++      },
++    ],
++    [props.onRenameThread, props.pinned],
++  );
+   const primaryAction = useMemo(
+     () => ({
+       accessibilityLabel: `Archive ${thread.title}`,
+@@ -502,10 +612,13 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
+   const handleMenuAction = useCallback(
+     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
+       if (nativeEvent.event === "archive") handleArchive();
++      if (nativeEvent.event === "pin") handlePin();
++      if (nativeEvent.event === "unpin") handleUnpin();
++      if (nativeEvent.event === "rename") handleRename();
+       if (nativeEvent.event === "regenerate-title") handleRegenerateTitle();
+       if (nativeEvent.event === "delete") handleDelete();
+     },
+-    [handleArchive, handleDelete, handleRegenerateTitle],
++    [handleArchive, handleDelete, handlePin, handleRegenerateTitle, handleRename, handleUnpin],
+   );
+ 
+   const statusPill = effectiveStatus ? (
+@@ -555,7 +668,11 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
+   const rowContent = (close: () => void) =>
+     compact ? (
+       <Pressable
+-        accessibilityHint="Swipe left for archive and delete actions"
++        accessibilityHint={
++          props.remoteOnly
++            ? "Opens the session. Long press for session actions."
++            : "Swipe left for archive and delete actions"
++        }
+         accessibilityLabel={threadAccessibilityLabel}
+         accessibilityRole="button"
+         className="bg-screen"
+@@ -668,6 +785,19 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
+       </Pressable>
+     );
+ 
++  if (props.remoteOnly) {
++    return (
++      <ControlPillMenu
++        actions={remoteMenuActions}
++        onPressAction={handleMenuAction}
++        shouldOpenOnLongPress
++        title={thread.title}
++      >
++        {rowContent(() => undefined)}
++      </ControlPillMenu>
++    );
++  }
++
+   return (
+     <ThreadSwipeable
+       backgroundColor={backgroundColor}
 diff --git aa/apps/mobile/src/features/threads/thread-list-v2-items.tsx bb/apps/mobile/src/features/threads/thread-list-v2-items.tsx
-index db2e805..3f0edbe 100644
+index db2e805..f62c5e3 100644
 --- aa/apps/mobile/src/features/threads/thread-list-v2-items.tsx
 +++ bb/apps/mobile/src/features/threads/thread-list-v2-items.tsx
 @@ -25,7 +25,7 @@ import { cn } from "../../lib/cn";
@@ -1489,7 +2298,15 @@ index db2e805..3f0edbe 100644
  import { ThreadSwipeable } from "../home/thread-swipe-actions";
  import { buildThreadTitleRegenerationMenuItems } from "./thread-title-regeneration-menu";
  import {
-@@ -381,6 +381,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
+@@ -343,6 +343,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
+   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
+   readonly onDeleteThread: (thread: EnvironmentThreadShell) => void;
+   readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => void;
++  readonly onRenameThread?: (thread: EnvironmentThreadShell) => void;
+   readonly onSettleThread: (thread: EnvironmentThreadShell) => void;
+   readonly onSnoozeThread: (thread: EnvironmentThreadShell, snoozedUntil: string) => void;
+   readonly onUnsnoozeThread: (thread: EnvironmentThreadShell) => void;
+@@ -381,6 +382,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
    readonly simultaneousSwipeGesture?: ComponentProps<
      typeof ThreadSwipeable
    >["simultaneousWithExternalGesture"];
@@ -1498,7 +2315,15 @@ index db2e805..3f0edbe 100644
  }) {
    const { width: windowWidth } = useWindowDimensions();
    const {
-@@ -402,7 +404,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
+@@ -389,6 +392,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
+     onSelectThread,
+     onDeleteThread,
+     onRegenerateThreadTitle,
++    onRenameThread,
+     onSettleThread,
+     onSnoozeThread,
+     onUnsnoozeThread,
+@@ -402,7 +406,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
    const snoozedRow = props.snoozed === true;
    const pinnedRow = props.pinned === true;
  
@@ -1507,42 +2332,173 @@ index db2e805..3f0edbe 100644
    const prState = pr?.state ?? null;
    const threadKey = `${thread.environmentId}:${thread.id}`;
    useEffect(() => {
-@@ -901,6 +903,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
+@@ -426,6 +430,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
+     () => onRegenerateThreadTitle(thread),
+     [onRegenerateThreadTitle, thread],
+   );
++  const handleRename = useCallback(() => onRenameThread?.(thread), [onRenameThread, thread]);
+   const handleSettle = useCallback(() => onSettleThread(thread), [onSettleThread, thread]);
+   const handleSnooze = useCallback(
+     (snoozedUntil: string) => onSnoozeThread(thread, snoozedUntil),
+@@ -559,6 +564,23 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
+     () => [LEGACY_MENU_ACTIONS[0]!, ...titleRegenerationMenuItems, LEGACY_MENU_ACTIONS[1]!],
+     [titleRegenerationMenuItems],
+   );
++  const remoteMenuActions = useMemo<MenuAction[]>(
++    () => [
++      pinnedRow
++        ? { id: "unpin", title: "Unpin", image: "pin.slash" }
++        : { id: "pin", title: "Pin", image: "pin" },
++      ...(onRenameThread
++        ? [{ id: "rename", title: "Rename", image: "square.and.pencil" } satisfies MenuAction]
++        : []),
++      {
++        id: "archive",
++        title: "Archive",
++        image: "archivebox",
++        attributes: { destructive: true },
++      },
++    ],
++    [onRenameThread, pinnedRow],
++  );
+   const handleMenuAction = useCallback(
+     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
+       if (nativeEvent.event === "settle") handleSettle();
+@@ -569,6 +591,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
+       if (nativeEvent.event === "move-pin-up") handleMovePinnedUp();
+       if (nativeEvent.event === "move-pin-down") handleMovePinnedDown();
+       if (nativeEvent.event === "archive") handleArchive();
++      if (nativeEvent.event === "rename") handleRename();
+       if (nativeEvent.event === "regenerate-title") handleRegenerateTitle();
+       if (nativeEvent.event === "delete") handleDelete();
+       const snoozeSelection = resolveThreadListV2SnoozeMenuSelection({
+@@ -586,6 +609,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
+       handleArchive,
+       handleDelete,
+       handleRegenerateTitle,
++      handleRename,
+       handleMovePinnedDown,
+       handleMovePinnedUp,
+       handlePin,
+@@ -901,6 +925,19 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
        </Pressable>
      );
  
 +  if (props.remoteOnly) {
-+    return rowContent(() => undefined);
++    return (
++      <ControlPillMenu
++        actions={remoteMenuActions}
++        onPressAction={handleMenuAction}
++        shouldOpenOnLongPress
++        title={thread.title}
++      >
++        {rowContent(() => undefined)}
++      </ControlPillMenu>
++    );
 +  }
 +
    return (
      <>
        <ThreadSwipeable
+diff --git aa/apps/mobile/src/features/threads/thread-settings-menu.test.ts bb/apps/mobile/src/features/threads/thread-settings-menu.test.ts
+index 078be2d..4dcca4a 100644
+--- aa/apps/mobile/src/features/threads/thread-settings-menu.test.ts
++++ bb/apps/mobile/src/features/threads/thread-settings-menu.test.ts
+@@ -281,4 +281,63 @@ describe("buildThreadSettingsMenu", () => {
+     }
+     expect(eventTypes(menu)).toEqual(new Set(["select-model", "set-option", "set-runtime"]));
+   });
++
++  it("builds a Forge-only functional menu without unsupported mobile actions", () => {
++    const forgeModel = modelOption("5.6 Sol", { isDefault: true });
++    const menu = buildThreadSettingsMenu({
++      providerGroups: [group([forgeModel])],
++      selectedModel: forgeModel.selection,
++      optionDescriptors: [
++        {
++          ...effortDescriptor,
++          currentValue: "xhigh",
++          options: [
++            { id: "high", label: "High" },
++            { id: "xhigh", label: "Extra High" },
++          ],
++        },
++      ],
++      runtimeMode: "auto",
++      includeRuntime: false,
++      includeUsage: true,
++      fastMode: { supported: true, enabled: false },
++    });
++
++    expect(menu.actions.map((action) => action.title)).toEqual([
++      "Model",
++      "Reasoning",
++      "Fast Mode",
++      "Usage",
++    ]);
++    expect(menu.actions.find((action) => action.title === "Model")?.subtitle).toBe("5.6 Sol");
++    expect(menu.actions.find((action) => action.title === "Reasoning")?.subtitle).toBe(
++      "Extra High",
++    );
++    expect(menu.actions.map((action) => action.title)).not.toEqual(
++      expect.arrayContaining(["Plan", "Files", "Camera", "Photos", "Plugins"]),
++    );
++    expect(eventFor(menu, "fast-mode")).toEqual({ type: "set-fast-mode", enabled: true });
++  });
++
++  it("omits Fast Mode when unsupported and disables it while authoritative state is pending", () => {
++    const input = baseInput();
++    const unsupported = buildThreadSettingsMenu({
++      ...input,
++      optionDescriptors: [effortDescriptor],
++      includeRuntime: false,
++      fastMode: { supported: false, enabled: false },
++    });
++    expect(unsupported.actions.find((action) => action.title === "Fast Mode")).toBeUndefined();
++
++    const pending = buildThreadSettingsMenu({
++      ...input,
++      optionDescriptors: [effortDescriptor],
++      includeRuntime: false,
++      fastMode: { supported: true, enabled: true, pending: true },
++    });
++    expect(pending.actions.find((action) => action.title === "Fast Mode")).toMatchObject({
++      state: "on",
++      attributes: { disabled: true },
++    });
++  });
+ });
 diff --git aa/apps/mobile/src/features/threads/thread-settings-menu.ts bb/apps/mobile/src/features/threads/thread-settings-menu.ts
-index 31b1c02..f3716e5 100644
+index 31b1c02..bb525a1 100644
 --- aa/apps/mobile/src/features/threads/thread-settings-menu.ts
 +++ bb/apps/mobile/src/features/threads/thread-settings-menu.ts
-@@ -39,7 +39,8 @@ export function selectableChoices(
+@@ -39,7 +39,9 @@ export function selectableChoices(
  export type ThreadSettingsMenuEvent =
    | { readonly type: "select-model"; readonly option: ModelOption }
    | { readonly type: "set-option"; readonly optionId: string; readonly value: string | boolean }
 -  | { readonly type: "set-runtime"; readonly mode: RuntimeMode };
++  | { readonly type: "set-fast-mode"; readonly enabled: boolean }
 +  | { readonly type: "set-runtime"; readonly mode: RuntimeMode }
 +  | { readonly type: "open-usage" };
  
  export type ThreadSettingsMenu = {
    readonly actions: MenuAction[];
-@@ -63,6 +64,9 @@ export function buildThreadSettingsMenu(input: {
+@@ -63,6 +65,14 @@ export function buildThreadSettingsMenu(input: {
    readonly selectedModel: ModelSelection | null;
    readonly optionDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
    readonly runtimeMode: RuntimeMode;
 +  readonly includeRuntime?: boolean;
 +  readonly includeUsage?: boolean;
 +  readonly modelSelectionDisabled?: boolean;
++  readonly fastMode?: {
++    readonly supported: boolean;
++    readonly enabled: boolean;
++    readonly pending?: boolean;
++  };
  }): ThreadSettingsMenu {
    const events = new Map<string, ThreadSettingsMenuEvent>();
    const actions: MenuAction[] = [];
-@@ -85,6 +89,7 @@ export function buildThreadSettingsMenu(input: {
+@@ -85,6 +95,7 @@ export function buildThreadSettingsMenu(input: {
        title: option.label,
        ...(option.isDefault ? { subtitle: "Default" } : {}),
        state: isSelected(option) ? "on" : "off",
@@ -1550,7 +2506,7 @@ index 31b1c02..f3716e5 100644
      };
    };
  
-@@ -154,7 +159,7 @@ export function buildThreadSettingsMenu(input: {
+@@ -154,7 +165,7 @@ export function buildThreadSettingsMenu(input: {
          id,
          title: descriptor.label,
          state: descriptor.currentValue ? "on" : "off",
@@ -1559,7 +2515,7 @@ index 31b1c02..f3716e5 100644
        });
        continue;
      }
-@@ -166,6 +171,7 @@ export function buildThreadSettingsMenu(input: {
+@@ -166,6 +177,7 @@ export function buildThreadSettingsMenu(input: {
          id,
          title: choice.label,
          state: choice.id === currentValue ? "on" : "off",
@@ -1567,7 +2523,7 @@ index 31b1c02..f3716e5 100644
        };
      });
      if (choices.length === 0) {
-@@ -180,23 +186,31 @@ export function buildThreadSettingsMenu(input: {
+@@ -180,23 +192,43 @@ export function buildThreadSettingsMenu(input: {
      });
    }
  
@@ -1588,10 +2544,22 @@ index 31b1c02..f3716e5 100644
 -      };
 -    }),
 -  });
++  if (input.fastMode?.supported === true) {
++    const id = "fast-mode";
++    events.set(id, { type: "set-fast-mode", enabled: !input.fastMode.enabled });
++    actions.push({
++      id,
++      title: "Fast Mode",
++      image: "bolt.fill",
++      state: input.fastMode.enabled ? "on" : "off",
++      attributes: input.fastMode.pending ? { disabled: true } : keepPresented,
++    });
++  }
++
 +  if (input.includeUsage) {
 +    const id = "usage";
 +    events.set(id, { type: "open-usage" });
-+    actions.push({ id, title: "Usage" });
++    actions.push({ id, title: "Usage", image: "chart.bar" });
 +  }
 +
 +  if (input.includeRuntime !== false) {
@@ -1617,7 +2585,7 @@ index 31b1c02..f3716e5 100644
    return { actions, events };
  }
 diff --git aa/apps/mobile/src/features/threads/ThreadComposer.tsx bb/apps/mobile/src/features/threads/ThreadComposer.tsx
-index 6ce42ae..94cea1f 100644
+index 6ce42ae..443ed59 100644
 --- aa/apps/mobile/src/features/threads/ThreadComposer.tsx
 +++ bb/apps/mobile/src/features/threads/ThreadComposer.tsx
 @@ -8,6 +8,7 @@ import type {
@@ -1628,7 +2596,7 @@ index 6ce42ae..94cea1f 100644
  import {
    detectComposerTrigger,
    replaceTextRange,
-@@ -36,7 +37,6 @@ import Animated, {
+@@ -36,10 +37,10 @@ import Animated, {
    LinearTransition,
  } from "react-native-reanimated";
  import { useThemeColor } from "../../lib/useThemeColor";
@@ -1636,7 +2604,11 @@ index 6ce42ae..94cea1f 100644
  import { scopedThreadKey } from "../../lib/scopedEntities";
  
  import { AppText as Text } from "../../components/AppText";
-@@ -67,11 +67,16 @@ import {
++import { SymbolView } from "../../components/AppSymbol";
+ import { ComposerAttachmentStrip } from "../../components/ComposerAttachmentStrip";
+ import {
+   ComposerEditor,
+@@ -67,11 +68,22 @@ import {
    applyProviderOptionSelection,
    resolveProviderOptionDescriptors,
  } from "../../lib/providerOptions";
@@ -1646,15 +2618,21 @@ index 6ce42ae..94cea1f 100644
  import { ThreadSettingsSheet, threadSettingsSummaryLabel } from "./ThreadSettingsSheet";
  import { useThreadSettingsSheetPresentation } from "./use-thread-settings-sheet-presentation";
 +import { forgeComposerAction } from "../../forge/protocol/composerCommand";
++import { showComposerQueueSummary } from "./remoteQueuePresentation";
 +import {
++  REMOTE_COMPOSER_CONTROL_ROW_HEIGHT,
 +  REMOTE_COMPOSER_EDITOR_MAX_HEIGHT,
 +  REMOTE_COMPOSER_EDITOR_MIN_HEIGHT,
++  REMOTE_COMPOSER_FOCUSED_EDITOR_MIN_HEIGHT,
++  REMOTE_COMPOSER_SURFACE_PADDING_HORIZONTAL,
++  resolveComposerEditorContentInsetHorizontal,
 +  resolveRemoteComposerEditorHeight,
 +} from "./remoteComposerLayout";
++import { remoteComposerPresentation } from "./remoteComposerPresentation";
  
  /**
   * Height of the collapsed composer (pill + vertical padding, excluding safe-area inset).
-@@ -120,6 +125,17 @@ export interface ThreadComposerProps {
+@@ -120,6 +132,24 @@ export interface ThreadComposerProps {
    readonly onExpandedChange?: (expanded: boolean) => void;
    /** Fires on editor focus/blur; hosts use it to vet stale keyboard state. */
    readonly onEditorFocusChange?: (focused: boolean) => void;
@@ -1666,13 +2644,101 @@ index 6ce42ae..94cea1f 100644
 +  readonly remoteModelCommandPending?: boolean;
 +  /** Authoritative capability gate for the Forge model picker. */
 +  readonly remoteModelSelectionEnabled?: boolean;
++  /** Authoritative Fast Mode state from the Forge Remote snapshot. */
++  readonly remoteFastMode?: {
++    readonly supported: boolean;
++    readonly enabled: boolean;
++    readonly pending?: boolean;
++  };
++  readonly onSetRemoteFastMode?: (enabled: boolean) => void;
 +  /** Keeps the retained settings control as the entry point to Forge usage. */
 +  readonly remoteUsageAvailable?: boolean;
 +  readonly onOpenUsage?: () => void;
  }
  
  /**
-@@ -277,6 +293,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
+@@ -140,6 +170,7 @@ export function ComposerSurface(props: {
+   readonly children: ReactNode;
+   readonly style: ViewStyle;
+   readonly isDarkMode: boolean;
++  readonly solidBackgroundColor?: string;
+ }) {
+   // Drop shadow lives on a wrapper: `overflow: "hidden"` on the surface itself
+   // (needed to clip content to the pill shape) would clip the shadow on iOS.
+@@ -152,7 +183,7 @@ export function ComposerSurface(props: {
+     elevation: 10,
+   };
+ 
+-  if (isLiquidGlassSupported) {
++  if (isLiquidGlassSupported && !props.solidBackgroundColor) {
+     return (
+       <Animated.View layout={COMPOSER_LAYOUT_TRANSITION} style={shadowStyle}>
+         <LiquidGlassView
+@@ -173,9 +204,15 @@ export function ComposerSurface(props: {
+         style={[
+           props.style,
+           {
+-            backgroundColor: props.isDarkMode ? "rgba(44,44,46,0.96)" : "rgba(255,255,255,0.96)",
++            backgroundColor:
++              props.solidBackgroundColor ??
++              (props.isDarkMode ? "rgba(44,44,46,0.96)" : "rgba(255,255,255,0.96)"),
+             borderWidth: 1,
+-            borderColor: props.isDarkMode ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)",
++            borderColor: props.solidBackgroundColor
++              ? "rgba(255,255,255,0.12)"
++              : props.isDarkMode
++                ? "rgba(255,255,255,0.08)"
++                : "rgba(0,0,0,0.06)",
+           },
+         ]}
+       >
+@@ -270,6 +307,45 @@ const ComposerConnectionStatusPill = memo(function ComposerConnectionStatusPill(
+   );
+ });
+ 
++const RemoteComposerModelTrigger = memo(function RemoteComposerModelTrigger(props: {
++  readonly accessibilityLabel: string;
++  readonly disabled?: boolean;
++  readonly model: string;
++  readonly reasoning?: string;
++}) {
++  const iconColor = useThemeColor("--color-icon");
++  const mutedColor = useThemeColor("--color-foreground-muted");
++
++  return (
++    <Pressable
++      accessibilityLabel={`Model and reasoning, current ${props.accessibilityLabel}`}
++      accessibilityRole="button"
++      disabled={props.disabled}
++      className="h-11 min-w-0 flex-row items-center justify-center gap-1.5 rounded-full px-2 active:bg-white/5"
++      style={({ pressed }) => ({ opacity: props.disabled ? 0.5 : pressed ? 0.72 : 1 })}
++    >
++      <SymbolView name="bolt.fill" size={17} tintColor={iconColor} type="monochrome" />
++      <Text
++        className="shrink text-sm font-t3-bold text-foreground"
++        ellipsizeMode="tail"
++        numberOfLines={1}
++      >
++        {props.model}
++      </Text>
++      {props.reasoning ? (
++        <Text
++          className="shrink text-sm font-t3-medium"
++          ellipsizeMode="tail"
++          numberOfLines={1}
++          style={{ color: mutedColor }}
++        >
++          {props.reasoning}
++        </Text>
++      ) : null}
++    </Pressable>
++  );
++});
++
+ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposerProps) {
+   const isDarkMode = useColorScheme() === "dark";
+   const foregroundColor = useThemeColor("--color-foreground");
+@@ -277,6 +353,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
    const fallbackInputRef = useRef<ComposerEditorHandle>(null);
    const inputRef = props.editorRef ?? fallbackInputRef;
    const [isFocused, setIsFocused] = useState(false);
@@ -1680,7 +2746,7 @@ index 6ce42ae..94cea1f 100644
    const settingsSheetPresentation = useThreadSettingsSheetPresentation({
      editorRef: inputRef,
      isEditorFocused: isFocused,
-@@ -290,7 +307,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
+@@ -290,7 +367,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
    // Opening and closing count as active so the composer stays expanded while
    // focus moves between its native editor and the settings modal.
    const isExpanded = isFocused || settingsSheetPresentation.isActive;
@@ -1690,7 +2756,7 @@ index 6ce42ae..94cea1f 100644
  
    // Notify the parent from the derived value, not focus events: the parent
    // sizes the feed inset from this, and blur-during-sheet would otherwise
-@@ -324,9 +342,20 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
+@@ -324,9 +402,20 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
      setIsFocused(false);
      onEditorFocusChange?.(false);
    }, [onEditorFocusChange]);
@@ -1712,7 +2778,7 @@ index 6ce42ae..94cea1f 100644
  
    const sendLabel =
      props.connectionState !== "connected" || props.activeThreadBusy || props.queueCount > 0
-@@ -335,12 +364,14 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
+@@ -335,12 +424,14 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
    const currentModelSelection = props.selectedThread.modelSelection;
    const currentRuntimeMode = props.selectedThread.runtimeMode;
    const currentInteractionMode = props.selectedThread.interactionMode ?? "default";
@@ -1733,7 +2799,7 @@ index 6ce42ae..94cea1f 100644
    const toolbarFadeOpaque = isDarkMode ? "rgba(0,0,0,0.95)" : "rgba(255,255,255,0.95)";
    const toolbarFadeTransparent = isDarkMode ? "rgba(0,0,0,0)" : "rgba(255,255,255,0)";
    const selectedProviderStatus = useMemo(() => {
-@@ -379,40 +410,57 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
+@@ -379,40 +470,57 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
      }
      return detectComposerTrigger(props.draftMessage, composerSelection.end);
    }, [composerSelection, props.draftMessage]);
@@ -1819,7 +2885,7 @@ index 6ce42ae..94cea1f 100644
        const builtIn = allBuiltIn.filter((item) => item.command.includes(q));
  
        const providerCommands: ComposerCommandItem[] = [];
-@@ -528,34 +576,39 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
+@@ -528,34 +636,39 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
      }
  
      return [];
@@ -1868,28 +2934,44 @@ index 6ce42ae..94cea1f 100644
    ]);
    const handleCommandSelect = useCallback(
      (item: ComposerCommandItem) => {
-@@ -631,7 +684,14 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
+@@ -626,27 +739,50 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
+       }),
+     [currentModelOption?.capabilities, currentModelSelection.options],
+   );
++  const modelDisplayLabel = currentModelOption?.label ?? currentModelSelection.model;
++  const remotePresentation = remoteComposerPresentation(
++    modelDisplayLabel,
++    providerOptionDescriptors,
++  );
+   const settingsSummaryLabel = threadSettingsSummaryLabel({
+-    modelLabel: currentModelOption?.label ?? currentModelSelection.model,
++    modelLabel: modelDisplayLabel,
      optionDescriptors: providerOptionDescriptors,
      runtimeMode: currentRuntimeMode,
      interactionMode: currentInteractionMode,
-+    includeRuntime: !props.remoteOnly,
++    includeRuntime: true,
    });
-+  const settingsTriggerLabel = props.remoteOnly
-+    ? `Model · ${settingsSummaryLabel}`
-+    : settingsSummaryLabel;
++  const settingsTriggerLabel = settingsSummaryLabel;
 +  const remoteModelSelectionDisabled =
 +    props.remoteOnly &&
 +    (props.remoteModelSelectionEnabled !== true || props.remoteModelCommandPending === true);
  
    // iOS gets a native menu on the trigger pill: the everyday adjustments
    // apply without resigning the keyboard, while "All Settings…" (and the
-@@ -644,9 +704,20 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
+   // Android trigger) still route through the sheet, which must dismiss it.
+   const settingsMenu = useMemo(
+     () =>
+-      Platform.OS === "ios"
++      Platform.OS === "ios" || props.remoteOnly
+         ? buildThreadSettingsMenu({
+             providerGroups: threadProviderGroups,
              selectedModel: currentModelSelection,
              optionDescriptors: providerOptionDescriptors,
              runtimeMode: currentRuntimeMode,
 +            includeRuntime: !props.remoteOnly,
 +            includeUsage: props.remoteOnly && props.remoteUsageAvailable === true,
 +            modelSelectionDisabled: remoteModelSelectionDisabled,
++            fastMode: props.remoteOnly ? props.remoteFastMode : undefined,
            })
          : null,
 -    [threadProviderGroups, currentModelSelection, providerOptionDescriptors, currentRuntimeMode],
@@ -1898,6 +2980,7 @@ index 6ce42ae..94cea1f 100644
 +      currentRuntimeMode,
 +      providerOptionDescriptors,
 +      props.remoteOnly,
++      props.remoteFastMode,
 +      props.remoteUsageAvailable,
 +      remoteModelSelectionDisabled,
 +      threadProviderGroups,
@@ -1905,7 +2988,7 @@ index 6ce42ae..94cea1f 100644
    );
  
    const onUpdateModelSelection = props.onUpdateModelSelection;
-@@ -659,10 +730,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
+@@ -659,10 +795,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
        }
        switch (event.type) {
          case "select-model":
@@ -1918,53 +3001,137 @@ index 6ce42ae..94cea1f 100644
            const options = applyProviderOptionSelection(providerOptionDescriptors, {
              id: event.optionId,
              value: event.value,
-@@ -677,6 +750,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
+@@ -677,6 +815,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
            void Haptics.selectionAsync();
            onUpdateRuntimeMode(event.mode);
            return;
++        case "set-fast-mode":
++          void Haptics.selectionAsync();
++          props.onSetRemoteFastMode?.(event.enabled);
++          return;
 +        case "open-usage":
 +          props.onOpenUsage?.();
 +          return;
        }
      },
      [
-@@ -684,6 +760,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
+@@ -684,17 +829,22 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
        onUpdateModelSelection,
        onUpdateRuntimeMode,
        providerOptionDescriptors,
 +      props.onOpenUsage,
++      props.onSetRemoteFastMode,
 +      remoteModelSelectionDisabled,
        settingsMenu,
      ],
    );
-@@ -738,12 +816,20 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
+ 
+   return (
+     <Animated.View
+-      className="px-4"
++      className={props.remoteOnly ? "px-[13px]" : "px-4"}
+       layout={COMPOSER_LAYOUT_TRANSITION}
+       style={{
+-        paddingTop: isExpanded ? 8 : 6,
+-        paddingBottom: (props.bottomInset ?? 0) + (isExpanded ? 8 : 6),
++        paddingTop: props.remoteOnly ? (isExpanded ? 2 : 6) : isExpanded ? 8 : 6,
++        paddingBottom:
++          (props.bottomInset ?? 0) +
++          (props.remoteOnly ? (isExpanded ? 10 : 6) : isExpanded ? 8 : 6),
+       }}
+     >
+       {/* The backdrop gradient lives on a plain View: Reanimated's Animated.View
+@@ -736,27 +886,46 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
+ 
+         <ComposerSurface
            isDarkMode={isDarkMode}
++          solidBackgroundColor={props.remoteOnly && isDarkMode ? "#101010" : undefined}
            style={
-             isExpanded
+-            isExpanded
 -              ? {
 -                  borderRadius: 20,
 -                  overflow: "hidden" as const,
 -                  paddingHorizontal: 14,
 -                  paddingVertical: 12,
 -                }
-+              ? props.remoteOnly
+-              : {
+-                  borderRadius: 999,
+-                  overflow: "hidden" as const,
+-                  flexDirection: "row" as const,
+-                  alignItems: "center" as const,
+-                  paddingLeft: 18,
+-                  paddingRight: 5,
+-                  paddingVertical: 5,
+-                }
++            props.remoteOnly
++              ? isExpanded
 +                ? {
-+                    borderRadius: 24,
++                    borderRadius: 26,
 +                    overflow: "hidden" as const,
-+                    paddingHorizontal: 12,
-+                    paddingTop: 10,
-+                    paddingBottom: 8,
++                    paddingBottom: 4,
++                    paddingHorizontal: REMOTE_COMPOSER_SURFACE_PADDING_HORIZONTAL,
++                    paddingTop: 8,
 +                  }
 +                : {
++                    alignItems: "center" as const,
++                    borderRadius: 999,
++                    flexDirection: "row" as const,
++                    overflow: "hidden" as const,
++                    paddingLeft: 4,
++                    paddingRight: 5,
++                    paddingVertical: 5,
++                  }
++              : isExpanded
++                ? {
 +                    borderRadius: 20,
 +                    overflow: "hidden" as const,
 +                    paddingHorizontal: 14,
 +                    paddingVertical: 12,
 +                  }
-               : {
-                   borderRadius: 999,
-                   overflow: "hidden" as const,
-@@ -784,19 +870,30 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
++                : {
++                    borderRadius: 999,
++                    overflow: "hidden" as const,
++                    flexDirection: "row" as const,
++                    alignItems: "center" as const,
++                    paddingLeft: 18,
++                    paddingRight: 5,
++                    paddingVertical: 5,
++                  }
+           }
+         >
+           {/* Attachment strip — inside the card, above the text input */}
+-          {isExpanded ? (
++          {isExpanded && !props.remoteOnly ? (
+             <Animated.View
+               className={props.draftAttachments.length > 0 ? "pb-2.5" : undefined}
+               entering={FadeIn.duration(160)}
+@@ -770,7 +939,24 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
+             </Animated.View>
+           ) : null}
+ 
+-          <View className={isExpanded ? undefined : "min-w-0 flex-1"}>
++          {props.remoteOnly && !isExpanded && settingsMenu && settingsMenu.actions.length > 0 ? (
++            <ControlPillMenu
++              actions={settingsMenu.actions}
++              onPressAction={({ nativeEvent }) => handleSettingsMenuAction(nativeEvent.event)}
++            >
++              <ControlPill
++                accessibilityLabel="Forge controls"
++                className="bg-transparent"
++                icon="plus"
++              />
++            </ControlPillMenu>
++          ) : null}
++
++          <View
++            className={
++              isExpanded ? (props.remoteOnly ? "w-full min-w-0" : undefined) : "min-w-0 flex-1"
++            }
++          >
+             <ComposerEditor
+               ref={inputRef}
+               multiline
+@@ -784,22 +970,49 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                onFocus={handleFocus}
                onBlur={handleBlur}
                onSubmit={handleSend}
@@ -1977,78 +3144,121 @@ index 6ce42ae..94cea1f 100644
                // Android: collapsed single line centers natively (gravity) in
                // a pill-height box matching the send button; iOS keeps insets.
                singleLineCentered={!isExpanded}
-               contentInsetVertical={isExpanded || Platform.OS === "android" ? 0 : 6}
+-              contentInsetVertical={isExpanded || Platform.OS === "android" ? 0 : 6}
++              contentInsetVertical={
++                props.remoteOnly
++                  ? isExpanded
++                    ? 5
++                    : 4
++                  : isExpanded || Platform.OS === "android"
++                    ? 0
++                    : 6
++              }
++              contentInsetHorizontal={resolveComposerEditorContentInsetHorizontal({
++                remoteOnly: props.remoteOnly === true,
++                expanded: isExpanded,
++              })}
                style={
-                 isExpanded
--                  ? {
+-                isExpanded
++                props.remoteOnly
+                   ? {
 -                      minHeight: 80,
 -                      maxHeight: 160,
 -                      paddingHorizontal: 4,
 -                      paddingVertical: 4,
 -                    }
-+                  ? props.remoteOnly
+-                  : {
+-                      height: 36,
++                      height: isExpanded
++                        ? Math.max(REMOTE_COMPOSER_FOCUSED_EDITOR_MIN_HEIGHT, remoteEditorHeight)
++                        : remoteEditorHeight,
++                      minHeight: isExpanded
++                        ? REMOTE_COMPOSER_FOCUSED_EDITOR_MIN_HEIGHT
++                        : REMOTE_COMPOSER_EDITOR_MIN_HEIGHT,
++                      maxHeight: REMOTE_COMPOSER_EDITOR_MAX_HEIGHT,
++                      ...(isExpanded ? {} : { paddingHorizontal: 4 }),
+                     }
++                  : isExpanded
 +                    ? {
-+                        height: remoteEditorHeight,
-+                        minHeight: REMOTE_COMPOSER_EDITOR_MIN_HEIGHT,
-+                        maxHeight: REMOTE_COMPOSER_EDITOR_MAX_HEIGHT,
-+                        paddingHorizontal: 4,
-+                      }
-+                    : {
 +                        minHeight: 80,
 +                        maxHeight: 160,
 +                        paddingHorizontal: 4,
 +                        paddingVertical: 4,
 +                      }
-                   : {
-                       height: 36,
-                     }
-@@ -841,9 +938,53 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
++                    : {
++                        height: 36,
++                      }
+               }
+               textStyle={{
+                 ...bodyText,
+@@ -841,9 +1054,74 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                )}
              </Animated.View>
            ) : null}
 +          {isExpanded && props.remoteOnly ? (
-+            <ComposerToolbarRow paddingBottom={0} paddingHorizontal={0} paddingTop={6}>
-+              <ComposerToolbarScroller
-+                fadeOpaque={toolbarFadeOpaque}
-+                fadeTransparent={toolbarFadeTransparent}
-+              >
-+                {settingsMenu ? (
++            <Animated.View
++              className="w-full flex-row items-center"
++              entering={FadeIn.duration(160)}
++              exiting={FadeOut.duration(100)}
++              style={{
++                height: REMOTE_COMPOSER_CONTROL_ROW_HEIGHT,
++                marginTop: 4,
++              }}
++            >
++              {settingsMenu && settingsMenu.actions.length > 0 ? (
++                <ControlPillMenu
++                  actions={settingsMenu.actions}
++                  onPressAction={({ nativeEvent }) => handleSettingsMenuAction(nativeEvent.event)}
++                >
++                  <ControlPill
++                    accessibilityLabel="Forge controls"
++                    className="bg-transparent"
++                    icon="plus"
++                  />
++                </ControlPillMenu>
++              ) : (
++                <ControlPill
++                  accessibilityLabel="Forge controls unavailable"
++                  className="bg-transparent"
++                  disabled
++                  icon="plus"
++                />
++              )}
++
++              <View className="min-w-0 flex-1 px-1">
++                {settingsMenu && settingsMenu.actions.length > 0 ? (
 +                  <ControlPillMenu
 +                    actions={settingsMenu.actions}
++                    style={{ width: "100%" }}
 +                    onPressAction={({ nativeEvent }) => handleSettingsMenuAction(nativeEvent.event)}
 +                  >
-+                    <ComposerToolbarTrigger
-+                      accessibilityLabel={`Select model, current ${settingsSummaryLabel}`}
-+                      iconNode={
-+                        <ProviderIcon provider={currentModelOption?.providerDriver} size={16} />
-+                      }
-+                      label={settingsTriggerLabel}
-+                      maxWidth={260}
-+                      disabled={remoteModelSelectionDisabled && props.remoteUsageAvailable !== true}
++                    <RemoteComposerModelTrigger
++                      accessibilityLabel={remotePresentation.accessibilityLabel}
++                      model={remotePresentation.model}
++                      reasoning={remotePresentation.reasoning}
 +                    />
 +                  </ControlPillMenu>
 +                ) : (
-+                  <ComposerToolbarTrigger
-+                    accessibilityLabel={`Select model, current ${settingsSummaryLabel}`}
-+                    iconNode={
-+                      <ProviderIcon provider={currentModelOption?.providerDriver} size={16} />
-+                    }
-+                    label={settingsTriggerLabel}
-+                    maxWidth={260}
-+                    disabled={remoteModelSelectionDisabled && props.remoteUsageAvailable !== true}
-+                    onPress={settingsSheetPresentation.open}
++                  <RemoteComposerModelTrigger
++                    accessibilityLabel={remotePresentation.accessibilityLabel}
++                    disabled
++                    model={remotePresentation.model}
++                    reasoning={remotePresentation.reasoning}
 +                  />
 +                )}
-+              </ComposerToolbarScroller>
-+              <ComposerToolbarButton
-+                accessibilityLabel={showStopAction ? "Stop" : sendLabel}
-+                icon={showStopAction ? "stop.fill" : "arrow.up"}
-+                variant={showStopAction ? "danger" : "primary"}
-+                disabled={!showStopAction && !canSend}
-+                onPress={showStopAction ? props.onStopThread : handleSend}
-+                showChevron={false}
-+              />
-+            </ComposerToolbarRow>
++              </View>
++
++              {showStopAction ? (
++                <ControlPill icon="stop.fill" variant="danger" onPress={props.onStopThread} />
++              ) : (
++                <ControlPill
++                  icon="arrow.up"
++                  variant="primary"
++                  disabled={!canSend}
++                  onPress={handleSend}
++                />
++              )}
++            </Animated.View>
 +          ) : null}
          </ComposerSurface>
  
@@ -2057,7 +3267,7 @@ index 6ce42ae..94cea1f 100644
            // Toolbar row — matches draft page layout (expanded only)
            <Animated.View entering={FadeIn.duration(160)} exiting={FadeOut.duration(120)}>
              <ComposerToolbarRow paddingBottom={8} paddingHorizontal={0} paddingTop={8}>
-@@ -851,38 +992,42 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
+@@ -851,38 +1129,42 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                  fadeOpaque={toolbarFadeOpaque}
                  fadeTransparent={toolbarFadeTransparent}
                >
@@ -2111,7 +3321,7 @@ index 6ce42ae..94cea1f 100644
                    <ComposerToolbarButton
                      accessibilityLabel="Stop"
                      icon="stop.fill"
-@@ -892,14 +1037,24 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
+@@ -892,20 +1174,30 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                    />
                  ) : null}
                </ComposerToolbarScroller>
@@ -2144,7 +3354,14 @@ index 6ce42ae..94cea1f 100644
              </ComposerToolbarRow>
            </Animated.View>
          ) : null}
-@@ -928,6 +1083,10 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
+ 
+         {/* Queue count */}
+-        {props.queueCount > 0 ? (
++        {showComposerQueueSummary(props.remoteOnly === true, props.queueCount) ? (
+           <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(120)}>
+             <Text className="pt-2 text-xs text-foreground-muted">
+               {props.queueCount} queued message{props.queueCount === 1 ? "" : "s"} will send
+@@ -928,6 +1220,10 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
          }
          runtimeMode={currentRuntimeMode}
          onUpdateRuntimeMode={props.onUpdateRuntimeMode}
@@ -2156,19 +3373,33 @@ index 6ce42ae..94cea1f 100644
  
        <ImageViewing
 diff --git aa/apps/mobile/src/features/threads/ThreadDetailScreen.tsx bb/apps/mobile/src/features/threads/ThreadDetailScreen.tsx
-index fa6c1e9..1931a90 100644
+index fa6c1e9..1d9f31e 100644
 --- aa/apps/mobile/src/features/threads/ThreadDetailScreen.tsx
 +++ bb/apps/mobile/src/features/threads/ThreadDetailScreen.tsx
-@@ -78,6 +78,7 @@ import {
+@@ -78,6 +78,13 @@ import {
  } from "./ThreadComposer";
  import { ThreadFeed } from "./ThreadFeed";
  import type { ThreadContentPresentation } from "./threadContentPresentation";
-+import { REMOTE_COMPOSER_EXPANDED_CHROME } from "./remoteComposerLayout";
++import {
++  resolveRemoteComposerBottomInset,
++  resolveThreadComposerChrome,
++  shouldTrackRemoteComposerKeyboard,
++} from "./remoteComposerLayout";
++import type { RemoteWorkDisclosurePresentation } from "./threadMessageChrome";
++import type { RemoteQueuedMessagePresentation } from "./remoteQueuePresentation";
  
  export interface ThreadDetailScreenProps {
    readonly selectedThread: OrchestrationThreadShell;
-@@ -88,7 +89,9 @@ export interface ThreadDetailScreenProps {
+@@ -86,9 +93,17 @@ export interface ThreadDetailScreenProps {
+   readonly connectionError: string | null;
+   readonly environmentLabel: string | null;
    readonly selectedThreadFeed: ReadonlyArray<ThreadFeedEntry>;
++  readonly remoteAssistantResponseMessageIds?: ReadonlySet<string>;
++  readonly remoteWorkDisclosures?: ReadonlyArray<RemoteWorkDisclosurePresentation>;
++  readonly remoteQueuedMessages?: ReadonlyArray<RemoteQueuedMessagePresentation>;
++  readonly onEditRemoteQueuedMessage?: (message: RemoteQueuedMessagePresentation) => void;
++  readonly onSteerRemoteQueuedMessage?: (message: RemoteQueuedMessagePresentation) => void;
++  readonly onCancelRemoteQueuedMessage?: (message: RemoteQueuedMessagePresentation) => void;
    readonly activeWorkStartedAt: string | null;
    readonly activePendingApproval: PendingApproval | null;
 +  readonly remotePendingApprovals?: ReadonlyArray<PendingApproval>;
@@ -2177,7 +3408,7 @@ index fa6c1e9..1931a90 100644
    readonly activePendingUserInput: PendingUserInput | null;
    readonly activePendingUserInputDrafts: Record<string, PendingUserInputDraftAnswer>;
    readonly activePendingUserInputAnswers: Record<string, string | ReadonlyArray<string>> | null;
-@@ -124,6 +127,11 @@ export interface ThreadDetailScreenProps {
+@@ -124,6 +139,11 @@ export interface ThreadDetailScreenProps {
      requestId: ApprovalRequestId,
      decision: ProviderApprovalDecision,
    ) => Promise<unknown>;
@@ -2189,7 +3420,7 @@ index fa6c1e9..1931a90 100644
    readonly onSelectUserInputOption: (
      requestId: ApprovalRequestId,
      question: UserInputQuestion,
-@@ -136,6 +144,13 @@ export interface ThreadDetailScreenProps {
+@@ -136,6 +156,19 @@ export interface ThreadDetailScreenProps {
    ) => void;
    readonly onSubmitUserInput: () => Promise<unknown>;
    readonly showContent?: boolean;
@@ -2198,12 +3429,18 @@ index fa6c1e9..1931a90 100644
 +  readonly remoteCancellable?: boolean;
 +  readonly remoteModelCommandPending?: boolean;
 +  readonly remoteModelSelectionEnabled?: boolean;
++  readonly remoteFastMode?: {
++    readonly supported: boolean;
++    readonly enabled: boolean;
++    readonly pending?: boolean;
++  };
++  readonly onSetRemoteFastMode?: (enabled: boolean) => void;
 +  readonly remoteUsageAvailable?: boolean;
 +  readonly onOpenUsage?: () => void;
  }
  
  function latestStreamingAssistantMessage(
-@@ -214,6 +229,9 @@ const USER_INPUT_TOGGLE_TIMING = {
+@@ -214,6 +247,9 @@ const USER_INPUT_TOGGLE_TIMING = {
  };
  
  export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: ThreadDetailScreenProps) {
@@ -2213,20 +3450,73 @@ index fa6c1e9..1931a90 100644
    const insets = useSafeAreaInsets();
    const isKeyboardVisible = useKeyboardState((state) => state.isVisible);
    const liveKeyboardHeight = useKeyboardState((state) => state.height);
-@@ -289,7 +307,11 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
+@@ -268,9 +304,16 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
+   // animation, so the composer would ride down flush to the screen edge and
+   // then snap up into the inset. On iOS blur precedes the hide, so the
+   // focus-keyed inset is already in place while the composer rides down.
+-  const composerBottomInset = (Platform.OS === "android" ? isKeyboardVisible : composerExpanded)
+-    ? 0
+-    : Math.max(insets.bottom, 12);
++  const composerBottomInset = props.remoteOnly
++    ? resolveRemoteComposerBottomInset({
++        platform: Platform.OS === "android" ? "android" : "ios",
++        keyboardVisible: isKeyboardVisible,
++        composerFocused: composerExpanded,
++        safeAreaBottom: insets.bottom,
++      })
++    : (Platform.OS === "android" ? isKeyboardVisible : composerExpanded)
++      ? 0
++      : Math.max(insets.bottom, 12);
+   const contentPresentationKind = props.contentPresentation.kind;
+   // The raw sync status enters "synchronizing" on every full fetch, cached or
+   // not. Whether messages are already on screen decides the pill label: no
+@@ -289,7 +332,12 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
      }
    })();
    const selectedThreadFeed = props.selectedThreadFeed;
 -  const composerChrome = composerExpanded ? COMPOSER_EXPANDED_CHROME : COMPOSER_COLLAPSED_CHROME;
-+  const composerChrome = composerExpanded
-+    ? props.remoteOnly
-+      ? REMOTE_COMPOSER_EXPANDED_CHROME
-+      : COMPOSER_EXPANDED_CHROME
-+    : COMPOSER_COLLAPSED_CHROME;
++  const composerChrome = resolveThreadComposerChrome({
++    remoteOnly: props.remoteOnly === true,
++    expanded: composerExpanded,
++    retainedCollapsedChrome: COMPOSER_COLLAPSED_CHROME,
++    retainedExpandedChrome: COMPOSER_EXPANDED_CHROME,
++  });
    const composerOverlapHeight = composerChrome + composerBottomInset;
    // While a user-input request is pending, the questionnaire owns the
    // composer slot outright: expanded it is the full card, collapsed it is a
-@@ -668,7 +690,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
+@@ -603,6 +651,13 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
+             onHeaderMaterialVisibilityChange={props.onHeaderMaterialVisibilityChange}
+             onEndFollowEnabledChange={setEndFollowEnabled}
+             skills={selectedProviderSkills}
++            remoteOnly={props.remoteOnly}
++            remoteResponseMessageIds={props.remoteAssistantResponseMessageIds}
++            remoteWorkDisclosures={props.remoteWorkDisclosures}
++            remoteQueuedMessages={props.remoteQueuedMessages}
++            onEditRemoteQueuedMessage={props.onEditRemoteQueuedMessage}
++            onSteerRemoteQueuedMessage={props.onSteerRemoteQueuedMessage}
++            onCancelRemoteQueuedMessage={props.onCancelRemoteQueuedMessage}
+             loadEarlier={props.loadEarlier ?? null}
+           />
+         </View>
+@@ -616,7 +671,16 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
+           // The animated keyboard height can remain stale after a dismissed
+           // IME on both platforms. Visibility is the authoritative closed
+           // state, so disable the translation rather than stranding the pill.
+-          enabled={isKeyboardVisible && !keyboardStateSuspect}
++          enabled={
++            props.remoteOnly
++              ? shouldTrackRemoteComposerKeyboard({
++                  platform: Platform.OS === "android" ? "android" : "ios",
++                  keyboardVisible: isKeyboardVisible,
++                  composerFocused: composerExpanded,
++                  keyboardStateSuspect,
++                })
++              : isKeyboardVisible && !keyboardStateSuspect
++          }
+           style={{ position: "absolute", bottom: 0, left: 0, right: 0 }}
+           offset={{ closed: 0, opened: 0 }}
+         >
+@@ -668,7 +732,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                </Animated.View>
              ) : null}
              <View className="w-full self-center" style={{ maxWidth: contentMaxWidth }}>
@@ -2235,7 +3525,7 @@ index fa6c1e9..1931a90 100644
                  <Animated.View
                    className="shrink-0 gap-3 px-4 pb-3"
                    // The questionnaire replaces the composer, so it must pad
-@@ -681,13 +703,19 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
+@@ -681,13 +745,19 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                    entering={FadeInDown.duration(220)}
                    exiting={FadeOut.duration(140)}
                  >
@@ -2259,7 +3549,18 @@ index fa6c1e9..1931a90 100644
                    {props.activePendingUserInput ? (
                      <PendingUserInputCard
                        pendingUserInput={props.activePendingUserInput}
-@@ -742,6 +770,12 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
+@@ -717,7 +787,9 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
+                 editorRef={composerEditorRef}
+                 draftMessage={props.draftMessage}
+                 draftAttachments={props.draftAttachments}
+-                placeholder="Ask the repo agent, or run a command…"
++                placeholder={
++                  props.remoteOnly ? "Follow up" : "Ask the repo agent, or run a command…"
++                }
+                 contentMaxWidth={contentMaxWidth}
+                 connectionState={props.connectionStateLabel}
+                 connectionError={props.connectionError}
+@@ -742,6 +814,14 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                  onUpdateInteractionMode={props.onUpdateThreadInteractionMode}
                  onExpandedChange={setComposerExpanded}
                  onEditorFocusChange={handleOwnedInputFocusChange}
@@ -2267,16 +3568,25 @@ index fa6c1e9..1931a90 100644
 +                remoteCancellable={props.remoteCancellable}
 +                remoteModelCommandPending={props.remoteModelCommandPending}
 +                remoteModelSelectionEnabled={props.remoteModelSelectionEnabled}
++                remoteFastMode={props.remoteFastMode}
++                onSetRemoteFastMode={props.onSetRemoteFastMode}
 +                remoteUsageAvailable={props.remoteUsageAvailable}
 +                onOpenUsage={props.onOpenUsage}
                />
              </View>
            </View>
 diff --git aa/apps/mobile/src/features/threads/ThreadFeed.tsx bb/apps/mobile/src/features/threads/ThreadFeed.tsx
-index 874c312..15445e7 100644
+index 874c312..80ce092 100644
 --- aa/apps/mobile/src/features/threads/ThreadFeed.tsx
 +++ bb/apps/mobile/src/features/threads/ThreadFeed.tsx
-@@ -6,7 +6,6 @@ import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3too
+@@ -1,12 +1,12 @@
+ import * as Haptics from "expo-haptics";
+ import { KeyboardAwareLegendList } from "@legendapp/list/keyboard";
+ import { type LegendListRef } from "@legendapp/list/react-native";
+-import type { EnvironmentId, MessageId, ThreadId, TurnId } from "@t3tools/contracts";
++import type { MenuAction } from "@react-native-menu/menu";
++import { MessageId, type EnvironmentId, type ThreadId, type TurnId } from "@t3tools/contracts";
+ import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
  import { formatElapsed } from "@t3tools/shared/orchestrationTiming";
  import { SymbolView } from "../../components/AppSymbol";
  import { HeaderHeightContext } from "@react-navigation/elements";
@@ -2284,16 +3594,76 @@ index 874c312..15445e7 100644
  import {
    memo,
    useCallback,
-@@ -101,8 +100,6 @@ import {
+@@ -60,6 +60,7 @@ import {
+ 
+ import { AppText as Text } from "../../components/AppText";
+ import { CopyTextButton } from "../../components/CopyTextButton";
++import { ControlPillMenu } from "../../components/ControlPill";
+ import {
+   parseReviewCommentMessageSegments,
+   type ReviewInlineComment,
+@@ -101,12 +102,26 @@ import {
    WORK_GROUP_TOGGLE_HEIGHT,
  } from "./thread-work-log";
  import { useMarkdownCodeHighlight } from "./markdownCodeHighlightState";
 -import { useAssetUrl } from "../../state/assets";
 -import { resolveWorkspaceRelativeFilePath } from "../files/filePath";
++import {
++  remoteQueueActionPresentations,
++  type RemoteQueuedMessagePresentation,
++} from "./remoteQueuePresentation";
++import {
++  FORGE_REMOTE_MESSAGE_CHROME,
++  presentRemoteWorkEntries,
++  type RemoteWorkDisclosurePresentation,
++  showAssistantResponseCopy,
++  showUserMessageMeta,
++  threadFeedFixedRowHeight,
++} from "./threadMessageChrome";
  
  const WIDE_MARKDOWN_BLOCK_OPTIONS = {
    includeOrderedLists: Platform.OS === "android",
-@@ -173,24 +170,7 @@ function MessageAttachmentImage(props: {
+ } as const;
++const EMPTY_MESSAGE_IDS: ReadonlySet<string> = new Set();
++const EMPTY_WORK_DISCLOSURES: ReadonlyArray<RemoteWorkDisclosurePresentation> = [];
++const EMPTY_QUEUED_MESSAGES: ReadonlyArray<RemoteQueuedMessagePresentation> = [];
++const REMOTE_QUEUE_CREATED_AT = "1970-01-01T00:00:00.000Z";
+ 
+ const MESSAGE_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
+   hour: "numeric",
+@@ -120,16 +135,6 @@ function formatMessageTime(input: string): string {
+   return MESSAGE_TIME_FORMATTER.format(timestamp);
+ }
+ 
+-// Pre-measurement heights for getFixedItemSize, mirroring renderFeedEntry's
+-// classNames. The fold row's min-h-11 (44px) stays taller than its single
+-// text-sm line at every supported base font size (26px at the 22pt maximum),
+-// so its height is a constant; a drifted value costs one correction on
+-// measure, not a persistent offset.
+-const TURN_FOLD_HEIGHT = 56; // min-h-11 (44) + mb-3 (12)
+-// The working row has no min-height clamp — its height follows the scaled
+-// text-xs line height (see workingRowHeight in ThreadFeed).
+-const WORKING_ROW_VERTICAL_EXTRAS = 24; // py-1 (8) + mb-4 (16)
+-
+ // Entering animations must only play for rows born just now — LegendList
+ // remounts rows when they scroll back into view, and replaying an entrance for
+ // old content would be its own kind of jank.
+@@ -160,6 +165,14 @@ export interface ThreadFeedProps {
+   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
+   readonly onEndFollowEnabledChange?: (enabled: boolean) => void;
+   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
++  /** Applies Forge-only message chrome without changing retained T3 behavior. */
++  readonly remoteOnly?: boolean;
++  readonly remoteResponseMessageIds?: ReadonlySet<string>;
++  readonly remoteWorkDisclosures?: ReadonlyArray<RemoteWorkDisclosurePresentation>;
++  readonly remoteQueuedMessages?: ReadonlyArray<RemoteQueuedMessagePresentation>;
++  readonly onEditRemoteQueuedMessage?: (message: RemoteQueuedMessagePresentation) => void;
++  readonly onSteerRemoteQueuedMessage?: (message: RemoteQueuedMessagePresentation) => void;
++  readonly onCancelRemoteQueuedMessage?: (message: RemoteQueuedMessagePresentation) => void;
+   /** Non-null when older turns exist beyond the loaded window. */
+   readonly loadEarlier?: {
+     readonly loading: boolean;
+@@ -173,24 +186,7 @@ function MessageAttachmentImage(props: {
    readonly className: string;
    readonly onPressImage: (uri: string, headers?: Record<string, string>) => void;
  }) {
@@ -2319,7 +3689,403 @@ index 874c312..15445e7 100644
  }
  
  const MARKDOWN_COLORS = {
-@@ -1327,7 +1307,6 @@ function ThreadFeedPlaceholder(props: {
+@@ -824,13 +820,25 @@ function renderFeedEntry(
+     readonly copiedRowId: string | null;
+     readonly expandedWorkRows: Record<string, boolean>;
+     readonly terminalAssistantMessageIds: ReadonlySet<string>;
++    readonly remoteResponseMessageIds: ReadonlySet<string>;
++    readonly remoteWorkDisclosureByMessageId: ReadonlyMap<string, RemoteWorkDisclosurePresentation>;
++    readonly remoteQueuedMessageByMessageId: ReadonlyMap<string, RemoteQueuedMessagePresentation>;
++    readonly expandedRemoteWorkDisclosureIds: ReadonlySet<string>;
++    readonly remoteOnly: boolean;
+     readonly unsettledTurnId: TurnId | null;
+     readonly onCopyWorkRow: (rowId: string, value: string) => void;
+     readonly onToggleWorkGroup: (groupId: string) => void;
+     readonly onToggleWorkRow: (rowId: string) => void;
+     readonly onToggleTurnFold: (turnId: TurnId) => void;
++    readonly onToggleRemoteWorkDisclosure: (markerMessageId: string) => void;
++    readonly onEditRemoteQueuedMessage?: (message: RemoteQueuedMessagePresentation) => void;
++    readonly onSteerRemoteQueuedMessage?: (message: RemoteQueuedMessagePresentation) => void;
++    readonly onCancelRemoteQueuedMessage?: (message: RemoteQueuedMessagePresentation) => void;
+     readonly onPressImage: (uri: string, headers?: Record<string, string>) => void;
+     readonly onMarkdownLinkPress: (href: string) => void;
++    readonly dangerForegroundColor: string | import("react-native").ColorValue;
++    readonly iconColor: string | import("react-native").ColorValue;
++    readonly iconMutedColor: string | import("react-native").ColorValue;
+     readonly iconSubtleColor: string | import("react-native").ColorValue;
+     readonly userBubbleColor: string | import("react-native").ColorValue;
+     readonly markdownStyles: MarkdownStyleSets;
+@@ -843,7 +851,7 @@ function renderFeedEntry(
+   const { markdownStyles, iconSubtleColor, userBubbleColor } = props;
+ 
+   if (entry.type === "working") {
+-    return <WorkingTimelineRow startedAt={entry.createdAt} />;
++    return <WorkingTimelineRow remoteOnly={props.remoteOnly} startedAt={entry.createdAt} />;
+   }
+ 
+   if (entry.type === "turn-fold") {
+@@ -852,8 +860,20 @@ function renderFeedEntry(
+         accessibilityRole="button"
+         accessibilityState={{ expanded: entry.expanded }}
+         onPress={() => props.onToggleTurnFold(entry.turnId)}
+-        hitSlop={4}
+-        className="mb-3 min-h-11 flex-row items-center gap-2 border-b border-neutral-200/80 px-2 dark:border-white/[0.08]"
++        hitSlop={props.remoteOnly ? 6 : 4}
++        className={cn(
++          "flex-row items-center gap-2 border-b border-neutral-200/80 dark:border-white/[0.08]",
++          props.remoteOnly ? null : "mb-3 min-h-11 px-2",
++        )}
++        style={
++          props.remoteOnly
++            ? {
++                minHeight: FORGE_REMOTE_MESSAGE_CHROME.turnFoldMinHeight,
++                marginBottom: FORGE_REMOTE_MESSAGE_CHROME.turnFoldBottomSpacing,
++                paddingHorizontal: FORGE_REMOTE_MESSAGE_CHROME.turnFoldHorizontalPadding,
++              }
++            : undefined
++        }
+       >
+         <Text className="font-t3-medium text-sm tabular-nums text-foreground-muted">
+           {entry.label}
+@@ -897,23 +917,148 @@ function renderFeedEntry(
+       message.role === "assistant" &&
+       props.unsettledTurnId !== null &&
+       message.turnId === props.unsettledTurnId;
+-    const showAssistantMeta =
++    const showRemoteAssistantCopy =
++      props.remoteOnly &&
++      showAssistantResponseCopy({
++        isAssistant: message.role === "assistant",
++        isTerminalResponse: props.remoteResponseMessageIds.has(message.id),
++        isTurnInProgress: assistantTurnStillInProgress,
++        streaming: message.streaming,
++        text: message.text,
++      });
++    const showRetainedAssistantMeta =
++      !props.remoteOnly &&
+       message.role === "assistant" &&
+       props.terminalAssistantMessageIds.has(message.id) &&
+       !assistantTurnStillInProgress &&
+       !message.streaming;
++    const remoteWorkDisclosure = props.remoteOnly
++      ? props.remoteWorkDisclosureByMessageId.get(message.id)
++      : undefined;
++    const remoteQueuedMessage = props.remoteOnly
++      ? props.remoteQueuedMessageByMessageId.get(message.id)
++      : undefined;
+ 
+     if (isUser) {
+       const enterAnimated = isFreshTimestamp(message.createdAt);
++      if (remoteQueuedMessage) {
++        const actionPresentations = remoteQueueActionPresentations(remoteQueuedMessage, {
++          edit: props.onEditRemoteQueuedMessage !== undefined,
++          steer: props.onSteerRemoteQueuedMessage !== undefined,
++          cancel: props.onCancelRemoteQueuedMessage !== undefined,
++        });
++        const menuActions: MenuAction[] = actionPresentations.map((action) => ({
++          id: action.id,
++          title: action.title,
++          image: action.systemImage,
++          // @react-native-menu/menu's New Architecture bridge serializes an
++          // omitted imageColor as zero. Set it explicitly or SF Symbols render
++          // black-on-black in the dark native UIMenu.
++          imageColor: action.destructive ? props.dangerForegroundColor : props.iconColor,
++          ...(action.destructive ? { attributes: { destructive: true } } : {}),
++        }));
++        const handleQueueMenuAction = (event: string) => {
++          if (event === "edit") props.onEditRemoteQueuedMessage?.(remoteQueuedMessage);
++          if (event === "steer") props.onSteerRemoteQueuedMessage?.(remoteQueuedMessage);
++          if (event === "cancel") props.onCancelRemoteQueuedMessage?.(remoteQueuedMessage);
++        };
++        const bubble = (
++          <View
++            className="min-w-0 gap-2"
++            style={{
++              backgroundColor: FORGE_REMOTE_MESSAGE_CHROME.userBubbleBackgroundColor,
++              borderRadius: FORGE_REMOTE_MESSAGE_CHROME.userBubbleBorderRadius,
++              paddingHorizontal: FORGE_REMOTE_MESSAGE_CHROME.userBubbleHorizontalPadding,
++              paddingTop: FORGE_REMOTE_MESSAGE_CHROME.userBubbleTopPadding,
++              paddingBottom: FORGE_REMOTE_MESSAGE_CHROME.userBubbleBottomPadding,
++              maxWidth: props.userBubbleMaxWidth,
++              ...(hasWideBlock ? { width: props.userBubbleMaxWidth } : null),
++            }}
++          >
++            <UserMessageContent
++              text={message.text}
++              markdownStyles={styles}
++              reviewCommentColors={props.reviewCommentColors}
++              skills={props.skills}
++              onLinkPress={props.onMarkdownLinkPress}
++            />
++          </View>
++        );
++        return (
++          <Animated.View
++            className="items-end"
++            style={{ marginBottom: FORGE_REMOTE_MESSAGE_CHROME.userMessageBottomSpacing }}
++          >
++            <View className="mb-1 flex-row items-center justify-end gap-1 pr-1">
++              <SymbolView
++                name="arrow.turn.up.right"
++                size={12}
++                tintColor={iconSubtleColor}
++                type="monochrome"
++              />
++              <Text className="text-xs font-t3-medium text-foreground-muted">Queued</Text>
++              {menuActions.length > 0 ? (
++                <ControlPillMenu
++                  actions={menuActions}
++                  onPressAction={({ nativeEvent }) => handleQueueMenuAction(nativeEvent.event)}
++                >
++                  <Pressable accessibilityLabel="Queued message actions" hitSlop={8}>
++                    <SymbolView
++                      name="ellipsis"
++                      size={14}
++                      tintColor={iconSubtleColor}
++                      type="monochrome"
++                    />
++                  </Pressable>
++                </ControlPillMenu>
++              ) : null}
++            </View>
++            {menuActions.length > 0 ? (
++              <ControlPillMenu
++                actions={menuActions}
++                shouldOpenOnLongPress
++                onPressAction={({ nativeEvent }) => handleQueueMenuAction(nativeEvent.event)}
++              >
++                <Pressable
++                  accessibilityLabel="Queued message actions"
++                  accessibilityHint="Long press to edit, steer, or cancel this queued message"
++                >
++                  {bubble}
++                </Pressable>
++              </ControlPillMenu>
++            ) : (
++              bubble
++            )}
++          </Animated.View>
++        );
++      }
+       return (
+         <Animated.View
+-          className="mb-5 items-end"
++          className={props.remoteOnly ? "items-end" : "mb-5 items-end"}
++          style={
++            props.remoteOnly
++              ? { marginBottom: FORGE_REMOTE_MESSAGE_CHROME.userMessageBottomSpacing }
++              : undefined
++          }
+           {...(enterAnimated ? { entering: FadeInUp.duration(220) } : {})}
+         >
+           <View
+-            className="min-w-0 gap-2 rounded-[20px] px-3.5 py-2.5"
++            className={cn(
++              "min-w-0 gap-2",
++              props.remoteOnly ? null : "rounded-[20px] px-3.5 py-2.5",
++            )}
+             style={{
+-              backgroundColor: userBubbleColor,
++              backgroundColor: props.remoteOnly
++                ? FORGE_REMOTE_MESSAGE_CHROME.userBubbleBackgroundColor
++                : userBubbleColor,
++              ...(props.remoteOnly
++                ? {
++                    borderRadius: FORGE_REMOTE_MESSAGE_CHROME.userBubbleBorderRadius,
++                    paddingHorizontal: FORGE_REMOTE_MESSAGE_CHROME.userBubbleHorizontalPadding,
++                    paddingTop: FORGE_REMOTE_MESSAGE_CHROME.userBubbleTopPadding,
++                    paddingBottom: FORGE_REMOTE_MESSAGE_CHROME.userBubbleBottomPadding,
++                  }
++                : null),
+               maxWidth: props.userBubbleMaxWidth,
+               ...(hasReviewCommentContext
+                 ? { width: props.reviewCommentBubbleWidth }
+@@ -943,20 +1088,22 @@ function renderFeedEntry(
+               );
+             })}
+           </View>
+-          <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
+-            <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
+-              {timestampLabel}
+-            </Text>
+-            {message.text.trim().length > 0 ? (
+-              <CopyTextButton
+-                accessibilityLabel="Copy message"
+-                text={message.text}
+-                tintColor={iconSubtleColor}
+-                buttonSize={28}
+-                iconSize={13}
+-              />
+-            ) : null}
+-          </View>
++          {showUserMessageMeta(props.remoteOnly) ? (
++            <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
++              <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
++                {timestampLabel}
++              </Text>
++              {message.text.trim().length > 0 ? (
++                <CopyTextButton
++                  accessibilityLabel="Copy message"
++                  text={message.text}
++                  tintColor={iconSubtleColor}
++                  buttonSize={28}
++                  iconSize={13}
++                />
++              ) : null}
++            </View>
++          ) : null}
+         </Animated.View>
+       );
+     }
+@@ -967,10 +1114,86 @@ function renderFeedEntry(
+       return null;
+     }
+ 
++    if (remoteWorkDisclosure) {
++      const enterAnimated = isFreshTimestamp(message.createdAt);
++      const canExpand = remoteWorkDisclosure.hiddenEntryIds.size > 0;
++      const expanded = props.expandedRemoteWorkDisclosureIds.has(
++        remoteWorkDisclosure.markerMessageId,
++      );
++      const content = (
++        <>
++          <Text
++            selectable={!canExpand}
++            className="min-w-0 flex-1"
++            style={{
++              color: styles.nativeTextStyle.color,
++              fontSize: FORGE_REMOTE_MESSAGE_CHROME.workedDisclosureFontSize,
++              lineHeight: FORGE_REMOTE_MESSAGE_CHROME.workedDisclosureLineHeight,
++              opacity: 0.8,
++            }}
++          >
++            {remoteWorkDisclosure.label}
++          </Text>
++          {canExpand ? (
++            <View style={{ opacity: 0.8 }}>
++              <SymbolView
++                name={expanded ? "chevron.down" : "chevron.right"}
++                size={FORGE_REMOTE_MESSAGE_CHROME.workedDisclosureChevronSize}
++                tintColor={styles.nativeTextStyle.color}
++                type="monochrome"
++              />
++            </View>
++          ) : null}
++        </>
++      );
++      return (
++        <Animated.View
++          style={{ marginBottom: FORGE_REMOTE_MESSAGE_CHROME.workedDisclosureBottomSpacing }}
++          {...(enterAnimated ? { entering: FadeIn.duration(220) } : {})}
++        >
++          {canExpand ? (
++            <Pressable
++              accessibilityRole="button"
++              accessibilityState={{ expanded }}
++              accessibilityLabel={`${remoteWorkDisclosure.label}. ${expanded ? "Hide" : "Show"} work details`}
++              className="flex-row items-center gap-1.5 border-b border-neutral-200/80 dark:border-white/[0.08]"
++              hitSlop={4}
++              onPress={() =>
++                props.onToggleRemoteWorkDisclosure(remoteWorkDisclosure.markerMessageId)
++              }
++              style={{
++                minHeight: FORGE_REMOTE_MESSAGE_CHROME.workedDisclosureMinHeight,
++                paddingHorizontal: FORGE_REMOTE_MESSAGE_CHROME.workedDisclosureHorizontalPadding,
++              }}
++            >
++              {content}
++            </Pressable>
++          ) : (
++            <View
++              className="flex-row items-center border-b border-neutral-200/80 dark:border-white/[0.08]"
++              style={{
++                minHeight: FORGE_REMOTE_MESSAGE_CHROME.workedDisclosureMinHeight,
++                paddingHorizontal: FORGE_REMOTE_MESSAGE_CHROME.workedDisclosureHorizontalPadding,
++              }}
++            >
++              {content}
++            </View>
++          )}
++        </Animated.View>
++      );
++    }
++
+     const enterAnimated = isFreshTimestamp(message.createdAt);
+     return (
+       <Animated.View
+-        className={cn(showAssistantMeta ? "mb-5 px-1" : "mb-2 px-1")}
++        className={
++          props.remoteOnly ? undefined : cn(showRetainedAssistantMeta ? "mb-5 px-1" : "mb-2 px-1")
++        }
++        style={
++          props.remoteOnly
++            ? { marginBottom: FORGE_REMOTE_MESSAGE_CHROME.assistantMessageBottomSpacing }
++            : undefined
++        }
+         {...(enterAnimated ? { entering: FadeIn.duration(220) } : {})}
+       >
+         {message.text.trim().length > 0 ? (
+@@ -1003,7 +1226,26 @@ function renderFeedEntry(
+             />
+           );
+         })}
+-        {showAssistantMeta ? (
++        {showRemoteAssistantCopy ? (
++          <View
++            className="flex-row items-center"
++            style={{
++              marginTop: FORGE_REMOTE_MESSAGE_CHROME.assistantResponseActionTopSpacing,
++              marginLeft: FORGE_REMOTE_MESSAGE_CHROME.assistantResponseActionHorizontalOffset,
++            }}
++          >
++            <CopyTextButton
++              accessibilityLabel="Copy response"
++              text={message.text}
++              tintColor={props.iconMutedColor}
++              copiedTintColor={props.iconColor}
++              copyIconName={FORGE_REMOTE_MESSAGE_CHROME.assistantResponseActionIconName}
++              buttonSize={FORGE_REMOTE_MESSAGE_CHROME.assistantResponseActionButtonSize}
++              iconSize={FORGE_REMOTE_MESSAGE_CHROME.assistantResponseActionIconSize}
++              hitSlop={FORGE_REMOTE_MESSAGE_CHROME.assistantResponseActionHitSlop}
++            />
++          </View>
++        ) : showRetainedAssistantMeta ? (
+           <View className="mt-1 flex-row items-center gap-1">
+             <CopyTextButton
+               accessibilityLabel="Copy message"
+@@ -1033,7 +1275,10 @@ function renderFeedEntry(
+   );
+ }
+ 
+-const WorkingTimelineRow = memo(function WorkingTimelineRow(props: { readonly startedAt: string }) {
++const WorkingTimelineRow = memo(function WorkingTimelineRow(props: {
++  readonly remoteOnly: boolean;
++  readonly startedAt: string;
++}) {
+   const [nowMs, setNowMs] = useState(() => Date.now());
+ 
+   useEffect(() => {
+@@ -1046,7 +1291,18 @@ const WorkingTimelineRow = memo(function WorkingTimelineRow(props: { readonly st
+   const durationLabel = formatElapsed(props.startedAt, new Date(nowMs).toISOString()) ?? "0s";
+ 
+   return (
+-    <View className="mb-4 flex-row items-center gap-2 px-1.5 py-1">
++    <View
++      className={cn("flex-row items-center gap-2", props.remoteOnly ? null : "mb-4 px-1.5 py-1")}
++      style={
++        props.remoteOnly
++          ? {
++              marginBottom: FORGE_REMOTE_MESSAGE_CHROME.workingRowBottomSpacing,
++              paddingHorizontal: FORGE_REMOTE_MESSAGE_CHROME.workingRowHorizontalPadding,
++              paddingVertical: FORGE_REMOTE_MESSAGE_CHROME.workingRowVerticalPadding,
++            }
++          : undefined
++      }
++    >
+       <View className="flex-row items-center gap-1">
+         <View className="h-1 w-1 rounded-full bg-neutral-400 dark:bg-neutral-500" />
+         <View className="h-1 w-1 rounded-full bg-neutral-400/80 dark:bg-neutral-500/80" />
+@@ -1327,7 +1583,6 @@ function ThreadFeedPlaceholder(props: {
  }
  
  export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
@@ -2327,10 +4093,42 @@ index 874c312..15445e7 100644
    const copyFeedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
    const foldSettleFrameRef = useRef<number | null>(null);
    const foldSettleSecondFrameRef = useRef<number | null>(null);
-@@ -1418,19 +1397,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
-     (href: string) => {
-       const presentation = resolveMarkdownLinkPresentation(href);
-       if (presentation.kind === "file") {
+@@ -1375,13 +1630,21 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
+     readonly expandedWorkGroups: Record<string, boolean>;
+     readonly expandedWorkRows: Record<string, boolean>;
+     readonly expandedTurnIds: ReadonlySet<TurnId>;
++    readonly expandedRemoteWorkDisclosureIds: ReadonlySet<string>;
+   }>({
+     copiedRowId: null,
+     expandedWorkGroups: {},
+     expandedWorkRows: {},
+     expandedTurnIds: new Set(),
++    expandedRemoteWorkDisclosureIds: new Set(),
+   });
+-  const { copiedRowId, expandedWorkGroups, expandedWorkRows, expandedTurnIds } = interactionState;
++  const {
++    copiedRowId,
++    expandedWorkGroups,
++    expandedWorkRows,
++    expandedTurnIds,
++    expandedRemoteWorkDisclosureIds,
++  } = interactionState;
+   const [expandedImage, setExpandedImage] = useState<{
+     uri: string;
+     headers?: Record<string, string>;
+@@ -1412,34 +1675,21 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
+     ? navigationHeaderHeight || insets.top + 44
+     : topContentInset;
+ 
++  const dangerForegroundColor = useThemeColor("--color-danger-foreground");
++  const iconColor = useThemeColor("--color-icon");
++  const iconMutedColor = useThemeColor("--color-icon-muted");
+   const iconSubtleColor = useThemeColor("--color-icon-subtle");
+   const userBubbleColor = useThemeColor("--color-user-bubble");
+-  const onMarkdownLinkPress = useCallback(
+-    (href: string) => {
+-      const presentation = resolveMarkdownLinkPresentation(href);
+-      if (presentation.kind === "file") {
 -        const relativePath = resolveWorkspaceRelativeFilePath(
 -          props.workspaceRoot,
 -          presentation.path,
@@ -2344,18 +4142,276 @@ index 874c312..15445e7 100644
 -            ...(presentation.line ? { line: String(presentation.line) } : {}),
 -          });
 -        }
-         return;
-       }
+-        return;
+-      }
++  const onMarkdownLinkPress = useCallback((href: string) => {
++    const presentation = resolveMarkdownLinkPresentation(href);
++    if (presentation.kind === "file") {
++      return;
++    }
  
-@@ -1438,7 +1404,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
-         void Linking.openURL(presentation.href);
-       }
-     },
+-      if (presentation.href) {
+-        void Linking.openURL(presentation.href);
+-      }
+-    },
 -    [props.environmentId, props.threadId, props.workspaceRoot, navigation],
-+    [],
-   );
+-  );
++    if (presentation.href) {
++      void Linking.openURL(presentation.href);
++    }
++  }, []);
    const markdownStyles = useMarkdownStyles(onMarkdownLinkPress);
    const reviewCommentColors = useReviewCommentColors();
+   // LegendList does not invalidate visible rows when only the renderItem closure changes.
+@@ -1450,6 +1700,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
+       expandedWorkRows,
+       iconSubtleColor,
+       markdownStyles,
++      remoteResponseMessageIds: props.remoteResponseMessageIds,
++      remoteWorkDisclosures: props.remoteWorkDisclosures,
++      remoteQueuedMessages: props.remoteQueuedMessages,
++      expandedRemoteWorkDisclosureIds,
+       reviewCommentColors,
+       userBubbleColor,
+       viewportWidth,
+@@ -1459,6 +1713,10 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
+       expandedWorkRows,
+       iconSubtleColor,
+       markdownStyles,
++      props.remoteResponseMessageIds,
++      props.remoteWorkDisclosures,
++      props.remoteQueuedMessages,
++      expandedRemoteWorkDisclosureIds,
+       reviewCommentColors,
+       userBubbleColor,
+       viewportWidth,
+@@ -1589,21 +1847,73 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
+     }
+     return ids;
+   }, [expandedWorkGroups]);
++  const remoteWorkDisclosures = props.remoteWorkDisclosures ?? EMPTY_WORK_DISCLOSURES;
++  const remoteQueuedMessages = props.remoteQueuedMessages ?? EMPTY_QUEUED_MESSAGES;
++  const remoteWorkDisclosureByMessageId = useMemo(
++    () =>
++      new Map(remoteWorkDisclosures.map((disclosure) => [disclosure.markerMessageId, disclosure])),
++    [remoteWorkDisclosures],
++  );
++  const remoteQueuedMessageByMessageId = useMemo(
++    () => new Map(remoteQueuedMessages.map((message) => [message.messageId, message])),
++    [remoteQueuedMessages],
++  );
++  const remoteQueueFeedEntries = useMemo<ReadonlyArray<ThreadFeedEntry>>(
++    () =>
++      remoteQueuedMessages.map((queuedMessage) => {
++        const id = MessageId.make(queuedMessage.messageId);
++        return {
++          type: "message",
++          id,
++          createdAt: REMOTE_QUEUE_CREATED_AT,
++          message: {
++            id,
++            role: "user",
++            text: queuedMessage.text,
++            attachments: [],
++            turnId: null,
++            streaming: false,
++            createdAt: REMOTE_QUEUE_CREATED_AT,
++            updatedAt: REMOTE_QUEUE_CREATED_AT,
++          },
++        };
++      }),
++    [remoteQueuedMessages],
++  );
++  const feedWithRemoteQueue = useMemo(
++    () =>
++      props.remoteOnly && remoteQueueFeedEntries.length > 0
++        ? [...props.feed, ...remoteQueueFeedEntries]
++        : props.feed,
++    [props.feed, props.remoteOnly, remoteQueueFeedEntries],
++  );
++  const sourceFeed = useMemo(
++    () =>
++      props.remoteOnly
++        ? presentRemoteWorkEntries(
++            feedWithRemoteQueue,
++            remoteWorkDisclosures,
++            expandedRemoteWorkDisclosureIds,
++          )
++        : feedWithRemoteQueue,
++    [expandedRemoteWorkDisclosureIds, feedWithRemoteQueue, props.remoteOnly, remoteWorkDisclosures],
++  );
+   const presentedFeed = useMemo(
+     () =>
+       deriveThreadFeedPresentation(
+-        props.feed,
++        sourceFeed,
+         props.latestTurn,
+         expandedTurnIds,
+         expandedWorkGroupIds,
+-        props.activeWorkStartedAt,
++        props.remoteOnly ? null : props.activeWorkStartedAt,
+       ),
+     [
+       expandedTurnIds,
+       expandedWorkGroupIds,
+       props.activeWorkStartedAt,
+-      props.feed,
++      props.remoteOnly,
+       props.latestTurn,
++      sourceFeed,
+     ],
+   );
+ 
+@@ -1614,7 +1924,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
+   // initial scroll-to-end computes with a zero end inset and rests one
+   // composer-height short of the end. Layout effect: it must land before the
+   // list's first positioning tick or the one-shot initial scroll misses it.
+-  const listMountKey = `${feedThreadKey}:${props.feed.length === 0 ? "empty" : "filled"}`;
++  const listMountKey = `${feedThreadKey}:${sourceFeed.length === 0 ? "empty" : "filled"}`;
+   useLayoutEffect(() => {
+     const bottom = props.contentInsetEndAdjustment.value;
+     if (bottom > 0) {
+@@ -1641,6 +1951,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
+     }
+     return new Set(terminalIdsByTurn.values());
+   }, [props.feed]);
++  const remoteResponseMessageIds = props.remoteResponseMessageIds ?? EMPTY_MESSAGE_IDS;
+   const unsettledTurnId =
+     props.latestTurn &&
+     (props.latestTurn.completedAt === null || props.latestTurn.state === "running")
+@@ -1781,6 +2092,22 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
+     [suspendEndScrollMaintenanceForDisclosure],
+   );
+ 
++  const onToggleRemoteWorkDisclosure = useCallback(
++    (markerMessageId: string) => {
++      suspendEndScrollMaintenanceForDisclosure(markerMessageId);
++      setInteractionState((current) => {
++        const next = new Set(current.expandedRemoteWorkDisclosureIds);
++        if (next.has(markerMessageId)) {
++          next.delete(markerMessageId);
++        } else {
++          next.add(markerMessageId);
++        }
++        return { ...current, expandedRemoteWorkDisclosureIds: next };
++      });
++    },
++    [suspendEndScrollMaintenanceForDisclosure],
++  );
++
+   const onPressImage = useCallback((uri: string, headers?: Record<string, string>) => {
+     setExpandedImage({ uri, headers });
+   }, []);
+@@ -1792,18 +2119,30 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
+   // exact; message rows stay undefined and use LegendList's per-type running
+   // average once one of their type has been measured. Text-driven heights
+   // follow the configurable base font size via scaledTypographyLineHeight.
+-  const workingRowHeight =
+-    WORKING_ROW_VERTICAL_EXTRAS +
+-    scaledTypographyLineHeight(MOBILE_TYPOGRAPHY.label, appearance.baseFontSize);
++  const workingRowTextLineHeight = scaledTypographyLineHeight(
++    MOBILE_TYPOGRAPHY.label,
++    appearance.baseFontSize,
++  );
+   const getFixedItemSize = useCallback(
+     (entry: ThreadFeedEntry) => {
+       switch (entry.type) {
+         case "turn-fold":
+-          return TURN_FOLD_HEIGHT;
++          return threadFeedFixedRowHeight({
++            kind: "turn-fold",
++            remoteOnly: props.remoteOnly === true,
++            textLineHeight: scaledTypographyLineHeight(
++              MOBILE_TYPOGRAPHY.body,
++              appearance.baseFontSize,
++            ),
++          });
+         case "work-toggle":
+           return WORK_GROUP_TOGGLE_HEIGHT;
+         case "working":
+-          return workingRowHeight;
++          return threadFeedFixedRowHeight({
++            kind: "working",
++            remoteOnly: props.remoteOnly === true,
++            textLineHeight: workingRowTextLineHeight,
++          });
+         case "activity-group":
+           // Expanded rows append a variable detail block — fall back to
+           // measurement for those groups.
+@@ -1814,7 +2153,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
+           return undefined;
+       }
+     },
+-    [expandedWorkRows, workingRowHeight, appearance.baseFontSize],
++    [expandedWorkRows, workingRowTextLineHeight, appearance.baseFontSize, props.remoteOnly],
+   );
+ 
+   const renderItem = useCallback(
+@@ -1824,13 +2163,25 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
+         copiedRowId,
+         expandedWorkRows,
+         terminalAssistantMessageIds,
++        remoteResponseMessageIds,
++        remoteWorkDisclosureByMessageId,
++        remoteQueuedMessageByMessageId,
++        expandedRemoteWorkDisclosureIds,
++        remoteOnly: props.remoteOnly === true,
+         unsettledTurnId,
+         onCopyWorkRow,
+         onToggleWorkGroup,
+         onToggleWorkRow,
+         onToggleTurnFold,
++        onToggleRemoteWorkDisclosure,
++        onEditRemoteQueuedMessage: props.onEditRemoteQueuedMessage,
++        onSteerRemoteQueuedMessage: props.onSteerRemoteQueuedMessage,
++        onCancelRemoteQueuedMessage: props.onCancelRemoteQueuedMessage,
+         onPressImage,
+         onMarkdownLinkPress,
++        dangerForegroundColor,
++        iconColor,
++        iconMutedColor,
+         iconSubtleColor,
+         userBubbleColor,
+         markdownStyles,
+@@ -1843,7 +2194,14 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
+       copiedRowId,
+       expandedWorkRows,
+       terminalAssistantMessageIds,
++      remoteResponseMessageIds,
++      remoteWorkDisclosureByMessageId,
++      remoteQueuedMessageByMessageId,
++      expandedRemoteWorkDisclosureIds,
+       unsettledTurnId,
++      dangerForegroundColor,
++      iconColor,
++      iconMutedColor,
+       iconSubtleColor,
+       userBubbleColor,
+       markdownStyles,
+@@ -1854,9 +2212,14 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
+       onMarkdownLinkPress,
+       onPressImage,
+       onToggleTurnFold,
++      onToggleRemoteWorkDisclosure,
+       onToggleWorkGroup,
+       onToggleWorkRow,
+       props.environmentId,
++      props.onEditRemoteQueuedMessage,
++      props.onSteerRemoteQueuedMessage,
++      props.onCancelRemoteQueuedMessage,
++      props.remoteOnly,
+       props.skills,
+     ],
+   );
+@@ -2006,7 +2369,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
+             }}
+           />
+         </View>
+-        {props.feed.length === 0 &&
++        {presentedFeed.length === 0 &&
+         props.activeWorkStartedAt === null &&
+         props.contentPresentation.kind === "ready" ? (
+           <View pointerEvents="none" style={StyleSheet.absoluteFill}>
 diff --git aa/apps/mobile/src/features/threads/threadPresentation.ts bb/apps/mobile/src/features/threads/threadPresentation.ts
 index 9de3d4d..156ceaa 100644
 --- aa/apps/mobile/src/features/threads/threadPresentation.ts
@@ -2594,7 +4650,7 @@ index fbcb2e1..6758271 100644
    draft: PendingUserInputDraftAnswer | undefined,
    optionLabel: string,
 diff --git aa/apps/mobile/src/native/T3ComposerEditor.ios.tsx bb/apps/mobile/src/native/T3ComposerEditor.ios.tsx
-index 4e9d62a..f712410 100644
+index 4e9d62a..55ef0b2 100644
 --- aa/apps/mobile/src/native/T3ComposerEditor.ios.tsx
 +++ bb/apps/mobile/src/native/T3ComposerEditor.ios.tsx
 @@ -45,6 +45,11 @@ type NativePasteImagesEvent = NativeSyntheticEvent<{
@@ -2609,7 +4665,15 @@ index 4e9d62a..f712410 100644
  interface NativeComposerEditorRef {
    focus: () => Promise<void>;
    blur: () => Promise<void>;
-@@ -68,6 +73,7 @@ interface NativeComposerEditorProps extends ViewProps {
+@@ -59,6 +64,7 @@ interface NativeComposerEditorProps extends ViewProps {
+   readonly fontFamily: string;
+   readonly fontSize: number;
+   readonly lineHeight: number;
++  readonly contentInsetHorizontal: number;
+   readonly contentInsetVertical: number;
+   readonly editable: boolean;
+   readonly scrollEnabled: boolean;
+@@ -68,6 +74,7 @@ interface NativeComposerEditorProps extends ViewProps {
    readonly onComposerChange: (event: NativeEditorEvent) => void;
    readonly onComposerSelectionChange?: (event: NativeSelectionEvent) => void;
    readonly onComposerPasteImages?: (event: NativePasteImagesEvent) => void;
@@ -2617,7 +4681,7 @@ index 4e9d62a..f712410 100644
    readonly onComposerFocus?: () => void;
    readonly onComposerBlur?: () => void;
    readonly onComposerSubmit?: () => void;
-@@ -93,6 +99,7 @@ export function ComposerEditor({
+@@ -93,9 +100,11 @@ export function ComposerEditor({
    onChangeText,
    onSelectionChange,
    onPasteImages,
@@ -2625,7 +4689,19 @@ index 4e9d62a..f712410 100644
    onFocus,
    onBlur,
    onSubmit,
-@@ -271,6 +278,7 @@ export function ComposerEditor({
++  contentInsetHorizontal = 0,
+   contentInsetVertical = 0,
+   ...props
+ }: ComposerEditorProps) {
+@@ -240,6 +249,7 @@ export function ComposerEditor({
+           ? resolvedTextStyle.lineHeight
+           : bodyText.lineHeight
+       }
++      contentInsetHorizontal={contentInsetHorizontal}
+       contentInsetVertical={contentInsetVertical}
+       editable={props.editable ?? true}
+       scrollEnabled={props.scrollEnabled ?? true}
+@@ -271,6 +281,7 @@ export function ComposerEditor({
          setNativeEventSequence((sequence) => sequence + 1);
        }}
        onComposerPasteImages={(event) => onPasteImages?.(event.nativeEvent.uris)}
@@ -2634,7 +4710,7 @@ index 4e9d62a..f712410 100644
        onComposerBlur={onBlur}
        onComposerSubmit={onSubmit}
 diff --git aa/apps/mobile/src/native/T3ComposerEditor.native.tsx bb/apps/mobile/src/native/T3ComposerEditor.native.tsx
-index e78f90a..70f14c9 100644
+index e78f90a..f6cebee 100644
 --- aa/apps/mobile/src/native/T3ComposerEditor.native.tsx
 +++ bb/apps/mobile/src/native/T3ComposerEditor.native.tsx
 @@ -47,6 +47,11 @@ type NativePasteImagesEvent = NativeSyntheticEvent<{
@@ -2649,7 +4725,15 @@ index e78f90a..70f14c9 100644
  interface NativeComposerEditorRef {
    focus: () => Promise<void>;
    blur: () => Promise<void>;
-@@ -71,6 +76,7 @@ interface NativeComposerEditorProps extends ViewProps {
+@@ -61,6 +66,7 @@ interface NativeComposerEditorProps extends ViewProps {
+   readonly fontFamily: string;
+   readonly fontSize: number;
+   readonly lineHeight: number;
++  readonly contentInsetHorizontal: number;
+   readonly contentInsetVertical: number;
+   readonly singleLineCentered: boolean;
+   readonly editable: boolean;
+@@ -71,6 +77,7 @@ interface NativeComposerEditorProps extends ViewProps {
    readonly onComposerChange: (event: NativeEditorEvent) => void;
    readonly onComposerSelectionChange?: (event: NativeSelectionEvent) => void;
    readonly onComposerPasteImages?: (event: NativePasteImagesEvent) => void;
@@ -2657,15 +4741,26 @@ index e78f90a..70f14c9 100644
    readonly onComposerFocus?: () => void;
    readonly onComposerBlur?: () => void;
  }
-@@ -95,6 +101,7 @@ export function ComposerEditor({
+@@ -95,8 +102,10 @@ export function ComposerEditor({
    onChangeText,
    onSelectionChange,
    onPasteImages,
 +  onContentSizeChange,
    onFocus,
    onBlur,
++  contentInsetHorizontal = 0,
    contentInsetVertical = 0,
-@@ -277,6 +284,12 @@ export function ComposerEditor({
+   ...props
+ }: ComposerEditorProps) {
+@@ -245,6 +254,7 @@ export function ComposerEditor({
+             ? resolvedTextStyle.lineHeight
+             : MOBILE_TYPOGRAPHY.body.lineHeight
+         }
++        contentInsetHorizontal={contentInsetHorizontal}
+         contentInsetVertical={contentInsetVertical}
+         singleLineCentered={props.singleLineCentered ?? false}
+         editable={props.editable ?? true}
+@@ -277,6 +287,12 @@ export function ComposerEditor({
            setNativeEventSequence((sequence) => sequence + 1);
          }}
          onComposerPasteImages={(event) => onPasteImages?.(event.nativeEvent.uris)}
@@ -2679,18 +4774,21 @@ index e78f90a..70f14c9 100644
          onComposerBlur={onBlur}
        />
 diff --git aa/apps/mobile/src/native/T3ComposerEditor.tsx bb/apps/mobile/src/native/T3ComposerEditor.tsx
-index e082d38..227edae 100644
+index e082d38..27e1168 100644
 --- aa/apps/mobile/src/native/T3ComposerEditor.tsx
 +++ bb/apps/mobile/src/native/T3ComposerEditor.tsx
-@@ -13,6 +13,7 @@ export function ComposerEditor({
+@@ -13,8 +13,10 @@ export function ComposerEditor({
    skills: _skills,
    selection,
    onPasteImages,
 +  onContentSizeChange,
    style,
    textStyle,
++  contentInsetHorizontal = 0,
    contentInsetVertical = 0,
-@@ -44,6 +45,7 @@ export function ComposerEditor({
+   singleLineCentered: _singleLineCentered,
+   ...props
+@@ -44,6 +46,7 @@ export function ComposerEditor({
          {...props}
          selection={selection}
          onSelectionChange={(event) => props.onSelectionChange?.(event.nativeEvent.selection)}
@@ -2698,11 +4796,27 @@ index e082d38..227edae 100644
          multiline={props.multiline ?? true}
          placeholderTextColor={placeholderColor}
          style={[
+@@ -53,6 +56,7 @@ export function ComposerEditor({
+             color: foregroundColor,
+             fontFamily,
+             ...bodyText,
++            paddingHorizontal: contentInsetHorizontal,
+             paddingVertical: contentInsetVertical,
+           },
+           textStyle,
 diff --git aa/apps/mobile/src/native/T3ComposerEditor.types.ts bb/apps/mobile/src/native/T3ComposerEditor.types.ts
-index bfc47ed..b49c20f 100644
+index bfc47ed..4dff178 100644
 --- aa/apps/mobile/src/native/T3ComposerEditor.types.ts
 +++ bb/apps/mobile/src/native/T3ComposerEditor.types.ts
-@@ -35,6 +35,10 @@ export interface ComposerEditorProps {
+@@ -27,6 +27,7 @@ export interface ComposerEditorProps {
+   readonly autoCorrect?: boolean;
+   readonly spellCheck?: boolean;
+   readonly multiline?: boolean;
++  readonly contentInsetHorizontal?: number;
+   readonly contentInsetVertical?: number;
+   /** Android: center a single line vertically (collapsed pill); no-op on iOS. */
+   readonly singleLineCentered?: boolean;
+@@ -35,6 +36,10 @@ export interface ComposerEditorProps {
    readonly onChangeText: (value: string) => void;
    readonly onSelectionChange?: (selection: ComposerEditorSelection) => void;
    readonly onPasteImages?: (uris: ReadonlyArray<string>) => void;

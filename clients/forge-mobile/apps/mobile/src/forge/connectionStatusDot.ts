@@ -5,6 +5,12 @@ export interface ForgeConnectionStatusDotPresentation {
   readonly message: null;
 }
 
+export const FORGE_SESSION_HEADER_STATUS_GEOMETRY = {
+  diameter: 8,
+  radius: 4,
+  titleGap: 6,
+} as const;
+
 /** Forge Remote deliberately presents connection state without status copy. */
 export function forgeConnectionStatusDot(
   phase: RemoteConnectionPhase,

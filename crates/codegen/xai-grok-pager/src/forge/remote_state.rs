@@ -8,6 +8,7 @@
 use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
+use xai_grok_shell::remote_control::RemoteWorkDisclosure;
 
 use crate::app::agent::{AgentState, BgTaskStatus};
 use crate::app::agent_view::AgentView;
@@ -38,6 +39,7 @@ pub(crate) struct RemoteSessionSnapshot {
     pub reasoning_effort: Option<RemoteReasoningEffort>,
     #[serde(skip_serializing_if = "is_false")]
     pub model_switch_pending: bool,
+    pub fast_mode: RemoteFastMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plan_mode: Option<RemotePlanMode>,
     pub active_interactions: Vec<RemoteInteraction>,
@@ -107,6 +109,27 @@ pub(crate) struct RemoteQueueItem {
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub position: Option<usize>,
+    pub source: RemoteQueueSource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    pub actions: RemoteQueueActions,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RemoteQueueSource {
+    Local,
+    Shared,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RemoteQueueActions {
+    pub edit: bool,
+    pub steer: bool,
+    pub cancel: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -124,12 +147,24 @@ pub(crate) struct RemoteTaskState {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RemoteCapabilities {
     pub prompt: bool,
+    pub new_session: bool,
     pub cancel: bool,
     pub set_model: bool,
     pub reasoning: bool,
     pub btw: bool,
     pub resolve_interactions: bool,
     pub usage: bool,
+    pub fast_mode: bool,
+    pub queue_control: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RemoteFastMode {
+    pub supported: bool,
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub pending: bool,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -166,6 +201,8 @@ pub(crate) enum RemoteTimelineItem {
         status: Option<RemoteItemStatus>,
         #[serde(rename = "createdAt", skip_serializing_if = "Option::is_none")]
         created_at: Option<String>,
+        #[serde(rename = "workDisclosure", skip_serializing_if = "Option::is_none")]
+        work_disclosure: Option<RemoteWorkDisclosure>,
     },
     Error {
         id: String,
@@ -413,23 +450,49 @@ pub(crate) fn project_session(
             | AgentState::CommandCancelling { .. } => RemoteSessionStatus::Running,
         }
     };
-    let mut queue = agent
-        .session
-        .pending_prompts
-        .iter()
+    // The canonical execution order is server-owned shared rows first, then
+    // client-local mirrors. Their source-relative positions are not a common
+    // coordinate space, so normalize one global order for remote clients.
+    let mut shared_queue = agent.shared_queue.iter().collect::<Vec<_>>();
+    shared_queue.sort_by_key(|item| item.position);
+    let mut queue = shared_queue
+        .into_iter()
         .enumerate()
         .map(|(position, item)| RemoteQueueItem {
-            id: format!("local-{}", item.id),
+            id: item.id.clone(),
             text: item.text.clone(),
             position: Some(position),
+            source: RemoteQueueSource::Shared,
+            version: Some(item.version),
+            kind: Some(item.kind.clone()),
+            actions: RemoteQueueActions {
+                edit: item.kind == "prompt",
+                steer: agent.session.state.is_turn_running(),
+                cancel: true,
+            },
         })
         .collect::<Vec<_>>();
-    queue.extend(agent.shared_queue.iter().map(|item| RemoteQueueItem {
-        id: item.id.clone(),
-        text: item.text.clone(),
-        position: Some(item.position),
-    }));
-    queue.sort_by_key(|item| item.position.unwrap_or(usize::MAX));
+    let shared_count = queue.len();
+    queue.extend(
+        agent
+            .session
+            .pending_prompts
+            .iter()
+            .enumerate()
+            .map(|(local_position, item)| RemoteQueueItem {
+                id: format!("local-{}", item.id),
+                text: item.text.clone(),
+                position: Some(shared_count + local_position),
+                source: RemoteQueueSource::Local,
+                version: None,
+                kind: Some(item.kind.as_label().into()),
+                actions: RemoteQueueActions {
+                    edit: false,
+                    steer: false,
+                    cancel: false,
+                },
+            }),
+    );
 
     let running_background = agent
         .session
@@ -448,13 +511,10 @@ pub(crate) fn project_session(
         .and_then(|view| view.plan_content.clone())
         .or_else(|| agent.latest_inline_plan_content.clone());
     let plan_active = agent.plan_mode_pending.unwrap_or(agent.plan_mode_active);
+    let fast_mode_supported = crate::forge::fast_mode::is_supported(&agent.session.models);
 
-    let mut transcript = agent
-        .scrollback
-        .iter_entries()
-        .filter(|(_, entry)| !is_remote_pairing_notice(entry))
-        .map(|(_, entry)| project_entry(entry))
-        .collect::<Vec<_>>();
+    let mut transcript =
+        project_transcript(agent.scrollback.iter_entries().map(|(_, entry)| entry));
     if let Some(btw) = agent.btw_state.as_ref() {
         let question = btw.question().to_owned();
         // Dismissal persists the overlay and clears `btw_state` in one pager
@@ -509,6 +569,11 @@ pub(crate) fn project_session(
         available_models,
         reasoning_effort,
         model_switch_pending: agent.session.model_switch_pending,
+        fast_mode: RemoteFastMode {
+            supported: fast_mode_supported,
+            enabled: fast_mode_supported && agent.session.models.fast_mode,
+            pending: fast_mode_supported && agent.session.models.fast_mode_pending(),
+        },
         plan_mode: Some(RemotePlanMode {
             active: plan_active,
             plan,
@@ -519,12 +584,15 @@ pub(crate) fn project_session(
         usage: agent.remote_usage.snapshot().cloned(),
         capabilities: RemoteCapabilities {
             prompt: !agent.session.loading_replay,
+            new_session: !agent.session.loading_replay,
             cancel: agent.session.state.is_busy(),
             set_model: !agent.session.models.available.is_empty(),
             reasoning: agent.session.models.reasoning_effort_options().len() > 1,
             btw: agent.btw_state.is_none(),
             resolve_interactions: true,
             usage: true,
+            fast_mode: fast_mode_supported,
+            queue_control: true,
         },
     })
 }
@@ -653,7 +721,94 @@ fn opaque_interaction_id(
         .clone()
 }
 
+#[derive(Default)]
+struct RemoteTurnProjection {
+    active: bool,
+    work_item_ids: Vec<String>,
+    final_response_item_id: Option<String>,
+}
+
+impl RemoteTurnProjection {
+    fn begin(&mut self) {
+        self.active = true;
+        self.work_item_ids.clear();
+        self.final_response_item_id = None;
+    }
+
+    fn finish(&mut self) {
+        self.active = false;
+        self.work_item_ids.clear();
+        self.final_response_item_id = None;
+    }
+
+    fn work_disclosure(&self, elapsed: std::time::Duration) -> RemoteWorkDisclosure {
+        RemoteWorkDisclosure {
+            duration_ms: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
+            final_response_item_id: self
+                .active
+                .then(|| self.final_response_item_id.clone())
+                .flatten(),
+            work_item_ids: self
+                .active
+                .then(|| self.work_item_ids.clone())
+                .unwrap_or_default(),
+        }
+    }
+}
+
+fn project_transcript<'a>(
+    entries: impl IntoIterator<Item = &'a crate::scrollback::entry::ScrollbackEntry>,
+) -> Vec<RemoteTimelineItem> {
+    let mut turn = RemoteTurnProjection::default();
+    let mut transcript = Vec::new();
+
+    for entry in entries {
+        if is_remote_pairing_notice(entry) {
+            continue;
+        }
+
+        let id = entry.id.value().to_string();
+        let mut work_disclosure = None;
+        match &entry.block {
+            RenderBlock::UserPrompt(block) if !block.is_interjection => turn.begin(),
+            RenderBlock::UserPrompt(_) => {}
+            RenderBlock::AgentMessage(_) if turn.active => {
+                turn.final_response_item_id = Some(id);
+            }
+            RenderBlock::Thinking(_)
+            | RenderBlock::ToolCall(_)
+            | RenderBlock::BgTask(_)
+            | RenderBlock::Subagent(_)
+            | RenderBlock::Workflow(_)
+                if turn.active =>
+            {
+                turn.work_item_ids.push(id);
+            }
+            RenderBlock::SessionEvent(block) => match &block.event {
+                SessionEvent::TurnCompleted { elapsed } => {
+                    work_disclosure = elapsed.map(|elapsed| turn.work_disclosure(elapsed));
+                    turn.finish();
+                }
+                event if event.is_turn_terminal() => turn.finish(),
+                _ => {}
+            },
+            _ => {}
+        }
+
+        transcript.push(project_entry_with_work_disclosure(entry, work_disclosure));
+    }
+
+    transcript
+}
+
 fn project_entry(entry: &crate::scrollback::entry::ScrollbackEntry) -> RemoteTimelineItem {
+    project_entry_with_work_disclosure(entry, None)
+}
+
+fn project_entry_with_work_disclosure(
+    entry: &crate::scrollback::entry::ScrollbackEntry,
+    work_disclosure: Option<RemoteWorkDisclosure>,
+) -> RemoteTimelineItem {
     let id = entry.id.value().to_string();
     let created_at = entry.created_at.as_ref().map(|value| value.to_rfc3339());
     let status = entry_status(entry);
@@ -682,6 +837,7 @@ fn project_entry(entry: &crate::scrollback::entry::ScrollbackEntry) -> RemoteTim
             text: block.text.clone(),
             status: Some(status),
             created_at,
+            work_disclosure: None,
         },
         RenderBlock::SessionEvent(block) => {
             let text = block.event.message();
@@ -698,6 +854,7 @@ fn project_entry(entry: &crate::scrollback::entry::ScrollbackEntry) -> RemoteTim
                     text,
                     status: Some(status),
                     created_at,
+                    work_disclosure,
                 }
             }
         }
@@ -755,12 +912,14 @@ fn project_entry(entry: &crate::scrollback::entry::ScrollbackEntry) -> RemoteTim
             text: block.text.clone(),
             status: Some(status),
             created_at,
+            work_disclosure: None,
         },
         RenderBlock::ContextInfo(_) | RenderBlock::CreditLimit(_) => RemoteTimelineItem::System {
             id,
             text: entry.block.searchable_text().unwrap_or_default(),
             status: Some(status),
             created_at,
+            work_disclosure: None,
         },
     }
 }
@@ -942,6 +1101,11 @@ mod tests {
             available_models: Vec::new(),
             reasoning_effort: None,
             model_switch_pending: false,
+            fast_mode: RemoteFastMode {
+                supported: true,
+                enabled: true,
+                pending: false,
+            },
             plan_mode: None,
             active_interactions: Vec::new(),
             queue: Vec::new(),
@@ -949,12 +1113,15 @@ mod tests {
             usage: None,
             capabilities: RemoteCapabilities {
                 prompt: true,
+                new_session: true,
                 cancel: true,
                 set_model: false,
                 reasoning: false,
                 btw: true,
                 resolve_interactions: true,
                 usage: true,
+                fast_mode: true,
+                queue_control: true,
             },
         };
         let value = serde_json::to_value(snapshot).unwrap();
@@ -964,6 +1131,70 @@ mod tests {
         assert_eq!(value["transcript"][0]["kind"], "assistant");
         assert_eq!(value["transcript"][0]["status"], "running");
         assert!(value.get("model_switch_pending").is_none());
+        assert_eq!(
+            value["fastMode"],
+            serde_json::json!({"supported": true, "enabled": true})
+        );
+        assert_eq!(value["capabilities"]["fastMode"], true);
+        assert_eq!(value["capabilities"]["newSession"], true);
+    }
+
+    #[test]
+    fn fast_mode_projection_is_capability_gated_and_exposes_pending_state() {
+        let mut agent = crate::app::agent_view::test_agent_view(
+            Some("fast-session"),
+            std::path::PathBuf::from("/workspace"),
+        );
+        let supported_id = acp::ModelId::new("fast-model");
+        let supported = acp::ModelInfo::new(supported_id.clone(), "Fast Model").meta(
+            serde_json::json!({"supportsFastMode": true})
+                .as_object()
+                .cloned(),
+        );
+        agent
+            .session
+            .models
+            .available
+            .insert(supported_id.clone(), supported);
+        agent.session.models.set_current(supported_id, None);
+
+        let initial = serde_json::to_value(
+            project_session(&agent, &mut HashMap::new()).expect("supported session projects"),
+        )
+        .unwrap();
+        assert_eq!(
+            initial["fastMode"],
+            serde_json::json!({"supported": true, "enabled": false})
+        );
+        assert_eq!(initial["capabilities"]["fastMode"], true);
+
+        agent
+            .session
+            .models
+            .begin_fast_mode_change()
+            .expect("first mutation starts");
+        let pending = serde_json::to_value(
+            project_session(&agent, &mut HashMap::new()).expect("pending session projects"),
+        )
+        .unwrap();
+        assert_eq!(pending["fastMode"]["pending"], true);
+
+        let unsupported_id = acp::ModelId::new("standard-model");
+        agent.session.models.available.insert(
+            unsupported_id.clone(),
+            acp::ModelInfo::new(unsupported_id.clone(), "Standard Model"),
+        );
+        agent.session.models.fast_mode = true;
+        agent.session.models.set_current(unsupported_id, None);
+        let unsupported = serde_json::to_value(
+            project_session(&agent, &mut HashMap::new()).expect("unsupported session projects"),
+        )
+        .unwrap();
+        assert_eq!(
+            unsupported["fastMode"],
+            serde_json::json!({"supported": false, "enabled": false})
+        );
+        assert_eq!(unsupported["capabilities"]["fastMode"], false);
     }
 
     #[test]
@@ -1020,6 +1251,151 @@ mod tests {
     }
 
     #[test]
+    fn completed_turn_disclosure_uses_exact_entry_ids_and_keeps_interjections_in_turn() {
+        let entries = vec![
+            ScrollbackEntry::with_id(EntryId::new(1), RenderBlock::user_prompt("start")),
+            ScrollbackEntry::with_id(EntryId::new(2), RenderBlock::thinking("inspect")),
+            ScrollbackEntry::with_id(EntryId::new(3), RenderBlock::agent_message("draft")),
+            ScrollbackEntry::with_id(
+                EntryId::new(4),
+                RenderBlock::interjection_prompt("also verify tests"),
+            ),
+            ScrollbackEntry::with_id(
+                EntryId::new(5),
+                RenderBlock::execute_with_output("cargo test", "ok", None::<String>),
+            ),
+            ScrollbackEntry::with_id(
+                EntryId::new(6),
+                RenderBlock::BgTask(crate::scrollback::blocks::BgTaskBlock::started(
+                    "cargo check",
+                    "task-1",
+                )),
+            ),
+            ScrollbackEntry::with_id(EntryId::new(7), RenderBlock::agent_message("final")),
+            ScrollbackEntry::with_id(
+                EntryId::new(8),
+                RenderBlock::session_event(SessionEvent::TurnCompleted {
+                    elapsed: Some(std::time::Duration::from_millis(1_250)),
+                }),
+            ),
+        ];
+
+        let transcript = project_transcript(entries.iter());
+        let marker = serde_json::to_value(&transcript[7]).unwrap();
+        assert_eq!(marker["kind"], "system");
+        assert_eq!(marker["id"], "8");
+        assert_eq!(
+            marker["workDisclosure"],
+            serde_json::json!({
+                "durationMs": 1250,
+                "finalResponseItemId": "7",
+                "workItemIds": ["2", "5", "6"]
+            })
+        );
+    }
+
+    #[test]
+    fn completed_turn_disclosure_resets_at_real_prompt_boundaries() {
+        let entries = vec![
+            ScrollbackEntry::with_id(EntryId::new(1), RenderBlock::user_prompt("abandoned")),
+            ScrollbackEntry::with_id(EntryId::new(2), RenderBlock::thinking("old work")),
+            ScrollbackEntry::with_id(EntryId::new(3), RenderBlock::user_prompt("current")),
+            ScrollbackEntry::with_id(EntryId::new(4), RenderBlock::thinking("current work")),
+            ScrollbackEntry::with_id(EntryId::new(5), RenderBlock::agent_message("answer")),
+            ScrollbackEntry::with_id(
+                EntryId::new(6),
+                RenderBlock::session_event(SessionEvent::TurnCompleted {
+                    elapsed: Some(std::time::Duration::from_secs(2)),
+                }),
+            ),
+        ];
+
+        let marker =
+            serde_json::to_value(project_transcript(entries.iter()).last().unwrap()).unwrap();
+        assert_eq!(marker["workDisclosure"]["finalResponseItemId"], "5");
+        assert_eq!(
+            marker["workDisclosure"]["workItemIds"],
+            serde_json::json!(["4"])
+        );
+    }
+
+    #[test]
+    fn arbitrary_worked_for_text_never_gains_typed_disclosure() {
+        let entry =
+            ScrollbackEntry::with_id(EntryId::new(1), RenderBlock::system("Worked for 9m 41s"));
+        let item = serde_json::to_value(project_transcript([&entry]).pop().unwrap()).unwrap();
+        assert_eq!(item["kind"], "system");
+        assert!(item.get("workDisclosure").is_none());
+    }
+
+    #[test]
+    fn completed_turn_without_work_has_empty_typed_associations() {
+        let entries = vec![
+            ScrollbackEntry::with_id(EntryId::new(1), RenderBlock::user_prompt("do it")),
+            ScrollbackEntry::with_id(
+                EntryId::new(2),
+                RenderBlock::session_event(SessionEvent::TurnCompleted {
+                    elapsed: Some(std::time::Duration::from_millis(80)),
+                }),
+            ),
+        ];
+
+        let marker =
+            serde_json::to_value(project_transcript(entries.iter()).last().unwrap()).unwrap();
+        assert_eq!(
+            marker["workDisclosure"],
+            serde_json::json!({
+                "durationMs": 80,
+                "finalResponseItemId": null,
+                "workItemIds": []
+            })
+        );
+    }
+
+    #[test]
+    fn unknown_or_unsuccessful_turn_terminals_omit_work_disclosure() {
+        let entries = vec![
+            ScrollbackEntry::with_id(EntryId::new(1), RenderBlock::user_prompt("first")),
+            ScrollbackEntry::with_id(EntryId::new(2), RenderBlock::thinking("work")),
+            ScrollbackEntry::with_id(
+                EntryId::new(3),
+                RenderBlock::session_event(SessionEvent::TurnCompleted { elapsed: None }),
+            ),
+            ScrollbackEntry::with_id(EntryId::new(4), RenderBlock::user_prompt("second")),
+            ScrollbackEntry::with_id(
+                EntryId::new(5),
+                RenderBlock::session_event(SessionEvent::TurnCancelled {
+                    elapsed: std::time::Duration::from_secs(1),
+                }),
+            ),
+            ScrollbackEntry::with_id(EntryId::new(6), RenderBlock::user_prompt("third")),
+            ScrollbackEntry::with_id(
+                EntryId::new(7),
+                RenderBlock::session_event(SessionEvent::TurnHalted {
+                    elapsed: std::time::Duration::from_secs(1),
+                }),
+            ),
+            ScrollbackEntry::with_id(EntryId::new(8), RenderBlock::user_prompt("fourth")),
+            ScrollbackEntry::with_id(
+                EntryId::new(9),
+                RenderBlock::session_event(SessionEvent::TurnFailed {
+                    error: "request failed".into(),
+                    elapsed: Some(std::time::Duration::from_secs(1)),
+                }),
+            ),
+        ];
+
+        let transcript = project_transcript(entries.iter())
+            .into_iter()
+            .map(|item| serde_json::to_value(item).unwrap())
+            .collect::<Vec<_>>();
+        assert!(transcript[2].get("workDisclosure").is_none());
+        assert!(transcript[4].get("workDisclosure").is_none());
+        assert!(transcript[6].get("workDisclosure").is_none());
+        assert!(transcript[8].get("workDisclosure").is_none());
+    }
+
+    #[test]
     fn live_projection_omits_the_pairing_qr_that_opened_the_phone_client() {
         let mut agent = crate::app::agent_view::test_agent_view(
             Some("session-1"),
@@ -1046,6 +1422,7 @@ mod tests {
         );
         agent.session.state = AgentState::TurnRunning;
         agent.session.enqueue_prompt("queued locally".into());
+        agent.session.enqueue_prompt("queued locally second".into());
         agent
             .shared_queue
             .push(crate::app::prompt_queue::QueueEntryWire {
@@ -1057,6 +1434,18 @@ mod tests {
                 text: "queued remotely".into(),
                 combined_texts: None,
                 position: 2,
+            });
+        agent
+            .shared_queue
+            .push(crate::app::prompt_queue::QueueEntryWire {
+                id: "shared-0".into(),
+                version: 3,
+                owner: None,
+                last_editor: None,
+                kind: "prompt".into(),
+                text: "queued remotely first".into(),
+                combined_texts: None,
+                position: 0,
             });
 
         let model_id = acp::ModelId::new("model-1");
@@ -1167,7 +1556,32 @@ mod tests {
         assert_eq!(value["reasoningEffort"]["current"], "deep");
         assert_eq!(value["reasoningEffort"]["options"][1]["id"], "deep");
         assert_eq!(value["modelSwitchPending"], true);
-        assert_eq!(value["queue"].as_array().unwrap().len(), 2);
+        assert_eq!(value["queue"].as_array().unwrap().len(), 4);
+        assert_eq!(value["queue"][0]["source"], "shared");
+        assert_eq!(value["queue"][0]["id"], "shared-0");
+        assert_eq!(value["queue"][0]["position"], 0);
+        assert_eq!(
+            value["queue"][0]["actions"],
+            serde_json::json!({"edit": true, "steer": true, "cancel": true})
+        );
+        assert_eq!(value["queue"][1]["source"], "shared");
+        assert_eq!(value["queue"][1]["version"], 1);
+        assert_eq!(value["queue"][1]["kind"], "prompt");
+        assert_eq!(
+            value["queue"][1]["actions"],
+            serde_json::json!({"edit": true, "steer": true, "cancel": true})
+        );
+        assert_eq!(value["queue"][2]["source"], "local");
+        assert_eq!(value["queue"][2]["text"], "queued locally");
+        assert_eq!(value["queue"][2]["position"], 2);
+        assert_eq!(
+            value["queue"][2]["actions"],
+            serde_json::json!({"edit": false, "steer": false, "cancel": false})
+        );
+        assert_eq!(value["queue"][3]["source"], "local");
+        assert_eq!(value["queue"][3]["text"], "queued locally second");
+        assert_eq!(value["queue"][3]["position"], 3);
+        assert_eq!(value["capabilities"]["queueControl"], true);
         assert_eq!(value["taskState"]["backgroundCount"], 1);
         assert_eq!(value["activeInteractions"].as_array().unwrap().len(), 3);
         assert!(

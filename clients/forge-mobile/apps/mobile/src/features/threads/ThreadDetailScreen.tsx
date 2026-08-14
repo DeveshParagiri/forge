@@ -78,7 +78,13 @@ import {
 } from "./ThreadComposer";
 import { ThreadFeed } from "./ThreadFeed";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
-import { REMOTE_COMPOSER_EXPANDED_CHROME } from "./remoteComposerLayout";
+import {
+  resolveRemoteComposerBottomInset,
+  resolveThreadComposerChrome,
+  shouldTrackRemoteComposerKeyboard,
+} from "./remoteComposerLayout";
+import type { RemoteWorkDisclosurePresentation } from "./threadMessageChrome";
+import type { RemoteQueuedMessagePresentation } from "./remoteQueuePresentation";
 
 export interface ThreadDetailScreenProps {
   readonly selectedThread: OrchestrationThreadShell;
@@ -87,6 +93,12 @@ export interface ThreadDetailScreenProps {
   readonly connectionError: string | null;
   readonly environmentLabel: string | null;
   readonly selectedThreadFeed: ReadonlyArray<ThreadFeedEntry>;
+  readonly remoteAssistantResponseMessageIds?: ReadonlySet<string>;
+  readonly remoteWorkDisclosures?: ReadonlyArray<RemoteWorkDisclosurePresentation>;
+  readonly remoteQueuedMessages?: ReadonlyArray<RemoteQueuedMessagePresentation>;
+  readonly onEditRemoteQueuedMessage?: (message: RemoteQueuedMessagePresentation) => void;
+  readonly onSteerRemoteQueuedMessage?: (message: RemoteQueuedMessagePresentation) => void;
+  readonly onCancelRemoteQueuedMessage?: (message: RemoteQueuedMessagePresentation) => void;
   readonly activeWorkStartedAt: string | null;
   readonly activePendingApproval: PendingApproval | null;
   readonly remotePendingApprovals?: ReadonlyArray<PendingApproval>;
@@ -149,6 +161,12 @@ export interface ThreadDetailScreenProps {
   readonly remoteCancellable?: boolean;
   readonly remoteModelCommandPending?: boolean;
   readonly remoteModelSelectionEnabled?: boolean;
+  readonly remoteFastMode?: {
+    readonly supported: boolean;
+    readonly enabled: boolean;
+    readonly pending?: boolean;
+  };
+  readonly onSetRemoteFastMode?: (enabled: boolean) => void;
   readonly remoteUsageAvailable?: boolean;
   readonly onOpenUsage?: () => void;
 }
@@ -286,9 +304,16 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   // animation, so the composer would ride down flush to the screen edge and
   // then snap up into the inset. On iOS blur precedes the hide, so the
   // focus-keyed inset is already in place while the composer rides down.
-  const composerBottomInset = (Platform.OS === "android" ? isKeyboardVisible : composerExpanded)
-    ? 0
-    : Math.max(insets.bottom, 12);
+  const composerBottomInset = props.remoteOnly
+    ? resolveRemoteComposerBottomInset({
+        platform: Platform.OS === "android" ? "android" : "ios",
+        keyboardVisible: isKeyboardVisible,
+        composerFocused: composerExpanded,
+        safeAreaBottom: insets.bottom,
+      })
+    : (Platform.OS === "android" ? isKeyboardVisible : composerExpanded)
+      ? 0
+      : Math.max(insets.bottom, 12);
   const contentPresentationKind = props.contentPresentation.kind;
   // The raw sync status enters "synchronizing" on every full fetch, cached or
   // not. Whether messages are already on screen decides the pill label: no
@@ -307,11 +332,12 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     }
   })();
   const selectedThreadFeed = props.selectedThreadFeed;
-  const composerChrome = composerExpanded
-    ? props.remoteOnly
-      ? REMOTE_COMPOSER_EXPANDED_CHROME
-      : COMPOSER_EXPANDED_CHROME
-    : COMPOSER_COLLAPSED_CHROME;
+  const composerChrome = resolveThreadComposerChrome({
+    remoteOnly: props.remoteOnly === true,
+    expanded: composerExpanded,
+    retainedCollapsedChrome: COMPOSER_COLLAPSED_CHROME,
+    retainedExpandedChrome: COMPOSER_EXPANDED_CHROME,
+  });
   const composerOverlapHeight = composerChrome + composerBottomInset;
   // While a user-input request is pending, the questionnaire owns the
   // composer slot outright: expanded it is the full card, collapsed it is a
@@ -625,6 +651,13 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             onHeaderMaterialVisibilityChange={props.onHeaderMaterialVisibilityChange}
             onEndFollowEnabledChange={setEndFollowEnabled}
             skills={selectedProviderSkills}
+            remoteOnly={props.remoteOnly}
+            remoteResponseMessageIds={props.remoteAssistantResponseMessageIds}
+            remoteWorkDisclosures={props.remoteWorkDisclosures}
+            remoteQueuedMessages={props.remoteQueuedMessages}
+            onEditRemoteQueuedMessage={props.onEditRemoteQueuedMessage}
+            onSteerRemoteQueuedMessage={props.onSteerRemoteQueuedMessage}
+            onCancelRemoteQueuedMessage={props.onCancelRemoteQueuedMessage}
             loadEarlier={props.loadEarlier ?? null}
           />
         </View>
@@ -638,7 +671,16 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
           // The animated keyboard height can remain stale after a dismissed
           // IME on both platforms. Visibility is the authoritative closed
           // state, so disable the translation rather than stranding the pill.
-          enabled={isKeyboardVisible && !keyboardStateSuspect}
+          enabled={
+            props.remoteOnly
+              ? shouldTrackRemoteComposerKeyboard({
+                  platform: Platform.OS === "android" ? "android" : "ios",
+                  keyboardVisible: isKeyboardVisible,
+                  composerFocused: composerExpanded,
+                  keyboardStateSuspect,
+                })
+              : isKeyboardVisible && !keyboardStateSuspect
+          }
           style={{ position: "absolute", bottom: 0, left: 0, right: 0 }}
           offset={{ closed: 0, opened: 0 }}
         >
@@ -745,7 +787,9 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 editorRef={composerEditorRef}
                 draftMessage={props.draftMessage}
                 draftAttachments={props.draftAttachments}
-                placeholder="Ask the repo agent, or run a command…"
+                placeholder={
+                  props.remoteOnly ? "Follow up" : "Ask the repo agent, or run a command…"
+                }
                 contentMaxWidth={contentMaxWidth}
                 connectionState={props.connectionStateLabel}
                 connectionError={props.connectionError}
@@ -774,6 +818,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 remoteCancellable={props.remoteCancellable}
                 remoteModelCommandPending={props.remoteModelCommandPending}
                 remoteModelSelectionEnabled={props.remoteModelSelectionEnabled}
+                remoteFastMode={props.remoteFastMode}
+                onSetRemoteFastMode={props.onSetRemoteFastMode}
                 remoteUsageAvailable={props.remoteUsageAvailable}
                 onOpenUsage={props.onOpenUsage}
               />

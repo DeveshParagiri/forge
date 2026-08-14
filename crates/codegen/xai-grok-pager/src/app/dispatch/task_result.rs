@@ -624,9 +624,19 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
         TaskResult::SetFastModeComplete {
             agent_id,
             session_id,
+            session_binding_epoch,
+            request_id,
             enabled,
             result,
-        } => crate::forge::fast_mode::handle_complete(app, agent_id, session_id, enabled, result),
+        } => crate::forge::fast_mode::handle_complete(
+            app,
+            agent_id,
+            session_id,
+            session_binding_epoch,
+            request_id,
+            enabled,
+            result,
+        ),
         TaskResult::BgTaskKilled {
             session_id,
             task_id,
@@ -929,6 +939,7 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             }
             vec![]
         }
+        TaskResult::ForgeRemoteNewSessionHandoffComplete => vec![],
         TaskResult::ShareSessionComplete {
             agent_id,
             share_url,
@@ -1111,10 +1122,12 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
                 .as_ref()
                 .and_then(|d| d.attached_agent)
                 .is_some_and(|id| to_remove.contains(&id));
+            let mut removal_effects = Vec::new();
             for id in to_remove {
-                remove_agent_and_cleanup(app, id);
+                removal_effects.extend(remove_agent_and_cleanup(app, id));
             }
             let mut effects = unregister_session_effect(Some(sid));
+            effects.extend(removal_effects);
             if after == AfterSessionDelete::Dashboard {
                 if let Some(d) = app.dashboard.as_mut() {
                     d.delete_confirm = None;

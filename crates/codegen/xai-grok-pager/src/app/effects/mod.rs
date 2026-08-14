@@ -1446,15 +1446,23 @@ pub(crate) fn execute(
                     TaskResult::CancelComplete
                 });
         }
-        Effect::QueueEdit { session_id, id, new_text } => {
+        Effect::QueueEdit {
+            session_id,
+            id,
+            new_text,
+            expected_version,
+        } => {
             let tx = acp_tx.clone();
             tasks
                 .spawn(async move {
-                    let params = serde_json::json!({
-                    "sessionId": session_id.0.to_string(),
-                    "id": id,
-                    "newText": new_text,
-                });
+                    let mut params = serde_json::json!({
+                        "sessionId": session_id.0.to_string(),
+                        "id": id,
+                        "newText": new_text,
+                    });
+                    if let Some(expected_version) = expected_version {
+                        params["expectedVersion"] = expected_version.into();
+                    }
                     let notification = acp::ExtNotification::new(
                         "x.ai/queue/edit",
                         serde_json::value::to_raw_value(&params)
@@ -1814,6 +1822,8 @@ pub(crate) fn execute(
         Effect::SetFastMode {
             agent_id,
             session_id,
+            session_binding_epoch,
+            request_id,
             enabled,
         } => {
             let tx = acp_tx.clone();
@@ -1835,6 +1845,8 @@ pub(crate) fn execute(
                 TaskResult::SetFastModeComplete {
                     agent_id,
                     session_id,
+                    session_binding_epoch,
+                    request_id,
                     enabled,
                     result,
                 }
@@ -3332,6 +3344,164 @@ pub(crate) fn execute(
                     command,
                     result: Ok(status),
                 }
+            });
+        }
+        Effect::CompleteForgeRemoteNewSession {
+            source_binding_generation,
+            source_gateway_generation,
+            source_client_generation,
+            source_session_id,
+            command_id,
+            completion,
+            initial_snapshot,
+        } => {
+            tasks.spawn(async move {
+                let _remote_lifecycle = crate::forge::remote_bridge::lock_lifecycle().await;
+                let pending = crate::forge::remote_bridge::PendingRemoteNewSession {
+                    source_binding_generation,
+                    source_gateway_generation,
+                    source_client_generation,
+                    source_session_id,
+                    command_id,
+                };
+                match completion {
+                    actions::ForgeRemoteNewSessionCompletion::Created {
+                        agent_id,
+                        session_id,
+                        session_binding_epoch,
+                    } => {
+                        // The source socket remains session-pinned. Arm a separate
+                        // bridge, listener, bearer, and Serve path for the child.
+                        let status = match xai_grok_shell::remote_control::check_tailscale().await {
+                            xai_grok_shell::remote_control::TailscalePrerequisite::Ready { dns_name } => {
+                                let transport = crate::forge::remote_bridge::arm(
+                                    agent_id,
+                                    session_id.clone(),
+                                    session_binding_epoch,
+                                ).await;
+                                let binding_generation = transport.binding_generation;
+                                let snapshot_seeded = match initial_snapshot {
+                                    Some(snapshot) => crate::forge::remote_bridge::seed_initial_snapshot(
+                                        binding_generation,
+                                        &session_id,
+                                        snapshot,
+                                    ).await,
+                                    None => false,
+                                };
+                                if !snapshot_seeded {
+                                    crate::forge::remote_bridge::complete_new_session_handoff_failure(
+                                        &pending,
+                                        "new_session_snapshot_failed",
+                                        "Forge Remote could not project the new session.",
+                                        true,
+                                    ).await;
+                                    crate::forge::remote_bridge::suspend_target(
+                                        agent_id,
+                                        &session_id,
+                                        session_binding_epoch,
+                                        xai_grok_shell::remote_control::RemoteRevocationReason::Stopped,
+                                    ).await;
+                                    crate::forge::remote_bridge::forget_binding(binding_generation).await;
+                                    return TaskResult::ForgeRemoteNewSessionHandoffComplete;
+                                }
+                                match xai_grok_shell::remote_control::arm_active_gateway(
+                                    session_id.0.to_string(),
+                                    transport,
+                                ).await {
+                                    Ok(arm) if crate::forge::remote_bridge::bind_gateway_generation(
+                                        agent_id,
+                                        &session_id,
+                                        session_binding_epoch,
+                                        arm.gateway_generation,
+                                    ).await => {
+                                        match xai_grok_shell::remote_control::enable_private_tailscale_route(
+                                            binding_generation,
+                                            &dns_name,
+                                            &arm.session_id,
+                                            arm.gateway_generation,
+                                        ).await {
+                                            Ok(arm) => Ok(arm),
+                                            Err(error) => {
+                                                crate::forge::remote_bridge::suspend_target(
+                                                    agent_id,
+                                                    &session_id,
+                                                    session_binding_epoch,
+                                                    xai_grok_shell::remote_control::RemoteRevocationReason::Stopped,
+                                                ).await;
+                                                if xai_grok_shell::remote_control::stop_gateway_binding_checked(
+                                                    binding_generation,
+                                                    xai_grok_shell::remote_control::RemoteRevocationReason::Stopped,
+                                                ).await.is_ok() {
+                                                    crate::forge::remote_bridge::forget_binding(binding_generation).await;
+                                                }
+                                                Err(error)
+                                            },
+                                        }
+                                    }
+                                    Ok(arm) => {
+                                        crate::forge::remote_bridge::suspend_target(
+                                            agent_id,
+                                            &session_id,
+                                            session_binding_epoch,
+                                            xai_grok_shell::remote_control::RemoteRevocationReason::Stopped,
+                                        ).await;
+                                        if xai_grok_shell::remote_control::stop_gateway_generation_checked(
+                                            binding_generation,
+                                            arm.gateway_generation,
+                                            xai_grok_shell::remote_control::RemoteRevocationReason::Stopped,
+                                        ).await.is_ok() {
+                                            crate::forge::remote_bridge::forget_binding(binding_generation).await;
+                                        }
+                                        Err("Forge Remote could not bind the new session gateway.".into())
+                                    }
+                                    Err(error) => {
+                                        crate::forge::remote_bridge::suspend_target(
+                                            agent_id,
+                                            &session_id,
+                                            session_binding_epoch,
+                                            xai_grok_shell::remote_control::RemoteRevocationReason::Stopped,
+                                        ).await;
+                                        crate::forge::remote_bridge::forget_binding(binding_generation).await;
+                                        Err(error)
+                                    },
+                                }
+                            }
+                            prerequisite => Err(prerequisite.user_message()),
+                        };
+                        match status {
+                            Ok(arm) => {
+                                let url = arm.remote_url.clone().unwrap_or_default();
+                                crate::forge::remote_bridge::finalize_new_session_handoff(
+                                    &pending,
+                                    agent_id,
+                                    &session_id,
+                                    session_binding_epoch,
+                                    arm.binding_generation,
+                                    arm.gateway_generation,
+                                    url,
+                                    arm.expires_at_rfc3339().to_string(),
+                                ).await;
+                            }
+                            Err(error) => {
+                                crate::forge::remote_bridge::complete_new_session_handoff_failure(
+                                    &pending,
+                                    "new_session_pairing_failed",
+                                    error,
+                                    false,
+                                ).await;
+                            }
+                        }
+                    }
+                    actions::ForgeRemoteNewSessionCompletion::Failed { error } => {
+                        crate::forge::remote_bridge::complete_new_session_handoff_failure(
+                            &pending,
+                            "new_session_failed",
+                            error,
+                            true,
+                        ).await;
+                    }
+                }
+                TaskResult::ForgeRemoteNewSessionHandoffComplete
             });
         }
         Effect::ShareSession { agent_id, session_id } => {

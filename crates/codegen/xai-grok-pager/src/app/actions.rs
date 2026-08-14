@@ -1387,6 +1387,22 @@ pub enum AfterSessionDelete {
     /// `/delete` from a dashboard-attached agent, or dashboard row delete.
     Dashboard,
 }
+
+/// Terminal state for a remote request that creates a fresh session. The
+/// source pairing stays bound to its original session while this result is
+/// delivered; a successful handoff receives a separately armed pairing.
+#[derive(Debug)]
+pub enum ForgeRemoteNewSessionCompletion {
+    Created {
+        agent_id: AgentId,
+        session_id: acp::SessionId,
+        session_binding_epoch: u32,
+    },
+    Failed {
+        error: String,
+    },
+}
+
 /// Async side effect produced by [`super::dispatch::dispatch`]. The event
 /// loop spawns these into a `JoinSet`; completions come back through
 /// [`TaskResult`] as `Action::TaskComplete`.
@@ -1603,6 +1619,8 @@ pub enum Effect {
     SetFastMode {
         agent_id: AgentId,
         session_id: acp::SessionId,
+        session_binding_epoch: u32,
+        request_id: u64,
         enabled: bool,
     },
     /// Fetch changelog from CDN (both markdown + structured JSON).
@@ -1696,6 +1714,9 @@ pub enum Effect {
         session_id: acp::SessionId,
         id: String,
         new_text: String,
+        /// Optional optimistic-concurrency guard. Terminal edits use `None`;
+        /// snapshot-driven remote edits send the exact observed version.
+        expected_version: Option<u64>,
     },
     /// Hold a server-owned row out of combine-on-promote while the composer
     /// edits it: fire-and-forget `x.ai/queue/hold_edit`.
@@ -1920,6 +1941,19 @@ pub enum Effect {
         command: crate::forge::remote_control::RemoteControlCommand,
         session_id: acp::SessionId,
         session_binding_epoch: u32,
+    },
+    /// Complete a remote-created session handoff on the original authenticated
+    /// socket. Success arms a fresh bearer rather than retargeting the source.
+    CompleteForgeRemoteNewSession {
+        source_binding_generation: u64,
+        source_gateway_generation: u64,
+        source_client_generation: u64,
+        source_session_id: String,
+        command_id: String,
+        completion: ForgeRemoteNewSessionCompletion,
+        /// Authoritative projection captured after SessionCreated dispatch.
+        /// The child gateway is not exposed until this snapshot is installed.
+        initial_snapshot: Option<serde_json::Value>,
     },
     /// Fetch and display session info via x.ai/session/info.
     /// Auth lines are derived in the effect from SessionFlags + env (not Effect fields).
@@ -2499,6 +2533,8 @@ pub enum TaskResult {
     SetFastModeComplete {
         agent_id: AgentId,
         session_id: acp::SessionId,
+        session_binding_epoch: u32,
+        request_id: u64,
         enabled: bool,
         result: Result<(), String>,
     },
@@ -2662,6 +2698,9 @@ pub enum TaskResult {
         command: crate::forge::remote_control::RemoteControlCommand,
         result: Result<crate::forge::remote_control::RemoteControlStatus, String>,
     },
+    /// Remote new-session handoff delivery finished. All user-visible state is
+    /// sent over the authenticated source socket, so pager dispatch is a no-op.
+    ForgeRemoteNewSessionHandoffComplete,
     /// Session info fetched successfully.
     SessionInfoComplete {
         agent_id: AgentId,

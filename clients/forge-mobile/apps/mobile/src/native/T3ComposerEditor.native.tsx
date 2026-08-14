@@ -66,6 +66,7 @@ interface NativeComposerEditorProps extends ViewProps {
   readonly fontFamily: string;
   readonly fontSize: number;
   readonly lineHeight: number;
+  readonly contentInsetHorizontal: number;
   readonly contentInsetVertical: number;
   readonly singleLineCentered: boolean;
   readonly editable: boolean;
@@ -104,6 +105,7 @@ export function ComposerEditor({
   onContentSizeChange,
   onFocus,
   onBlur,
+  contentInsetHorizontal = 0,
   contentInsetVertical = 0,
   ...props
 }: ComposerEditorProps) {
@@ -252,6 +254,7 @@ export function ComposerEditor({
             ? resolvedTextStyle.lineHeight
             : MOBILE_TYPOGRAPHY.body.lineHeight
         }
+        contentInsetHorizontal={contentInsetHorizontal}
         contentInsetVertical={contentInsetVertical}
         singleLineCentered={props.singleLineCentered ?? false}
         editable={props.editable ?? true}

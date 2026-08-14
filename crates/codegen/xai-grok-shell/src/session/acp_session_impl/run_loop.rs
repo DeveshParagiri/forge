@@ -967,8 +967,8 @@ pub(super) async fn run_session(
                         SessionCommand::ClearQueue { owner } => {
                             session.handle_clear_queue(owner.as_deref()).await;
                         }
-                        SessionCommand::EditQueuedPrompt { id, new_text, editor } => {
-                            session.handle_edit_queued_prompt(&id, new_text, editor.as_deref()).await;
+                        SessionCommand::EditQueuedPrompt { id, new_text, editor, expected_version } => {
+                            session.handle_edit_queued_prompt(&id, new_text, editor.as_deref(), expected_version).await;
                         }
                         SessionCommand::HoldCombineEdit { id } => {
                             let mut state = session.state.lock().await;

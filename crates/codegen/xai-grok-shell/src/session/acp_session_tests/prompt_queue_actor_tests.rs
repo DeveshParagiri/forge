@@ -396,7 +396,7 @@ async fn edit_queued_prompt_replaces_text_and_bumps_version() {
             }
 
             actor
-                .handle_edit_queued_prompt("p1", "edited".into(), Some("bob"))
+                .handle_edit_queued_prompt("p1", "edited".into(), Some("bob"), None)
                 .await;
 
             let state = actor.state.lock().await;
@@ -449,7 +449,7 @@ async fn edit_queued_prompt_clears_combine_hold() {
             }
 
             actor
-                .handle_edit_queued_prompt("p1", "edited".into(), Some("bob"))
+                .handle_edit_queued_prompt("p1", "edited".into(), Some("bob"), None)
                 .await;
 
             let state = actor.state.lock().await;
@@ -502,7 +502,7 @@ async fn edit_then_combine_uses_edited_text() {
             }
 
             actor
-                .handle_edit_queued_prompt("p2", "edited follower".into(), Some("bob"))
+                .handle_edit_queued_prompt("p2", "edited follower".into(), Some("bob"), None)
                 .await;
 
             // Edit cleared the hold under the same lock; combine now merges with
@@ -570,10 +570,10 @@ async fn edit_queued_prompt_is_last_writer_wins() {
             }
 
             actor
-                .handle_edit_queued_prompt("p1", "first-write".into(), Some("bob"))
+                .handle_edit_queued_prompt("p1", "first-write".into(), Some("bob"), None)
                 .await;
             actor
-                .handle_edit_queued_prompt("p1", "second-write".into(), Some("carol"))
+                .handle_edit_queued_prompt("p1", "second-write".into(), Some("carol"), None)
                 .await;
 
             let state = actor.state.lock().await;
@@ -590,9 +590,41 @@ async fn edit_queued_prompt_is_last_writer_wins() {
         .await;
 }
 
+/// Remote clients edit from a snapshot, so their expected version is an
+/// optimistic-concurrency guard: a stale phone must not overwrite a newer edit.
+#[tokio::test]
+async fn edit_queued_prompt_expected_version_rejects_stale_write() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (actor, _rx) = build_actor().await;
+            {
+                let mut state = actor.state.lock().await;
+                state.pending_inputs.push_back(user_item("p1", "alice"));
+            }
+
+            actor
+                .handle_edit_queued_prompt("p1", "accepted".into(), Some("phone"), Some(0))
+                .await;
+            actor
+                .handle_edit_queued_prompt("p1", "stale overwrite".into(), Some("phone"), Some(0))
+                .await;
+
+            let state = actor.state.lock().await;
+            let meta = state
+                .pending_inputs
+                .iter()
+                .find_map(|item| item.queue_meta.as_ref().filter(|meta| meta.id == "p1"))
+                .expect("p1 still queued");
+            assert_eq!(meta.text, "accepted");
+            assert_eq!(meta.version, 1);
+            assert_eq!(meta.last_editor.as_deref(), Some("phone"));
+        })
+        .await;
+}
+
 /// Editing a missing id is a benign no-op (the entry was already drained or
-/// removed by another client); no rebroadcast is required because nothing
-/// changed.
+/// removed by another client); the actor rebroadcasts for stale remote clients.
 #[tokio::test]
 async fn edit_queued_prompt_missing_id_is_noop() {
     let local = tokio::task::LocalSet::new();
@@ -605,7 +637,7 @@ async fn edit_queued_prompt_missing_id_is_noop() {
             }
 
             actor
-                .handle_edit_queued_prompt("ghost", "ignored".into(), Some("bob"))
+                .handle_edit_queued_prompt("ghost", "ignored".into(), Some("bob"), None)
                 .await;
 
             let state = actor.state.lock().await;
@@ -643,7 +675,7 @@ async fn edit_queued_prompt_running_turn_is_noop() {
                 .expect("current_prompt_id mutex poisoned") = Some("p1".into());
 
             actor
-                .handle_edit_queued_prompt("p1", "no-op".into(), Some("bob"))
+                .handle_edit_queued_prompt("p1", "no-op".into(), Some("bob"), None)
                 .await;
 
             let state = actor.state.lock().await;
@@ -674,10 +706,10 @@ async fn edit_queued_prompt_clears_last_editor_when_none() {
             }
 
             actor
-                .handle_edit_queued_prompt("p1", "v1".into(), Some("bob"))
+                .handle_edit_queued_prompt("p1", "v1".into(), Some("bob"), None)
                 .await;
             actor
-                .handle_edit_queued_prompt("p1", "v2".into(), None)
+                .handle_edit_queued_prompt("p1", "v2".into(), None, None)
                 .await;
 
             let state = actor.state.lock().await;
@@ -939,7 +971,7 @@ async fn edit_queued_bash_row_rebuilds_bash_meta_with_new_text() {
             }
 
             actor
-                .handle_edit_queued_prompt("p1", "ls -la".into(), Some("bob"))
+                .handle_edit_queued_prompt("p1", "ls -la".into(), Some("bob"), None)
                 .await;
 
             let state = actor.state.lock().await;
@@ -976,7 +1008,7 @@ async fn edit_queued_prompt_empty_text_is_noop() {
             }
 
             actor
-                .handle_edit_queued_prompt("p1", "  ".into(), None)
+                .handle_edit_queued_prompt("p1", "  ".into(), None, None)
                 .await;
 
             let state = actor.state.lock().await;
@@ -1000,7 +1032,7 @@ async fn edit_queued_plain_row_stays_plain() {
             }
 
             actor
-                .handle_edit_queued_prompt("p1", "! looks like bash".into(), Some("bob"))
+                .handle_edit_queued_prompt("p1", "! looks like bash".into(), Some("bob"), None)
                 .await;
 
             let state = actor.state.lock().await;

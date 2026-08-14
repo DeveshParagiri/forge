@@ -10,7 +10,7 @@
     "ios": "EXPO_NO_GIT_STATUS=1 expo run:ios",
     "typecheck": "tsc -p tsconfig.forge.json --noEmit",
     "prebuild:ios": "EXPO_NO_GIT_STATUS=1 expo prebuild --clean --platform ios",
-    "test": "vp test run src/forge"
+    "test": "vp test run src/forge src/features/home/remoteHomePresentation.test.ts src/features/threads/remoteComposerLayout.test.ts src/features/threads/remoteComposerPresentation.test.ts src/features/threads/remoteNewSessionPresentation.test.ts src/features/threads/remoteQueuePresentation.test.ts src/features/threads/threadMessageChrome.test.ts src/features/threads/thread-settings-menu.test.ts"
   },
   "dependencies": {
     "@callstack/liquid-glass": "^0.7.1",

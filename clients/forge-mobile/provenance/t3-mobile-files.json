@@ -5,13 +5,13 @@
     "revision": "b73232bdd31e83914a8a943960c7dc4b6390b39b",
     "license": "MIT"
   },
-  "generatedAt": "2026-08-13T11:37:04.849Z",
+  "generatedAt": "2026-08-14T09:52:13.897Z",
   "copiedFileCount": 1054,
-  "identicalFileCount": 1016,
-  "adaptedFileCount": 38,
+  "identicalFileCount": 1007,
+  "adaptedFileCount": 47,
   "missingFileCount": 0,
   "adaptationPatch": "provenance/t3-mobile-adaptations.patch",
-  "adaptationPatchSha256": "cbaa0219a82e485b654360029e258ddb07592569b3749d238e47dac2e67d94ff",
+  "adaptationPatchSha256": "487f449bf10dabe806e49dbfd0eabca6645c5f657be3d32efab1b4c3e651b3c9",
   "excludedUpstreamFiles": [
     {
       "upstreamPath": "apps/mobile/clerk-theme.json",
@@ -51,7 +51,7 @@
       "upstreamPath": "apps/mobile/app.config.ts",
       "currentPath": "apps/mobile/app.config.ts",
       "upstreamSha256": "b388f9ce870027feb72dbd632564d9bac4ad5a9c68a6b057983ffee570f7f800",
-      "currentSha256": "11dd7a4389cf2193490cdad47450b12096c2867033e1e1286d18914ddf292e06",
+      "currentSha256": "3235bc27680a15130b92e6d46ff9195fe28ac78c4c0f40eda341360cb817db14",
       "status": "adapted"
     },
     {
@@ -156,15 +156,15 @@
       "upstreamPath": "apps/mobile/modules/t3-composer-editor/android/src/main/java/expo/modules/t3composereditor/T3ComposerEditorModule.kt",
       "currentPath": "apps/mobile/modules/t3-composer-editor/android/src/main/java/expo/modules/t3composereditor/T3ComposerEditorModule.kt",
       "upstreamSha256": "d383e7ff9215b88b7444c69e8acc90d065330cf3af2a9be3575813240ec50fe6",
-      "currentSha256": "d383e7ff9215b88b7444c69e8acc90d065330cf3af2a9be3575813240ec50fe6",
-      "status": "identical"
+      "currentSha256": "b48e60f6f6dce44ded475fb668ab5f083f151e48ee22267e45fb80974bcf791c",
+      "status": "adapted"
     },
     {
       "upstreamPath": "apps/mobile/modules/t3-composer-editor/android/src/main/java/expo/modules/t3composereditor/T3ComposerEditorView.kt",
       "currentPath": "apps/mobile/modules/t3-composer-editor/android/src/main/java/expo/modules/t3composereditor/T3ComposerEditorView.kt",
       "upstreamSha256": "b33b1306cbf2e8c0e470af18c3559d51dd11b876a94b97710d91e0d39181a791",
-      "currentSha256": "b33b1306cbf2e8c0e470af18c3559d51dd11b876a94b97710d91e0d39181a791",
-      "status": "identical"
+      "currentSha256": "a4053a43f866b13e778e830fbaec16082c04b057e4da9ba10c84531d48fa78e9",
+      "status": "adapted"
     },
     {
       "upstreamPath": "apps/mobile/modules/t3-composer-editor/expo-module.config.json",
@@ -184,15 +184,15 @@
       "upstreamPath": "apps/mobile/modules/t3-composer-editor/ios/T3ComposerEditorModule.swift",
       "currentPath": "apps/mobile/modules/t3-composer-editor/ios/T3ComposerEditorModule.swift",
       "upstreamSha256": "ceb585517adf4a9a1f5d5c69d96253055964629f347f868e722fe46cd38bd6d7",
-      "currentSha256": "ceb585517adf4a9a1f5d5c69d96253055964629f347f868e722fe46cd38bd6d7",
-      "status": "identical"
+      "currentSha256": "31bcdba18ea1fd952df7ab294156fbe11580cd820049c91cd02cbef54a745498",
+      "status": "adapted"
     },
     {
       "upstreamPath": "apps/mobile/modules/t3-composer-editor/ios/T3ComposerEditorView.swift",
       "currentPath": "apps/mobile/modules/t3-composer-editor/ios/T3ComposerEditorView.swift",
       "upstreamSha256": "b579b0831046b6cdc20b97643ed7f07e6eddf41000ab96c7a3b8a468110781c4",
-      "currentSha256": "b579b0831046b6cdc20b97643ed7f07e6eddf41000ab96c7a3b8a468110781c4",
-      "status": "identical"
+      "currentSha256": "5bddb22ef91afa1b2bc89b28c8ccbf1ed7d8f2a7d0470b727d95f67f0e1ec435",
+      "status": "adapted"
     },
     {
       "upstreamPath": "apps/mobile/modules/t3-composer-editor/LICENSE",
@@ -1367,7 +1367,7 @@
       "upstreamPath": "apps/mobile/package.json",
       "currentPath": "apps/mobile/package.json",
       "upstreamSha256": "a196a5ae9528c3ce59316635fcd18f2e333337ebf6d1c5dda2c0b98d735028c0",
-      "currentSha256": "d5adac4e5fa23e613213f1892d965bf8d8f7a0a5cb988e99cce70bd65a9ad97c",
+      "currentSha256": "7c7335f8659b31871566be89e86aee2d32b59dc0a324398630d19d62a31de38d",
       "status": "adapted"
     },
     {
@@ -1493,8 +1493,8 @@
       "upstreamPath": "apps/mobile/src/components/AppSymbol.tsx",
       "currentPath": "apps/mobile/src/components/AppSymbol.tsx",
       "upstreamSha256": "6aa1c4220072a064e260da95b0399edf005d1fb8a6f88016b9afcce2698ffe4e",
-      "currentSha256": "6aa1c4220072a064e260da95b0399edf005d1fb8a6f88016b9afcce2698ffe4e",
-      "status": "identical"
+      "currentSha256": "12e315637cc023099ae52204954d42b1baa92ac7c05fe353cce4fa8e118146ad",
+      "status": "adapted"
     },
     {
       "upstreamPath": "apps/mobile/src/components/AppText.tsx",
@@ -1556,8 +1556,8 @@
       "upstreamPath": "apps/mobile/src/components/CopyTextButton.tsx",
       "currentPath": "apps/mobile/src/components/CopyTextButton.tsx",
       "upstreamSha256": "c58976b3ca20652589f271680e78416ed14069685219de833891ac0b23850df1",
-      "currentSha256": "c58976b3ca20652589f271680e78416ed14069685219de833891ac0b23850df1",
-      "status": "identical"
+      "currentSha256": "1a89ad0ec223b69b8798729f3d6ffa99046c8272bee17d8b22e747511f892a95",
+      "status": "adapted"
     },
     {
       "upstreamPath": "apps/mobile/src/components/EmptyState.tsx",
@@ -2361,22 +2361,22 @@
       "upstreamPath": "apps/mobile/src/features/home/HomeScreen.tsx",
       "currentPath": "apps/mobile/src/features/home/HomeScreen.tsx",
       "upstreamSha256": "2f79eb8d927e05057f026d52ad36549fecc0721186f0c81f7c94e9bf346799b1",
-      "currentSha256": "2a31da509ed1873b0d13c858b0539fc52af0bc49e6ed9563f121376d78bab928",
+      "currentSha256": "4469064d9db24314c51c0377436a64f48a7ac541784736ba774d05219fd1f899",
       "status": "adapted"
     },
     {
       "upstreamPath": "apps/mobile/src/features/home/homeThreadList.test.ts",
       "currentPath": "apps/mobile/src/features/home/homeThreadList.test.ts",
       "upstreamSha256": "f2b6c52f234c257ebd0cda0642324926939934b6cbe8d9b0bd18f3b8a00aab7a",
-      "currentSha256": "f2b6c52f234c257ebd0cda0642324926939934b6cbe8d9b0bd18f3b8a00aab7a",
-      "status": "identical"
+      "currentSha256": "2696836b9daa6282ae77e5a7405c9570b97b9c73280a411f9b618145bd3c0e8e",
+      "status": "adapted"
     },
     {
       "upstreamPath": "apps/mobile/src/features/home/homeThreadList.ts",
       "currentPath": "apps/mobile/src/features/home/homeThreadList.ts",
       "upstreamSha256": "76c3fc7d6549f7c2eb491970dec63ad757fc0620e7bbacdc5febaaf307c8c44e",
-      "currentSha256": "76c3fc7d6549f7c2eb491970dec63ad757fc0620e7bbacdc5febaaf307c8c44e",
-      "status": "identical"
+      "currentSha256": "a9ce0d5f21784bb321a5931aaa727e988c268303f325b4fc8616b1b1506eb113",
+      "status": "adapted"
     },
     {
       "upstreamPath": "apps/mobile/src/features/home/thread-swipe-actions.tsx",
@@ -3488,14 +3488,14 @@
       "upstreamPath": "apps/mobile/src/features/threads/thread-list-items.tsx",
       "currentPath": "apps/mobile/src/features/threads/thread-list-items.tsx",
       "upstreamSha256": "465cb64c219842cc5f8a1a7b72c6aadf49a6426e00dc3c4e1bf48e1327091191",
-      "currentSha256": "70ad099ffd42f8d91269b7a6cd456eac61d8e6cbf184cd3aff8292bc10d07033",
+      "currentSha256": "3d0d1cba48b10b73ce1672b46ad4b155603c27d52fdeeeda693a432c8477e25f",
       "status": "adapted"
     },
     {
       "upstreamPath": "apps/mobile/src/features/threads/thread-list-v2-items.tsx",
       "currentPath": "apps/mobile/src/features/threads/thread-list-v2-items.tsx",
       "upstreamSha256": "68d82b87d4a0ceb964debc7318a839166c48fa85f3128d9412b21906c38b28cf",
-      "currentSha256": "aebb6f9f5b78f4a2381a2ecdf421e271134b0e750be2d3c6cc9cf30faed3e8cc",
+      "currentSha256": "6358bf0b070e9803482ce316ae0f737e0a2fdad0aed8afa1848e1124b5c3a02c",
       "status": "adapted"
     },
     {
@@ -3509,14 +3509,14 @@
       "upstreamPath": "apps/mobile/src/features/threads/thread-settings-menu.test.ts",
       "currentPath": "apps/mobile/src/features/threads/thread-settings-menu.test.ts",
       "upstreamSha256": "2fb3362f30667bf74bd0665d571d14d1269b77ade06b4efdfa3326ab11870209",
-      "currentSha256": "2fb3362f30667bf74bd0665d571d14d1269b77ade06b4efdfa3326ab11870209",
-      "status": "identical"
+      "currentSha256": "c4780eb60edf9201d0ba55d2db7a6651b3266b359793acdfa65eb2fb6ff476ad",
+      "status": "adapted"
     },
     {
       "upstreamPath": "apps/mobile/src/features/threads/thread-settings-menu.ts",
       "currentPath": "apps/mobile/src/features/threads/thread-settings-menu.ts",
       "upstreamSha256": "4dbd92930fa339fadd50cbd4c17a7f0297aa2f226e3fe9f55515b5f38efe5dba",
-      "currentSha256": "ab3cd667cdce5298104ff412be12534e087bcd197f2eb0e57baa7bc6d1fdf338",
+      "currentSha256": "dd6a33db211f0f25af8470908dce3775dea7de1edc3667ac1741eeadc3bf7ab0",
       "status": "adapted"
     },
     {
@@ -3558,7 +3558,7 @@
       "upstreamPath": "apps/mobile/src/features/threads/ThreadComposer.tsx",
       "currentPath": "apps/mobile/src/features/threads/ThreadComposer.tsx",
       "upstreamSha256": "c7d872b1d87e625c77a3b7c721325cdf8c7808544ae3b5c3cba1a71f7c783215",
-      "currentSha256": "6fca1f81f9bb6e39acecdf879d47d2ff11680bf561de9c91077e29dfa5c44629",
+      "currentSha256": "d8535bf167036932f29572d9bad3843bb99935e560fce878ba70d9d1408ff1cd",
       "status": "adapted"
     },
     {
@@ -3579,14 +3579,14 @@
       "upstreamPath": "apps/mobile/src/features/threads/ThreadDetailScreen.tsx",
       "currentPath": "apps/mobile/src/features/threads/ThreadDetailScreen.tsx",
       "upstreamSha256": "8a84bb7711ef68307ef0d9cdb256a95ca1fbc8545de8c74c4728f57f843c7977",
-      "currentSha256": "4bdc7daad0c2e610403679b773f1d9c98533dde2c2edc1f225a46bf6bc6ac6fd",
+      "currentSha256": "73efb7625714271164b759c56d785addb9a65b7a99fa39983eeeb0fbe54c1860",
       "status": "adapted"
     },
     {
       "upstreamPath": "apps/mobile/src/features/threads/ThreadFeed.tsx",
       "currentPath": "apps/mobile/src/features/threads/ThreadFeed.tsx",
       "upstreamSha256": "2a05a878527a23914fd718d04e2363878efb2f2e2cfa6d3538b7ec0bf6dee375",
-      "currentSha256": "b346058d0af1ed4f0f4ed8a4faba17b2e9967febcc8794acd39572d58d83b534",
+      "currentSha256": "ce8baf2c4937ca94837aa41a76ac2e97466d06177bf5470409e22699de4258e5",
       "status": "adapted"
     },
     {
@@ -4125,28 +4125,28 @@
       "upstreamPath": "apps/mobile/src/native/T3ComposerEditor.ios.tsx",
       "currentPath": "apps/mobile/src/native/T3ComposerEditor.ios.tsx",
       "upstreamSha256": "1a9f41f3f02bde4c4b94844419f8a2b3a1a0dd0cb3cf7960ec38e5da32cc75e3",
-      "currentSha256": "5cc0ff210539d080dd21af541b7364eeeb356ddd3f2d3e6a2c78bee56f9d7b0b",
+      "currentSha256": "e093893c59db8fd67817a03aaf1ddf1c29a80fdd498377f93f5f819f1804fcf8",
       "status": "adapted"
     },
     {
       "upstreamPath": "apps/mobile/src/native/T3ComposerEditor.native.tsx",
       "currentPath": "apps/mobile/src/native/T3ComposerEditor.native.tsx",
       "upstreamSha256": "4566c7394b978c1fdb92535d9c36529d51e0c61c18fb0cf1f4fcd35cbc1d75ab",
-      "currentSha256": "b0a0561dffaed4855d88cf9e6d0ebefb576607761d8d446cfc276a100ea674d8",
+      "currentSha256": "dd613d99cb67dd167941679492c09d287fbd4362fbff102dea2ca5d5432ed1b5",
       "status": "adapted"
     },
     {
       "upstreamPath": "apps/mobile/src/native/T3ComposerEditor.tsx",
       "currentPath": "apps/mobile/src/native/T3ComposerEditor.tsx",
       "upstreamSha256": "6c0e8923feb199a257af44e01c0e7e487939ce2e8f226255cc8e380b2d4628d2",
-      "currentSha256": "7315471861f1788ba9e6a9eea7d30a0ba8053a4362929749f5fbed7450aaf5cb",
+      "currentSha256": "b1d3a08f2d85a85c6613951db926c492d7f30ddedfb3bcbf074bb563412fa5d1",
       "status": "adapted"
     },
     {
       "upstreamPath": "apps/mobile/src/native/T3ComposerEditor.types.ts",
       "currentPath": "apps/mobile/src/native/T3ComposerEditor.types.ts",
       "upstreamSha256": "880ff8646807119fcc0edb54c491578acc58cd27294af78546b0cf0406a33394",
-      "currentSha256": "6531a08079e171993ab5f49833573ee5e9eae01c8895f5b5a742082da4f02bd3",
+      "currentSha256": "8bae01ba481080b3c3b6bb3c76e6f30381cdd31f3b7760c705e3b1cfe996f0d2",
       "status": "adapted"
     },
     {

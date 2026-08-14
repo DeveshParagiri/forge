@@ -2827,27 +2827,44 @@ pub(crate) mod test_fixtures {
             "the acceptance generation resets with the reload"
         );
     }
-    /// A model switch stuck across a reconnect must not jam the drain, but a
-    /// switch started DURING the reload window must keep its model-switch hold. The
-    /// reload START (`begin_session_reload`) releases the hold (the disconnect
-    /// dropped the in-flight RPC); finalize (`apply_reload_outcome`) must NOT —
-    /// a window switch is live on the reconnected link.
+    /// Session mutations stuck across a reconnect must not leave stale pending
+    /// state, but a mutation started DURING the reload window must keep its hold.
+    /// Reload start releases the lost pre-outage requests; finalize must not
+    /// clear requests sent on the reconnected link.
     #[test]
-    fn reconnect_reload_clears_stuck_model_switch_pending() {
+    fn reconnect_reload_clears_stuck_session_mutation_pending() {
         for success in [false, true] {
             let mut agent = make_agent();
             agent.session.model_switch_pending = true;
+            agent
+                .session
+                .models
+                .begin_fast_mode_change()
+                .expect("pre-outage Fast Mode request starts");
             agent.begin_session_reload(1);
             assert!(
                 !agent.session.model_switch_pending,
                 "reload start must release the hold for the lost pre-outage switch"
             );
+            assert!(
+                !agent.session.models.fast_mode_pending(),
+                "reload start must release the lost pre-outage Fast Mode request"
+            );
             agent.session.model_switch_pending = true;
+            agent
+                .session
+                .models
+                .begin_fast_mode_change()
+                .expect("reconnected Fast Mode request starts");
             assert!(agent.finish_session_reload(1, success));
             assert!(
                 agent.session.model_switch_pending,
                 "finalize (success={success}) must NOT clear a switch started \
                  during the reload window"
+            );
+            assert!(
+                agent.session.models.fast_mode_pending(),
+                "finalize (success={success}) must not clear a Fast Mode request sent during reload"
             );
         }
     }

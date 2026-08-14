@@ -462,6 +462,7 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
                 session_id,
                 id,
                 new_text,
+                expected_version: None,
             }],
             None => vec![],
         },

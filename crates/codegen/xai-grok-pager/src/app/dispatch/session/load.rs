@@ -1304,8 +1304,7 @@ pub(in crate::app::dispatch) fn handle_session_restored(
         {
             app.welcome_history_load_as_build = false;
         }
-        refuse_chat_mode_build_agent(app, agent_id);
-        return vec![];
+        return refuse_chat_mode_build_agent(app, agent_id);
     }
     let sid = clear_stale_session_id(app, &local_session_id);
     if let Some(agent) = app.agents.get_mut(&agent_id) {

@@ -40,6 +40,7 @@ import { useThemeColor } from "../../lib/useThemeColor";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 
 import { AppText as Text } from "../../components/AppText";
+import { SymbolView } from "../../components/AppSymbol";
 import { ComposerAttachmentStrip } from "../../components/ComposerAttachmentStrip";
 import {
   ComposerEditor,
@@ -72,11 +73,17 @@ import { buildThreadSettingsMenu } from "./thread-settings-menu";
 import { ThreadSettingsSheet, threadSettingsSummaryLabel } from "./ThreadSettingsSheet";
 import { useThreadSettingsSheetPresentation } from "./use-thread-settings-sheet-presentation";
 import { forgeComposerAction } from "../../forge/protocol/composerCommand";
+import { showComposerQueueSummary } from "./remoteQueuePresentation";
 import {
+  REMOTE_COMPOSER_CONTROL_ROW_HEIGHT,
   REMOTE_COMPOSER_EDITOR_MAX_HEIGHT,
   REMOTE_COMPOSER_EDITOR_MIN_HEIGHT,
+  REMOTE_COMPOSER_FOCUSED_EDITOR_MIN_HEIGHT,
+  REMOTE_COMPOSER_SURFACE_PADDING_HORIZONTAL,
+  resolveComposerEditorContentInsetHorizontal,
   resolveRemoteComposerEditorHeight,
 } from "./remoteComposerLayout";
+import { remoteComposerPresentation } from "./remoteComposerPresentation";
 
 /**
  * Height of the collapsed composer (pill + vertical padding, excluding safe-area inset).
@@ -133,6 +140,13 @@ export interface ThreadComposerProps {
   readonly remoteModelCommandPending?: boolean;
   /** Authoritative capability gate for the Forge model picker. */
   readonly remoteModelSelectionEnabled?: boolean;
+  /** Authoritative Fast Mode state from the Forge Remote snapshot. */
+  readonly remoteFastMode?: {
+    readonly supported: boolean;
+    readonly enabled: boolean;
+    readonly pending?: boolean;
+  };
+  readonly onSetRemoteFastMode?: (enabled: boolean) => void;
   /** Keeps the retained settings control as the entry point to Forge usage. */
   readonly remoteUsageAvailable?: boolean;
   readonly onOpenUsage?: () => void;
@@ -156,6 +170,7 @@ export function ComposerSurface(props: {
   readonly children: ReactNode;
   readonly style: ViewStyle;
   readonly isDarkMode: boolean;
+  readonly solidBackgroundColor?: string;
 }) {
   // Drop shadow lives on a wrapper: `overflow: "hidden"` on the surface itself
   // (needed to clip content to the pill shape) would clip the shadow on iOS.
@@ -168,7 +183,7 @@ export function ComposerSurface(props: {
     elevation: 10,
   };
 
-  if (isLiquidGlassSupported) {
+  if (isLiquidGlassSupported && !props.solidBackgroundColor) {
     return (
       <Animated.View layout={COMPOSER_LAYOUT_TRANSITION} style={shadowStyle}>
         <LiquidGlassView
@@ -189,9 +204,15 @@ export function ComposerSurface(props: {
         style={[
           props.style,
           {
-            backgroundColor: props.isDarkMode ? "rgba(44,44,46,0.96)" : "rgba(255,255,255,0.96)",
+            backgroundColor:
+              props.solidBackgroundColor ??
+              (props.isDarkMode ? "rgba(44,44,46,0.96)" : "rgba(255,255,255,0.96)"),
             borderWidth: 1,
-            borderColor: props.isDarkMode ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)",
+            borderColor: props.solidBackgroundColor
+              ? "rgba(255,255,255,0.12)"
+              : props.isDarkMode
+                ? "rgba(255,255,255,0.08)"
+                : "rgba(0,0,0,0.06)",
           },
         ]}
       >
@@ -283,6 +304,45 @@ const ComposerConnectionStatusPill = memo(function ComposerConnectionStatusPill(
         </Text>
       </Pressable>
     </Animated.View>
+  );
+});
+
+const RemoteComposerModelTrigger = memo(function RemoteComposerModelTrigger(props: {
+  readonly accessibilityLabel: string;
+  readonly disabled?: boolean;
+  readonly model: string;
+  readonly reasoning?: string;
+}) {
+  const iconColor = useThemeColor("--color-icon");
+  const mutedColor = useThemeColor("--color-foreground-muted");
+
+  return (
+    <Pressable
+      accessibilityLabel={`Model and reasoning, current ${props.accessibilityLabel}`}
+      accessibilityRole="button"
+      disabled={props.disabled}
+      className="h-11 min-w-0 flex-row items-center justify-center gap-1.5 rounded-full px-2 active:bg-white/5"
+      style={({ pressed }) => ({ opacity: props.disabled ? 0.5 : pressed ? 0.72 : 1 })}
+    >
+      <SymbolView name="bolt.fill" size={17} tintColor={iconColor} type="monochrome" />
+      <Text
+        className="shrink text-sm font-t3-bold text-foreground"
+        ellipsizeMode="tail"
+        numberOfLines={1}
+      >
+        {props.model}
+      </Text>
+      {props.reasoning ? (
+        <Text
+          className="shrink text-sm font-t3-medium"
+          ellipsizeMode="tail"
+          numberOfLines={1}
+          style={{ color: mutedColor }}
+        >
+          {props.reasoning}
+        </Text>
+      ) : null}
+    </Pressable>
   );
 });
 
@@ -679,16 +739,19 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       }),
     [currentModelOption?.capabilities, currentModelSelection.options],
   );
+  const modelDisplayLabel = currentModelOption?.label ?? currentModelSelection.model;
+  const remotePresentation = remoteComposerPresentation(
+    modelDisplayLabel,
+    providerOptionDescriptors,
+  );
   const settingsSummaryLabel = threadSettingsSummaryLabel({
-    modelLabel: currentModelOption?.label ?? currentModelSelection.model,
+    modelLabel: modelDisplayLabel,
     optionDescriptors: providerOptionDescriptors,
     runtimeMode: currentRuntimeMode,
     interactionMode: currentInteractionMode,
-    includeRuntime: !props.remoteOnly,
+    includeRuntime: true,
   });
-  const settingsTriggerLabel = props.remoteOnly
-    ? `Model · ${settingsSummaryLabel}`
-    : settingsSummaryLabel;
+  const settingsTriggerLabel = settingsSummaryLabel;
   const remoteModelSelectionDisabled =
     props.remoteOnly &&
     (props.remoteModelSelectionEnabled !== true || props.remoteModelCommandPending === true);
@@ -698,7 +761,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   // Android trigger) still route through the sheet, which must dismiss it.
   const settingsMenu = useMemo(
     () =>
-      Platform.OS === "ios"
+      Platform.OS === "ios" || props.remoteOnly
         ? buildThreadSettingsMenu({
             providerGroups: threadProviderGroups,
             selectedModel: currentModelSelection,
@@ -707,6 +770,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             includeRuntime: !props.remoteOnly,
             includeUsage: props.remoteOnly && props.remoteUsageAvailable === true,
             modelSelectionDisabled: remoteModelSelectionDisabled,
+            fastMode: props.remoteOnly ? props.remoteFastMode : undefined,
           })
         : null,
     [
@@ -714,6 +778,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       currentRuntimeMode,
       providerOptionDescriptors,
       props.remoteOnly,
+      props.remoteFastMode,
       props.remoteUsageAvailable,
       remoteModelSelectionDisabled,
       threadProviderGroups,
@@ -750,6 +815,10 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           void Haptics.selectionAsync();
           onUpdateRuntimeMode(event.mode);
           return;
+        case "set-fast-mode":
+          void Haptics.selectionAsync();
+          props.onSetRemoteFastMode?.(event.enabled);
+          return;
         case "open-usage":
           props.onOpenUsage?.();
           return;
@@ -761,6 +830,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       onUpdateRuntimeMode,
       providerOptionDescriptors,
       props.onOpenUsage,
+      props.onSetRemoteFastMode,
       remoteModelSelectionDisabled,
       settingsMenu,
     ],
@@ -768,11 +838,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
 
   return (
     <Animated.View
-      className="px-4"
+      className={props.remoteOnly ? "px-[13px]" : "px-4"}
       layout={COMPOSER_LAYOUT_TRANSITION}
       style={{
-        paddingTop: isExpanded ? 8 : 6,
-        paddingBottom: (props.bottomInset ?? 0) + (isExpanded ? 8 : 6),
+        paddingTop: props.remoteOnly ? (isExpanded ? 2 : 6) : isExpanded ? 8 : 6,
+        paddingBottom:
+          (props.bottomInset ?? 0) +
+          (props.remoteOnly ? (isExpanded ? 10 : 6) : isExpanded ? 8 : 6),
       }}
     >
       {/* The backdrop gradient lives on a plain View: Reanimated's Animated.View
@@ -814,35 +886,46 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
 
         <ComposerSurface
           isDarkMode={isDarkMode}
+          solidBackgroundColor={props.remoteOnly && isDarkMode ? "#101010" : undefined}
           style={
-            isExpanded
-              ? props.remoteOnly
+            props.remoteOnly
+              ? isExpanded
                 ? {
-                    borderRadius: 24,
+                    borderRadius: 26,
                     overflow: "hidden" as const,
-                    paddingHorizontal: 12,
-                    paddingTop: 10,
-                    paddingBottom: 8,
+                    paddingBottom: 4,
+                    paddingHorizontal: REMOTE_COMPOSER_SURFACE_PADDING_HORIZONTAL,
+                    paddingTop: 8,
                   }
                 : {
+                    alignItems: "center" as const,
+                    borderRadius: 999,
+                    flexDirection: "row" as const,
+                    overflow: "hidden" as const,
+                    paddingLeft: 4,
+                    paddingRight: 5,
+                    paddingVertical: 5,
+                  }
+              : isExpanded
+                ? {
                     borderRadius: 20,
                     overflow: "hidden" as const,
                     paddingHorizontal: 14,
                     paddingVertical: 12,
                   }
-              : {
-                  borderRadius: 999,
-                  overflow: "hidden" as const,
-                  flexDirection: "row" as const,
-                  alignItems: "center" as const,
-                  paddingLeft: 18,
-                  paddingRight: 5,
-                  paddingVertical: 5,
-                }
+                : {
+                    borderRadius: 999,
+                    overflow: "hidden" as const,
+                    flexDirection: "row" as const,
+                    alignItems: "center" as const,
+                    paddingLeft: 18,
+                    paddingRight: 5,
+                    paddingVertical: 5,
+                  }
           }
         >
           {/* Attachment strip — inside the card, above the text input */}
-          {isExpanded ? (
+          {isExpanded && !props.remoteOnly ? (
             <Animated.View
               className={props.draftAttachments.length > 0 ? "pb-2.5" : undefined}
               entering={FadeIn.duration(160)}
@@ -856,7 +939,24 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             </Animated.View>
           ) : null}
 
-          <View className={isExpanded ? undefined : "min-w-0 flex-1"}>
+          {props.remoteOnly && !isExpanded && settingsMenu && settingsMenu.actions.length > 0 ? (
+            <ControlPillMenu
+              actions={settingsMenu.actions}
+              onPressAction={({ nativeEvent }) => handleSettingsMenuAction(nativeEvent.event)}
+            >
+              <ControlPill
+                accessibilityLabel="Forge controls"
+                className="bg-transparent"
+                icon="plus"
+              />
+            </ControlPillMenu>
+          ) : null}
+
+          <View
+            className={
+              isExpanded ? (props.remoteOnly ? "w-full min-w-0" : undefined) : "min-w-0 flex-1"
+            }
+          >
             <ComposerEditor
               ref={inputRef}
               multiline
@@ -878,25 +978,41 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
               // Android: collapsed single line centers natively (gravity) in
               // a pill-height box matching the send button; iOS keeps insets.
               singleLineCentered={!isExpanded}
-              contentInsetVertical={isExpanded || Platform.OS === "android" ? 0 : 6}
+              contentInsetVertical={
+                props.remoteOnly
+                  ? isExpanded
+                    ? 5
+                    : 4
+                  : isExpanded || Platform.OS === "android"
+                    ? 0
+                    : 6
+              }
+              contentInsetHorizontal={resolveComposerEditorContentInsetHorizontal({
+                remoteOnly: props.remoteOnly === true,
+                expanded: isExpanded,
+              })}
               style={
-                isExpanded
-                  ? props.remoteOnly
+                props.remoteOnly
+                  ? {
+                      height: isExpanded
+                        ? Math.max(REMOTE_COMPOSER_FOCUSED_EDITOR_MIN_HEIGHT, remoteEditorHeight)
+                        : remoteEditorHeight,
+                      minHeight: isExpanded
+                        ? REMOTE_COMPOSER_FOCUSED_EDITOR_MIN_HEIGHT
+                        : REMOTE_COMPOSER_EDITOR_MIN_HEIGHT,
+                      maxHeight: REMOTE_COMPOSER_EDITOR_MAX_HEIGHT,
+                      ...(isExpanded ? {} : { paddingHorizontal: 4 }),
+                    }
+                  : isExpanded
                     ? {
-                        height: remoteEditorHeight,
-                        minHeight: REMOTE_COMPOSER_EDITOR_MIN_HEIGHT,
-                        maxHeight: REMOTE_COMPOSER_EDITOR_MAX_HEIGHT,
-                        paddingHorizontal: 4,
-                      }
-                    : {
                         minHeight: 80,
                         maxHeight: 160,
                         paddingHorizontal: 4,
                         paddingVertical: 4,
                       }
-                  : {
-                      height: 36,
-                    }
+                    : {
+                        height: 36,
+                      }
               }
               textStyle={{
                 ...bodyText,
@@ -939,48 +1055,69 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             </Animated.View>
           ) : null}
           {isExpanded && props.remoteOnly ? (
-            <ComposerToolbarRow paddingBottom={0} paddingHorizontal={0} paddingTop={6}>
-              <ComposerToolbarScroller
-                fadeOpaque={toolbarFadeOpaque}
-                fadeTransparent={toolbarFadeTransparent}
-              >
-                {settingsMenu ? (
+            <Animated.View
+              className="w-full flex-row items-center"
+              entering={FadeIn.duration(160)}
+              exiting={FadeOut.duration(100)}
+              style={{
+                height: REMOTE_COMPOSER_CONTROL_ROW_HEIGHT,
+                marginTop: 4,
+              }}
+            >
+              {settingsMenu && settingsMenu.actions.length > 0 ? (
+                <ControlPillMenu
+                  actions={settingsMenu.actions}
+                  onPressAction={({ nativeEvent }) => handleSettingsMenuAction(nativeEvent.event)}
+                >
+                  <ControlPill
+                    accessibilityLabel="Forge controls"
+                    className="bg-transparent"
+                    icon="plus"
+                  />
+                </ControlPillMenu>
+              ) : (
+                <ControlPill
+                  accessibilityLabel="Forge controls unavailable"
+                  className="bg-transparent"
+                  disabled
+                  icon="plus"
+                />
+              )}
+
+              <View className="min-w-0 flex-1 px-1">
+                {settingsMenu && settingsMenu.actions.length > 0 ? (
                   <ControlPillMenu
                     actions={settingsMenu.actions}
+                    style={{ width: "100%" }}
                     onPressAction={({ nativeEvent }) => handleSettingsMenuAction(nativeEvent.event)}
                   >
-                    <ComposerToolbarTrigger
-                      accessibilityLabel={`Select model, current ${settingsSummaryLabel}`}
-                      iconNode={
-                        <ProviderIcon provider={currentModelOption?.providerDriver} size={16} />
-                      }
-                      label={settingsTriggerLabel}
-                      maxWidth={260}
-                      disabled={remoteModelSelectionDisabled && props.remoteUsageAvailable !== true}
+                    <RemoteComposerModelTrigger
+                      accessibilityLabel={remotePresentation.accessibilityLabel}
+                      model={remotePresentation.model}
+                      reasoning={remotePresentation.reasoning}
                     />
                   </ControlPillMenu>
                 ) : (
-                  <ComposerToolbarTrigger
-                    accessibilityLabel={`Select model, current ${settingsSummaryLabel}`}
-                    iconNode={
-                      <ProviderIcon provider={currentModelOption?.providerDriver} size={16} />
-                    }
-                    label={settingsTriggerLabel}
-                    maxWidth={260}
-                    disabled={remoteModelSelectionDisabled && props.remoteUsageAvailable !== true}
-                    onPress={settingsSheetPresentation.open}
+                  <RemoteComposerModelTrigger
+                    accessibilityLabel={remotePresentation.accessibilityLabel}
+                    disabled
+                    model={remotePresentation.model}
+                    reasoning={remotePresentation.reasoning}
                   />
                 )}
-              </ComposerToolbarScroller>
-              <ComposerToolbarButton
-                accessibilityLabel={showStopAction ? "Stop" : sendLabel}
-                icon={showStopAction ? "stop.fill" : "arrow.up"}
-                variant={showStopAction ? "danger" : "primary"}
-                disabled={!showStopAction && !canSend}
-                onPress={showStopAction ? props.onStopThread : handleSend}
-                showChevron={false}
-              />
-            </ComposerToolbarRow>
+              </View>
+
+              {showStopAction ? (
+                <ControlPill icon="stop.fill" variant="danger" onPress={props.onStopThread} />
+              ) : (
+                <ControlPill
+                  icon="arrow.up"
+                  variant="primary"
+                  disabled={!canSend}
+                  onPress={handleSend}
+                />
+              )}
+            </Animated.View>
           ) : null}
         </ComposerSurface>
 
@@ -1060,7 +1197,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         ) : null}
 
         {/* Queue count */}
-        {props.queueCount > 0 ? (
+        {showComposerQueueSummary(props.remoteOnly === true, props.queueCount) ? (
           <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(120)}>
             <Text className="pt-2 text-xs text-foreground-muted">
               {props.queueCount} queued message{props.queueCount === 1 ? "" : "s"} will send

@@ -850,8 +850,8 @@ impl SessionActor {
     /// 3. Re-broadcast `x.ai/queue/changed` so every subscriber renders the
     ///    new text and version.
     ///
-    /// **No-op cases** (each is a benign discard with no rebroadcast — nothing
-    /// changed):
+    /// **No-op cases** (each is a benign discard; missing or stale rows still
+    /// rebroadcast so snapshot-driven remote clients reconcile):
     /// - The id is not in `pending_inputs` (already drained / removed).
     /// - The id names the currently-running turn — editing the live turn is
     ///   out of scope.
@@ -861,6 +861,7 @@ impl SessionActor {
         id: &str,
         new_text: String,
         editor: Option<&str>,
+        expected_version: Option<u64>,
     ) {
         if new_text.trim().is_empty() {
             tracing::debug!(queued_id = %id, "queue edit no-op: empty newText");
@@ -875,15 +876,17 @@ impl SessionActor {
             );
             return;
         }
-        let Some(item) = state
-            .pending_inputs
-            .iter_mut()
-            .find(|item| item.queue_meta.as_ref().is_some_and(|m| m.id == id))
-        else {
+        let Some(item) = state.pending_inputs.iter_mut().find(|item| {
+            item.queue_meta.as_ref().is_some_and(|meta| {
+                meta.id == id && expected_version.is_none_or(|expected| meta.version == expected)
+            })
+        }) else {
             tracing::debug!(
                 queued_id = %id,
-                "queue edit no-op: id not found (already drained / removed)"
+                ?expected_version,
+                "queue edit no-op: id missing, drained, or version stale"
             );
+            self.broadcast_queue_changed(&state);
             return;
         };
         Self::apply_queued_prompt_edit(item, new_text, editor);

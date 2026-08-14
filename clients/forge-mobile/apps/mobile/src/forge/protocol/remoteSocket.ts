@@ -5,6 +5,8 @@ import {
   type ClientMessage,
   type InteractionResponse,
   type RemoteError,
+  type RemoteQueueItem,
+  type RemoteSessionCreated,
   type RemoteSessionSnapshot,
   type ServerMessage,
   decodeServerMessage,
@@ -14,6 +16,8 @@ import { eventsUrlForPairing } from "./pairing";
 const MAX_RECONNECT_DELAY_MS = 10_000;
 const PING_INTERVAL_MS = 20_000;
 const SNAPSHOT_RETRY_MS = 1_000;
+const QUEUE_PENDING_RESYNC_MS = 8_000;
+const QUEUE_PENDING_UNLOCK_MS = 2_000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 export type RemoteConnectionPhase = "connecting" | "connected" | "reconnecting" | "error";
@@ -27,7 +31,10 @@ export interface ForgeRemoteSocketState {
   readonly pendingCommandCount: number;
   readonly pendingInteractionIds: ReadonlyArray<string>;
   readonly modelCommandPending: boolean;
+  readonly fastModeCommandPending: boolean;
   readonly usageCommandPending: boolean;
+  readonly newSessionCommandPending: boolean;
+  readonly pendingQueueItemIds: ReadonlyArray<string>;
 }
 
 export type RemoteRevocationReason = "stopped" | "expired" | "session_closed";
@@ -46,13 +53,33 @@ const INITIAL_STATE: ForgeRemoteSocketState = {
   pendingCommandCount: 0,
   pendingInteractionIds: [],
   modelCommandPending: false,
+  fastModeCommandPending: false,
   usageCommandPending: false,
+  newSessionCommandPending: false,
+  pendingQueueItemIds: [],
 };
 
 type PendingCommand =
   | { readonly kind: "other" }
+  | { readonly kind: "resync" }
   | { readonly kind: "model" }
+  | { readonly kind: "fastMode" }
   | { readonly kind: "usage" }
+  | {
+      readonly kind: "queue";
+      readonly queueItemId: string;
+      readonly expectedVersion: number;
+    }
+  | {
+      readonly kind: "newSession";
+      readonly resolve: (created: RemoteSessionCreated) => void;
+      readonly reject: (error: Error) => void;
+    }
+  | {
+      readonly kind: "acceptNewSession";
+      readonly resolve: () => void;
+      readonly reject: (error: Error) => void;
+    }
   | { readonly kind: "interaction"; readonly interactionId: string };
 
 function isSnapshotUnavailable(error: RemoteError): boolean {
@@ -85,12 +112,19 @@ export class ForgeRemoteSocket {
   private hasSnapshotForConnection = false;
   private pinnedSessionId: string | null = null;
   private readonly pendingCommands = new Map<string, PendingCommand>();
+  private readonly queuePendingTimerByCommandId = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
   private state: ForgeRemoteSocketState = INITIAL_STATE;
 
   constructor(
     private readonly gatewayUrl: string,
     private readonly callbacks: ForgeRemoteSocketCallbacks,
-  ) {}
+    expectedSessionId?: string,
+  ) {
+    this.pinnedSessionId = expectedSessionId ?? null;
+  }
 
   connect(): void {
     if (this.stopped || this.suspended || this.socket) return;
@@ -126,6 +160,7 @@ export class ForgeRemoteSocket {
       this.socket = null;
       this.stopPing();
       this.stopSnapshotRetry();
+      this.clearPendingCommands();
       if (this.stopped || this.suspended) return;
       const ownershipLost =
         event.code === 4410 ||
@@ -158,6 +193,7 @@ export class ForgeRemoteSocket {
     this.stopPing();
     this.stopExpiry();
     this.stopSnapshotRetry();
+    this.clearPendingCommands();
     if (closeSocket) this.socket?.close(1000, "Forge mobile closed");
     this.socket = null;
   }
@@ -174,6 +210,7 @@ export class ForgeRemoteSocket {
     this.reconnectTimer = null;
     this.stopPing();
     this.stopSnapshotRetry();
+    this.clearPendingCommands();
     const socket = this.socket;
     this.socket = null;
     socket?.close(1000, "Forge mobile backgrounded");
@@ -203,8 +240,32 @@ export class ForgeRemoteSocket {
   setModel(modelId: string, reasoningEffort: string | null): string | null {
     if (this.state.snapshot?.capabilities.setModel !== true) return null;
     if (this.state.snapshot.modelSwitchPending === true) return null;
-    if ([...this.pendingCommands.values()].some((pending) => pending.kind === "model")) return null;
+    if (this.state.snapshot.fastMode?.pending === true) return null;
+    if (
+      [...this.pendingCommands.values()].some(
+        (pending) => pending.kind === "model" || pending.kind === "fastMode",
+      )
+    ) {
+      return null;
+    }
     return this.sendCommand({ type: "setModel", modelId, reasoningEffort }, { kind: "model" });
+  }
+
+  setFastMode(enabled: boolean): string | null {
+    const fastMode = this.state.snapshot?.fastMode;
+    if (this.state.snapshot?.capabilities.fastMode !== true || fastMode?.supported !== true) {
+      return null;
+    }
+    if (fastMode.pending === true || fastMode.enabled === enabled) return null;
+    if (this.state.snapshot?.modelSwitchPending === true) return null;
+    if (
+      [...this.pendingCommands.values()].some(
+        (pending) => pending.kind === "fastMode" || pending.kind === "model",
+      )
+    ) {
+      return null;
+    }
+    return this.sendCommand({ type: "setFastMode", enabled }, { kind: "fastMode" });
   }
 
   refreshUsage(): string | null {
@@ -233,8 +294,78 @@ export class ForgeRemoteSocket {
     );
   }
 
+  editQueuedPrompt(queueItemId: string, expectedVersion: number, text: string): string | null {
+    const trimmed = text.trim();
+    if (!trimmed || !this.canControlQueueItem(queueItemId, expectedVersion, "edit")) return null;
+    return this.sendCommand(
+      { type: "editQueuedPrompt", queueItemId, expectedVersion, text: trimmed },
+      { kind: "queue", queueItemId, expectedVersion },
+    );
+  }
+
+  steerQueuedPrompt(queueItemId: string, expectedVersion: number): string | null {
+    if (!this.canControlQueueItem(queueItemId, expectedVersion, "steer")) return null;
+    return this.sendCommand(
+      { type: "steerQueuedPrompt", queueItemId, expectedVersion },
+      { kind: "queue", queueItemId, expectedVersion },
+    );
+  }
+
+  cancelQueuedPrompt(queueItemId: string, expectedVersion: number): string | null {
+    if (!this.canControlQueueItem(queueItemId, expectedVersion, "cancel")) return null;
+    return this.sendCommand(
+      { type: "cancelQueuedPrompt", queueItemId, expectedVersion },
+      { kind: "queue", queueItemId, expectedVersion },
+    );
+  }
+
+  newSession(): Promise<RemoteSessionCreated> | null {
+    if (this.state.snapshot?.capabilities.newSession !== true) return null;
+    if (
+      [...this.pendingCommands.values()].some(
+        (pending) => pending.kind === "newSession" || pending.kind === "acceptNewSession",
+      )
+    ) {
+      return null;
+    }
+    let resolveCreated!: (created: RemoteSessionCreated) => void;
+    let rejectCreated!: (error: Error) => void;
+    const created = new Promise<RemoteSessionCreated>((resolve, reject) => {
+      resolveCreated = resolve;
+      rejectCreated = reject;
+    });
+    const commandId = this.sendCommand(
+      { type: "newSession" },
+      { kind: "newSession", resolve: resolveCreated, reject: rejectCreated },
+    );
+    return commandId ? created : null;
+  }
+
+  acceptNewSession(sessionId: string): Promise<void> | null {
+    const trimmed = sessionId.trim();
+    if (!trimmed) return null;
+    if (
+      [...this.pendingCommands.values()].some(
+        (pending) => pending.kind === "newSession" || pending.kind === "acceptNewSession",
+      )
+    ) {
+      return null;
+    }
+    let resolveAccepted!: () => void;
+    let rejectAccepted!: (error: Error) => void;
+    const accepted = new Promise<void>((resolve, reject) => {
+      resolveAccepted = resolve;
+      rejectAccepted = reject;
+    });
+    const commandId = this.sendCommand(
+      { type: "acceptNewSession", sessionId: trimmed },
+      { kind: "acceptNewSession", resolve: resolveAccepted, reject: rejectAccepted },
+    );
+    return commandId ? accepted : null;
+  }
+
   resync(): string | null {
-    return this.sendCommand({ type: "resync" }, null);
+    return this.sendCommand({ type: "resync" }, { kind: "resync" });
   }
 
   private acceptServerMessage(message: ServerMessage): void {
@@ -257,7 +388,8 @@ export class ForgeRemoteSocket {
         this.attempt = 0;
         this.hasSnapshotForConnection = true;
         this.stopSnapshotRetry();
-        this.clearPendingCommands();
+        this.clearPendingCommands(new Set(["newSession", "acceptNewSession", "queue"]));
+        this.reconcilePendingQueueCommands(message.session);
         this.patchState({
           phase: "connected",
           error: null,
@@ -288,6 +420,7 @@ export class ForgeRemoteSocket {
           snapshot: nextSession,
           revision: message.revision,
         });
+        this.reconcilePendingQueueCommands(nextSession);
         return;
       }
       case "resyncRequired":
@@ -297,8 +430,22 @@ export class ForgeRemoteSocket {
         this.callbacks.onRevoked(message.reason);
         this.stop();
         return;
-      case "commandResult":
-        this.removePendingCommand(message.commandId);
+      case "commandResult": {
+        const pending = this.pendingCommands.get(message.commandId);
+        if (!pending) return;
+        const keepUntilAuthoritativeQueue =
+          pending?.kind === "queue" && message.outcome.status === "ok";
+        if (!keepUntilAuthoritativeQueue) this.removePendingCommand(message.commandId);
+        if (pending?.kind === "newSession") {
+          pending.reject(
+            message.outcome.status === "error"
+              ? new Error(message.outcome.error.message)
+              : new Error("Forge returned an invalid new-session response."),
+          );
+        } else if (pending?.kind === "acceptNewSession") {
+          if (message.outcome.status === "ok") pending.resolve();
+          else pending.reject(new Error(message.outcome.error.message));
+        }
         if (message.outcome.status === "error") {
           if (isSnapshotUnavailable(message.outcome.error)) this.scheduleSnapshotRetry();
           if (isIncompatibleCode(message.outcome.error.code)) {
@@ -308,6 +455,18 @@ export class ForgeRemoteSocket {
           this.patchState({ error: message.outcome.error.message });
         }
         return;
+      }
+      case "sessionCreated": {
+        const pending = this.pendingCommands.get(message.commandId);
+        if (pending?.kind !== "newSession") return;
+        this.removePendingCommand(message.commandId);
+        pending.resolve({
+          sessionId: message.sessionId,
+          pairingUrl: message.pairingUrl,
+          expiresAt: message.expiresAt,
+        });
+        return;
+      }
       case "error":
         if (isSnapshotUnavailable(message.error)) {
           this.patchState({ error: message.error.message });
@@ -382,32 +541,102 @@ export class ForgeRemoteSocket {
     }
     if (pending) {
       this.pendingCommands.set(id, pending);
+      if (pending.kind === "queue") this.armQueuePendingTimeout(id);
       this.publishPendingCommands();
     }
     return id;
   }
 
   private removePendingCommand(id: string): void {
+    this.clearQueuePendingTimer(id);
     if (!this.pendingCommands.delete(id)) return;
     this.publishPendingCommands();
   }
 
-  private clearPendingCommands(): void {
+  private reconcilePendingQueueCommands(snapshot: RemoteSessionSnapshot): void {
+    let changed = false;
+    for (const [commandId, pending] of this.pendingCommands) {
+      if (pending.kind !== "queue") continue;
+      const current = snapshot.queue?.find((item) => item.id === pending.queueItemId);
+      if (current?.source === "shared" && current.version === pending.expectedVersion) continue;
+      this.clearQueuePendingTimer(commandId);
+      this.pendingCommands.delete(commandId);
+      changed = true;
+    }
+    if (changed) this.publishPendingCommands();
+  }
+
+  private clearPendingCommands(preserveKinds: ReadonlySet<PendingCommand["kind"]> = new Set()): void {
     if (this.pendingCommands.size === 0) return;
-    this.pendingCommands.clear();
+    for (const [commandId, pending] of this.pendingCommands) {
+      if (preserveKinds.has(pending.kind)) continue;
+      if (pending.kind === "newSession" || pending.kind === "acceptNewSession") {
+        pending.reject(new Error("The connection changed before the new session was ready."));
+      }
+      this.clearQueuePendingTimer(commandId);
+      this.pendingCommands.delete(commandId);
+    }
     this.publishPendingCommands();
   }
 
   private publishPendingCommands(): void {
     const pending = [...this.pendingCommands.values()];
     this.patchState({
-      pendingCommandCount: pending.length,
+      pendingCommandCount: pending.filter((entry) => entry.kind !== "resync").length,
       pendingInteractionIds: pending.flatMap((entry) =>
         entry.kind === "interaction" ? [entry.interactionId] : [],
       ),
       modelCommandPending: pending.some((entry) => entry.kind === "model"),
+      fastModeCommandPending: pending.some((entry) => entry.kind === "fastMode"),
       usageCommandPending: pending.some((entry) => entry.kind === "usage"),
+      newSessionCommandPending: pending.some((entry) => entry.kind === "newSession"),
+      pendingQueueItemIds: pending.flatMap((entry) =>
+        entry.kind === "queue" ? [entry.queueItemId] : [],
+      ),
     });
+  }
+
+  private armQueuePendingTimeout(commandId: string): void {
+    this.clearQueuePendingTimer(commandId);
+    const timer = setTimeout(() => {
+      const pending = this.pendingCommands.get(commandId);
+      if (pending?.kind !== "queue") return;
+      this.resync();
+      const unlock = setTimeout(() => {
+        this.queuePendingTimerByCommandId.delete(commandId);
+        if (this.pendingCommands.get(commandId)?.kind === "queue") {
+          this.pendingCommands.delete(commandId);
+          this.publishPendingCommands();
+        }
+      }, QUEUE_PENDING_UNLOCK_MS);
+      this.queuePendingTimerByCommandId.set(commandId, unlock);
+    }, QUEUE_PENDING_RESYNC_MS);
+    this.queuePendingTimerByCommandId.set(commandId, timer);
+  }
+
+  private clearQueuePendingTimer(commandId: string): void {
+    const timer = this.queuePendingTimerByCommandId.get(commandId);
+    if (timer) clearTimeout(timer);
+    this.queuePendingTimerByCommandId.delete(commandId);
+  }
+
+  private canControlQueueItem(
+    queueItemId: string,
+    expectedVersion: number,
+    action: keyof RemoteQueueItem["actions"],
+  ): boolean {
+    if (this.state.snapshot?.capabilities.queueControl !== true) return false;
+    if (
+      [...this.pendingCommands.values()].some(
+        (pending) => pending.kind === "queue" && pending.queueItemId === queueItemId,
+      )
+    ) {
+      return false;
+    }
+    const item = this.state.snapshot.queue?.find((candidate) => candidate.id === queueItemId);
+    return (
+      item?.source === "shared" && item.version === expectedVersion && item.actions[action] === true
+    );
   }
 
   private sendRaw(message: ClientMessage): boolean {

@@ -23,6 +23,10 @@ public class T3ComposerEditorModule: Module {
       Prop("lineHeight") { (view: T3ComposerEditorView, lineHeight: Double) in
         view.setLineHeight(CGFloat(lineHeight))
       }
+      Prop("contentInsetHorizontal") {
+        (view: T3ComposerEditorView, contentInsetHorizontal: Double) in
+        view.setContentInsetHorizontal(CGFloat(contentInsetHorizontal))
+      }
       Prop("contentInsetVertical") { (view: T3ComposerEditorView, contentInsetVertical: Double) in
         view.setContentInsetVertical(CGFloat(contentInsetVertical))
       }

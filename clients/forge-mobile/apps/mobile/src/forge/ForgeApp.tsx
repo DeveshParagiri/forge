@@ -1,6 +1,10 @@
 import { RegistryContext } from "@effect/atom-react";
 import type { EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
-import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import type {
+  EnvironmentProject,
+  EnvironmentThreadShell,
+} from "@t3tools/client-runtime/state/shell";
+import type { MenuAction } from "@react-native-menu/menu";
 import {
   ApprovalRequestId,
   MessageId,
@@ -13,9 +17,11 @@ import {
   DefaultTheme,
   NavigationContainer,
   createNavigationContainerRef,
+  useFocusEffect,
 } from "@react-navigation/native";
 import {
   createNativeStackNavigator,
+  type NativeStackHeaderItem,
   type NativeStackScreenProps,
 } from "@react-navigation/native-stack";
 import { CameraView, useCameraPermissions, type BarcodeScanningResult } from "expo-camera";
@@ -24,18 +30,38 @@ import { Image } from "expo-image";
 import * as Linking from "expo-linking";
 import * as SplashScreen from "expo-splash-screen";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Keyboard, Pressable, StatusBar, useColorScheme, View } from "react-native";
+import {
+  Alert,
+  Keyboard,
+  Platform,
+  Pressable,
+  StatusBar,
+  useColorScheme,
+  View,
+} from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../components/AppText";
+import { SymbolView } from "../components/AppSymbol";
+import { ControlPillMenu } from "../components/ControlPill";
 import { HomeScreen } from "../features/home/HomeScreen";
 import {
   AppearancePreferencesProvider,
   useAppearancePreferences,
 } from "../features/settings/appearance/AppearancePreferencesProvider";
 import { ThreadDetailScreen } from "../features/threads/ThreadDetailScreen";
+import {
+  remoteNewSessionHeaderPresentation,
+  remoteNewSessionNavigationTarget,
+  remoteSessionCreatedRegistrationInput,
+  type RemoteNewSessionHeaderPresentation,
+} from "../features/threads/remoteNewSessionPresentation";
+import {
+  presentRemoteQueuedMessages,
+  type RemoteQueuedMessagePresentation,
+} from "../features/threads/remoteQueuePresentation";
 import { connectionTone } from "../features/connection/connectionTone";
 import {
   buildPendingUserInputAnswers,
@@ -44,8 +70,10 @@ import {
   type PendingUserInputDraftAnswer,
 } from "../lib/threadActivity";
 import { useThemeColor } from "../lib/useThemeColor";
+import { scopedProjectKey } from "../lib/scopedEntities";
 import { appAtomRegistry } from "../state/atom-registry";
 import type { WorkspaceState } from "../state/workspaceModel";
+import { withNativeGlassHeaderItem } from "../features/layout/native-glass-header-items";
 import { parseForgeComposerCommand } from "./protocol/composerCommand";
 import { drainQueuedPairing, openOrQueuePairing } from "./protocol/pendingNavigation";
 import { createPairingScanGate } from "./protocol/pairingScan";
@@ -58,9 +86,13 @@ import {
 } from "./presentationAdapter";
 import { ForgeSessionsProvider, useForgeSessions } from "./state/ForgeSessionsProvider";
 import { ForgeUsageScreen } from "./ForgeUsageScreen";
-import { forgeConnectionStatusDot } from "./connectionStatusDot";
-import { forgeHeaderPairTextColor } from "./chromePresentation";
+import {
+  FORGE_SESSION_HEADER_STATUS_GEOMETRY,
+  forgeConnectionStatusDot,
+} from "./connectionStatusDot";
+import { forgeHomeHeaderPresentation } from "./chromePresentation";
 import { openForgeHomeThread } from "./homeThreadNavigation";
+import { remoteHomeProjectGroupKey } from "../features/home/remoteHomePresentation";
 
 import "../../global.css";
 
@@ -80,22 +112,27 @@ function ForgeConnectionDot(props: {
   readonly phase: "connecting" | "connected" | "reconnecting" | "error";
 }) {
   const presentation = forgeConnectionStatusDot(props.phase);
+  const geometry = FORGE_SESSION_HEADER_STATUS_GEOMETRY;
   return (
     <View
       accessible={false}
-      style={{ backgroundColor: presentation.color, borderRadius: 4, height: 8, width: 8 }}
+      style={{
+        backgroundColor: presentation.color,
+        borderRadius: geometry.radius,
+        height: geometry.diameter,
+        width: geometry.diameter,
+      }}
     />
   );
 }
 
-function ForgeWordmark(props: {
-  readonly phase: "connecting" | "connected" | "reconnecting" | "error";
-}) {
+const FORGE_HOME_HEADER = forgeHomeHeaderPresentation();
+
+function ForgeWordmark() {
   return (
     <View className="flex-row items-center gap-2">
-      <Image source={require("../../assets/forge/icon.png")} style={{ height: 24, width: 24 }} />
-      <Text className="font-t3-bold text-[17px] tracking-tight">Forge</Text>
-      <ForgeConnectionDot phase={props.phase} />
+      <Image source={require("../../assets/forge/mark.png")} style={{ height: 24, width: 24 }} />
+      <Text className="font-t3-bold text-[17px] tracking-tight text-white">Forge</Text>
     </View>
   );
 }
@@ -104,9 +141,10 @@ function ForgeSessionHeaderTitle(props: {
   readonly phase: "connecting" | "connected" | "reconnecting" | "error";
   readonly title: string;
 }) {
+  const geometry = FORGE_SESSION_HEADER_STATUS_GEOMETRY;
   return (
-    <View className="max-w-[230px] flex-row items-center gap-2">
-      <Text className="shrink font-t3-bold text-[17px]" numberOfLines={1}>
+    <View className="max-w-[210px] flex-row items-center" style={{ columnGap: geometry.titleGap }}>
+      <Text className="shrink font-t3-bold text-[16px] text-white" numberOfLines={1}>
         {props.title}
       </Text>
       <ForgeConnectionDot phase={props.phase} />
@@ -115,22 +153,184 @@ function ForgeSessionHeaderTitle(props: {
 }
 
 function HeaderPairButton(props: { readonly onPress: () => void }) {
-  const colorScheme = useColorScheme();
   return (
     <Pressable
-      accessibilityLabel="Pair Forge session"
+      accessibilityHint="Opens the scanner to add another private Forge session."
+      accessibilityLabel={FORGE_HOME_HEADER.addSessionAccessibilityLabel}
       accessibilityRole="button"
-      className="rounded-full px-2.5 py-1.5 active:opacity-60"
+      className="h-10 w-10 items-center justify-center rounded-full border border-white/15 active:opacity-60"
       onPress={props.onPress}
     >
-      <Text
-        className="font-t3-bold text-sm"
-        style={{ color: forgeHeaderPairTextColor(colorScheme) }}
-      >
-        Pair
+      <Text className="-mt-0.5 text-[28px] font-t3-medium leading-[30px] text-white">
+        {FORGE_HOME_HEADER.addSessionLabel}
       </Text>
     </Pressable>
   );
+}
+
+function promptForSessionRename(
+  currentTitle: string,
+  rename: (title: string | null) => void,
+): void {
+  if (Platform.OS !== "ios") return;
+  Alert.prompt(
+    "Rename session",
+    "Leave the name blank to use the title from the desktop session.",
+    [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Save",
+        onPress: (value?: string) => rename(value?.trim() || null),
+      },
+    ],
+    "plain-text",
+    currentTitle,
+  );
+}
+
+function ForgeThreadHeaderActions(props: {
+  readonly pinned: boolean;
+  readonly title: string;
+  readonly onArchive: () => void;
+  readonly newSessionAction: RemoteNewSessionHeaderPresentation | null;
+  readonly onCreateNewSession: () => void;
+  readonly onPinChange: () => void;
+  readonly onRename: () => void;
+}) {
+  const iconColor = "#FFFFFF";
+  const dividerColor = "rgba(255,255,255,0.14)";
+  const actions = useMemo<MenuAction[]>(
+    () => [
+      {
+        id: props.pinned ? "unpin" : "pin",
+        title: props.pinned ? "Unpin" : "Pin",
+        image: props.pinned ? "pin.slash" : "pin",
+      },
+      ...(Platform.OS === "ios"
+        ? [{ id: "rename", title: "Rename", image: "square.and.pencil" } satisfies MenuAction]
+        : []),
+      {
+        id: "archive",
+        title: "Archive",
+        image: "archivebox",
+        attributes: { destructive: true },
+      },
+    ],
+    [props.pinned],
+  );
+  return (
+    <View
+      className="h-11 flex-row items-center overflow-hidden rounded-full"
+      style={{ backgroundColor: "rgba(255,255,255,0.1)" }}
+    >
+      {props.newSessionAction ? (
+        <>
+          <Pressable
+            accessibilityLabel={props.newSessionAction.accessibilityLabel}
+            accessibilityRole="button"
+            className="h-11 w-12 items-center justify-center active:opacity-60"
+            disabled={props.newSessionAction.disabled}
+            onPress={props.onCreateNewSession}
+            style={{ opacity: props.newSessionAction.disabled ? 0.45 : 1 }}
+          >
+            <SymbolView
+              name={props.newSessionAction.systemImage}
+              size={20}
+              tintColor={iconColor}
+              type="monochrome"
+            />
+          </Pressable>
+          <View className="h-6 w-px" style={{ backgroundColor: dividerColor }} />
+        </>
+      ) : null}
+      <ControlPillMenu
+        actions={actions}
+        onPressAction={({ nativeEvent }) => {
+          if (nativeEvent.event === "pin" || nativeEvent.event === "unpin") props.onPinChange();
+          if (nativeEvent.event === "rename") props.onRename();
+          if (nativeEvent.event === "archive") props.onArchive();
+        }}
+        title={props.title}
+      >
+        <View
+          accessible
+          accessibilityLabel={`More actions for ${props.title}`}
+          accessibilityRole="button"
+          className="h-11 w-12 items-center justify-center"
+        >
+          <SymbolView name="ellipsis" size={20} tintColor={iconColor} type="monochrome" />
+        </View>
+      </ControlPillMenu>
+    </View>
+  );
+}
+
+function forgeHomeNativeHeaderItems(onAddSession: () => void): NativeStackHeaderItem[] {
+  return [
+    withNativeGlassHeaderItem({
+      accessibilityLabel: FORGE_HOME_HEADER.addSessionAccessibilityLabel,
+      icon: { name: "plus", type: "sfSymbol" as const },
+      identifier: "forge-home-add-session",
+      label: "",
+      onPress: onAddSession,
+      type: "button" as const,
+    } satisfies Extract<NativeStackHeaderItem, { type: "button" }>),
+  ];
+}
+
+function forgeThreadNativeHeaderItems(props: {
+  readonly pinned: boolean;
+  readonly title: string;
+  readonly newSessionAction: RemoteNewSessionHeaderPresentation | null;
+  readonly onCreateNewSession: () => void;
+  readonly onArchive: () => void;
+  readonly onPinChange: () => void;
+  readonly onRename: () => void;
+}): NativeStackHeaderItem[] {
+  const newSessionItem = props.newSessionAction
+    ? withNativeGlassHeaderItem({
+        accessibilityLabel: props.newSessionAction.accessibilityLabel,
+        disabled: props.newSessionAction.disabled,
+        icon: { name: props.newSessionAction.systemImage, type: "sfSymbol" as const },
+        identifier: "forge-thread-new-session",
+        label: "",
+        onPress: props.onCreateNewSession,
+        type: "button" as const,
+      } satisfies Extract<NativeStackHeaderItem, { type: "button" }>)
+    : null;
+  const pinIcon: "pin" | "pin.slash" = props.pinned ? "pin.slash" : "pin";
+  const moreItem = withNativeGlassHeaderItem({
+    accessibilityLabel: `More actions for ${props.title}`,
+    icon: { name: "ellipsis", type: "sfSymbol" as const },
+    identifier: "forge-thread-more",
+    label: "",
+    menu: {
+      title: props.title,
+      items: [
+        {
+          type: "action" as const,
+          label: props.pinned ? "Unpin" : "Pin",
+          icon: { name: pinIcon, type: "sfSymbol" as const },
+          onPress: props.onPinChange,
+        },
+        {
+          type: "action" as const,
+          label: "Rename",
+          icon: { name: "square.and.pencil", type: "sfSymbol" as const },
+          onPress: props.onRename,
+        },
+        {
+          type: "action" as const,
+          destructive: true,
+          label: "Archive",
+          icon: { name: "archivebox", type: "sfSymbol" as const },
+          onPress: props.onArchive,
+        },
+      ],
+    },
+    type: "menu" as const,
+  } satisfies Extract<NativeStackHeaderItem, { type: "menu" }>);
+  return [...(newSessionItem ? [newSessionItem] : []), moreItem];
 }
 
 function connectionPhase(
@@ -140,10 +340,58 @@ function connectionPhase(
 }
 
 function ForgeHomeScreen(props: NativeStackScreenProps<ForgeStackParams, "Home">) {
-  const { ready, reconnect, sessions } = useForgeSessions();
+  const {
+    archiveSession,
+    completeNewSession,
+    newSession,
+    pinSession,
+    ready,
+    reconnect,
+    registerPairing,
+    releaseActiveSession,
+    renameSession,
+    sessions,
+    unpinSession,
+  } = useForgeSessions();
   const presented = useMemo(() => sessions.map(presentRemoteSession), [sessions]);
+  const sessionByPairingId = useMemo(
+    () => new Map(sessions.map((session) => [session.pairing.id, session])),
+    [sessions],
+  );
   const pairingIdByThread = useMemo(
     () => new Map(presented.map((entry, index) => [entry.thread.id, sessions[index]?.pairing.id])),
+    [presented, sessions],
+  );
+  const pairingIdByProjectRef = useMemo(
+    () =>
+      new Map(
+        presented.flatMap((entry, index) => {
+          const pairingId = sessions[index]?.pairing.id;
+          return pairingId
+            ? [
+                [
+                  scopedProjectKey(entry.project.environmentId, entry.project.id),
+                  pairingId,
+                ] as const,
+              ]
+            : [];
+        }),
+      ),
+    [presented, sessions],
+  );
+  const [newSessionSourcePairingId, setNewSessionSourcePairingId] = useState<string | null>(null);
+  const newSessionFlowPairingIdRef = useRef<string | null>(null);
+  const projectGroupKeyByProjectRef = useMemo(
+    () =>
+      new Map(
+        presented.map((entry, index) => [
+          scopedProjectKey(entry.project.environmentId, entry.project.id),
+          remoteHomeProjectGroupKey(
+            sessions[index]?.pairing.host ?? "private-forge",
+            entry.project.workspaceRoot,
+          ),
+        ]),
+      ),
     [presented, sessions],
   );
   const environments = useMemo(
@@ -179,17 +427,141 @@ function ForgeHomeScreen(props: NativeStackScreenProps<ForgeStackParams, "Home">
   }, [ready, sessions]);
   const noOp = useCallback(() => undefined, []);
   const noOpAsync = useCallback(async () => false, []);
-  const headerPhase =
-    sessions.length > 0 && sessions.every((session) => session.connectionPhase === "connected")
-      ? "connected"
-      : "reconnecting";
-
+  useFocusEffect(
+    useCallback(() => {
+      releaseActiveSession();
+    }, [releaseActiveSession]),
+  );
   useEffect(() => {
+    const addSession = () => props.navigation.navigate("Pair");
     props.navigation.setOptions({
-      headerTitle: () => <ForgeWordmark phase={headerPhase} />,
-      headerRight: () => <HeaderPairButton onPress={() => props.navigation.navigate("Pair")} />,
+      headerBlurEffect: undefined,
+      headerShadowVisible: false,
+      headerStyle: { backgroundColor: FORGE_HOME_HEADER.backgroundColor },
+      headerTintColor: "#FFFFFF",
+      headerTitle: () => <ForgeWordmark />,
+      headerTransparent: false,
+      headerRight:
+        Platform.OS === "ios" ? undefined : () => <HeaderPairButton onPress={addSession} />,
+      statusBarStyle: "light",
+      unstable_headerRightItems:
+        Platform.OS === "ios" ? () => forgeHomeNativeHeaderItems(addSession) : undefined,
     });
-  }, [headerPhase, props.navigation]);
+  }, [props.navigation]);
+
+  const pairingIdForThread = useCallback(
+    (thread: EnvironmentThreadShell) => pairingIdByThread.get(thread.id),
+    [pairingIdByThread],
+  );
+  const pairingIdForProject = useCallback(
+    (project: EnvironmentProject) =>
+      pairingIdByProjectRef.get(scopedProjectKey(project.environmentId, project.id)),
+    [pairingIdByProjectRef],
+  );
+  const isNewThreadInProjectSupported = useCallback(
+    (project: EnvironmentProject) => {
+      const pairingId = pairingIdForProject(project);
+      return (
+        pairingId !== undefined &&
+        sessionByPairingId.get(pairingId)?.snapshot?.capabilities.newSession === true
+      );
+    },
+    [pairingIdForProject, sessionByPairingId],
+  );
+  const isNewThreadInProjectPending = useCallback(
+    (project: EnvironmentProject) => {
+      const pairingId = pairingIdForProject(project);
+      return (
+        pairingId !== undefined &&
+        (newSessionSourcePairingId === pairingId ||
+          sessionByPairingId.get(pairingId)?.newSessionCommandPending === true)
+      );
+    },
+    [newSessionSourcePairingId, pairingIdForProject, sessionByPairingId],
+  );
+  const requestNewSessionInProject = useCallback(
+    (project: EnvironmentProject) => {
+      if (newSessionSourcePairingId !== null) return;
+      const pairingId = pairingIdForProject(project);
+      if (!pairingId) return;
+      const source = sessionByPairingId.get(pairingId);
+      if (source?.snapshot?.capabilities.newSession !== true || source.newSessionCommandPending) {
+        return;
+      }
+      setNewSessionSourcePairingId(pairingId);
+      reconnect(pairingId);
+    },
+    [newSessionSourcePairingId, pairingIdForProject, reconnect, sessionByPairingId],
+  );
+  useEffect(() => {
+    const sourcePairingId = newSessionSourcePairingId;
+    if (!sourcePairingId || newSessionFlowPairingIdRef.current !== null) return;
+    const source = sessionByPairingId.get(sourcePairingId);
+    if (!source || source.connectionPhase === "error") {
+      setNewSessionSourcePairingId(null);
+      releaseActiveSession(sourcePairingId);
+      return;
+    }
+    if (source.connectionPhase !== "connected" || source.newSessionCommandPending) return;
+    if (source.snapshot?.capabilities.newSession !== true) {
+      setNewSessionSourcePairingId(null);
+      releaseActiveSession(sourcePairingId);
+      return;
+    }
+
+    newSessionFlowPairingIdRef.current = sourcePairingId;
+    const created = newSession(sourcePairingId);
+    if (!created) {
+      newSessionFlowPairingIdRef.current = null;
+      setNewSessionSourcePairingId(null);
+      releaseActiveSession(sourcePairingId);
+      return;
+    }
+    void created
+      .then(async (outcome) => {
+        const registeredPairingId = await registerPairing(
+          remoteSessionCreatedRegistrationInput(outcome),
+          outcome.sessionId,
+        );
+        const accepted = await completeNewSession(
+          sourcePairingId,
+          registeredPairingId,
+          outcome.sessionId,
+        );
+        if (!accepted) return;
+        const target = remoteNewSessionNavigationTarget(outcome, registeredPairingId);
+        props.navigation.reset({
+          index: 1,
+          routes: [{ name: "Home" }, { name: "Thread", params: { pairingId: target.pairingId } }],
+        });
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (newSessionFlowPairingIdRef.current === sourcePairingId) {
+          newSessionFlowPairingIdRef.current = null;
+        }
+        setNewSessionSourcePairingId((current) => (current === sourcePairingId ? null : current));
+        releaseActiveSession(sourcePairingId);
+      });
+  }, [
+    completeNewSession,
+    newSession,
+    newSessionSourcePairingId,
+    props.navigation,
+    registerPairing,
+    releaseActiveSession,
+    sessionByPairingId,
+  ]);
+  const renameThread = useCallback(
+    (thread: EnvironmentThreadShell) => {
+      const pairingId = pairingIdForThread(thread);
+      if (!pairingId) return;
+      promptForSessionRename(thread.title, (title) => {
+        void renameSession(pairingId, title);
+      });
+    },
+    [pairingIdForThread, renameSession],
+  );
 
   return (
     <View className="flex-1 bg-screen">
@@ -206,6 +578,7 @@ function ForgeHomeScreen(props: NativeStackScreenProps<ForgeStackParams, "Home">
         projectSortOrder="updated_at"
         threadSortOrder="updated_at"
         projectGroupingMode="repository"
+        projectGroupKeyByProjectRef={projectGroupKeyByProjectRef}
         onSearchQueryChange={noOp}
         onEnvironmentChange={noOp}
         onProjectChange={noOp}
@@ -215,26 +588,38 @@ function ForgeHomeScreen(props: NativeStackScreenProps<ForgeStackParams, "Home">
         onOpenSettings={noOp}
         onStartNewTask={() => props.navigation.navigate("Pair")}
         onSelectThread={(thread: EnvironmentThreadShell) => {
-          const pairingId = pairingIdByThread.get(thread.id);
+          const pairingId = pairingIdForThread(thread);
           if (pairingId) {
             openForgeHomeThread(pairingId, reconnect, (selectedPairingId) =>
               props.navigation.navigate("Thread", { pairingId: selectedPairingId }),
             );
           }
         }}
-        onArchiveThread={noOp}
+        onArchiveThread={(thread) => {
+          const pairingId = pairingIdForThread(thread);
+          if (pairingId) void archiveSession(pairingId);
+        }}
         onDeleteThread={noOp}
         onSettleThread={noOpAsync}
         onSnoozeThread={noOpAsync}
         onUnsnoozeThread={noOpAsync}
         onUnsettleThread={noOp}
-        onPinThread={noOpAsync}
-        onUnpinThread={noOpAsync}
+        onPinThread={(thread) => {
+          const pairingId = pairingIdForThread(thread);
+          return pairingId ? pinSession(pairingId) : Promise.resolve(false);
+        }}
+        onUnpinThread={(thread) => {
+          const pairingId = pairingIdForThread(thread);
+          return pairingId ? unpinSession(pairingId) : Promise.resolve(false);
+        }}
         onMovePinnedThread={noOpAsync}
         onRegenerateThreadTitle={noOpAsync}
+        {...(Platform.OS === "ios" ? { onRenameThread: renameThread } : {})}
         onSelectPendingTask={noOp}
         onDeletePendingTask={noOp}
-        onNewThreadInProject={() => props.navigation.navigate("Pair")}
+        onNewThreadInProject={requestNewSessionInProject}
+        isNewThreadInProjectPending={isNewThreadInProjectPending}
+        isNewThreadInProjectSupported={isNewThreadInProjectSupported}
         remoteOnly
       />
     </View>
@@ -261,10 +646,20 @@ function ForgeThreadScreen(props: NativeStackScreenProps<ForgeStackParams, "Thre
   const api = useForgeSessions();
   const session = api.sessions.find((entry) => entry.pairing.id === props.route.params.pairingId);
   const [draft, setDraft] = useState("");
+  const [newSessionFinalizing, setNewSessionFinalizing] = useState(false);
   const [userInputDrafts, setUserInputDrafts] = useState<
     Record<string, PendingUserInputDraftAnswer>
   >({});
   const presentation = session ? presentRemoteSession(session) : null;
+  const pairingId = props.route.params.pairingId;
+  const reconnect = api.reconnect;
+  const releaseActiveSession = api.releaseActiveSession;
+  useFocusEffect(
+    useCallback(() => {
+      reconnect(pairingId);
+      return () => releaseActiveSession(pairingId);
+    }, [pairingId, reconnect, releaseActiveSession]),
+  );
   const pendingInteractions = (session?.snapshot?.activeInteractions ?? []).filter(
     (entry) => entry.status === undefined || entry.status === "pending",
   );
@@ -277,19 +672,167 @@ function ForgeThreadScreen(props: NativeStackScreenProps<ForgeStackParams, "Thre
   const answers = userInputPresentation?.userInput
     ? buildPendingUserInputAnswers(userInputPresentation.userInput.questions, userInputDrafts)
     : null;
+  const remoteQueuedMessages = useMemo(
+    () =>
+      presentRemoteQueuedMessages(
+        session?.snapshot?.queue ?? [],
+        new Set(session?.pendingQueueItemIds ?? []),
+      ),
+    [session?.pendingQueueItemIds, session?.snapshot?.queue],
+  );
+  const effectiveTitle = presentation?.thread.title ?? "Forge session";
+  const renameCurrentSession = useCallback(() => {
+    if (!session) return;
+    promptForSessionRename(effectiveTitle, (title) => {
+      void api.renameSession(session.pairing.id, title);
+    });
+  }, [api, effectiveTitle, session]);
+  const toggleCurrentSessionPin = useCallback(() => {
+    if (!session) return;
+    const mutation =
+      session.pairing.metadata.pinnedAt === undefined
+        ? api.pinSession(session.pairing.id)
+        : api.unpinSession(session.pairing.id);
+    void mutation;
+  }, [api, session]);
+  const archiveCurrentSession = useCallback(() => {
+    if (!session) return;
+    void api.archiveSession(session.pairing.id).then((archived) => {
+      if (archived) props.navigation.popTo("Home");
+    });
+  }, [api, props.navigation, session]);
+  const newSessionAction = useMemo(
+    () =>
+      remoteNewSessionHeaderPresentation({
+        supported: session?.snapshot?.capabilities.newSession === true,
+        pending: session?.newSessionCommandPending === true || newSessionFinalizing,
+        hasExecutableHandler: session !== undefined,
+      }),
+    [
+      newSessionFinalizing,
+      session,
+      session?.newSessionCommandPending,
+      session?.snapshot?.capabilities.newSession,
+    ],
+  );
+  const createNewSession = useCallback(() => {
+    if (!session || newSessionFinalizing) return;
+    setNewSessionFinalizing(true);
+    const created = api.newSession(session.pairing.id);
+    if (!created) {
+      setNewSessionFinalizing(false);
+      return;
+    }
+    void created
+      .then(async (outcome) => {
+        const registeredPairingId = await api.registerPairing(
+          remoteSessionCreatedRegistrationInput(outcome),
+          outcome.sessionId,
+        );
+        const accepted = await api.completeNewSession(
+          session.pairing.id,
+          registeredPairingId,
+          outcome.sessionId,
+        );
+        if (!accepted) return;
+        const target = remoteNewSessionNavigationTarget(outcome, registeredPairingId);
+        props.navigation.reset({
+          index: 1,
+          routes: [{ name: "Home" }, { name: "Thread", params: { pairingId: target.pairingId } }],
+        });
+      })
+      .catch(() => undefined)
+      .finally(() => setNewSessionFinalizing(false));
+  }, [api, newSessionFinalizing, props.navigation, session]);
+  const editQueuedMessage = useCallback(
+    (message: RemoteQueuedMessagePresentation) => {
+      if (Platform.OS !== "ios" || !session || message.expectedVersion === null) return;
+      const expectedVersion = message.expectedVersion;
+      Alert.prompt(
+        "Edit message",
+        undefined,
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Save",
+            onPress: (value?: string) => {
+              const text = value?.trim() ?? "";
+              if (!text || text === message.text.trim()) return;
+              void api.editQueuedPrompt(
+                session.pairing.id,
+                message.queueItemId,
+                expectedVersion,
+                text,
+              );
+            },
+          },
+        ],
+        "plain-text",
+        message.text,
+      );
+    },
+    [api, session],
+  );
+  const steerQueuedMessage = useCallback(
+    (message: RemoteQueuedMessagePresentation) => {
+      if (!session || message.expectedVersion === null) return;
+      void api.steerQueuedPrompt(session.pairing.id, message.queueItemId, message.expectedVersion);
+    },
+    [api, session],
+  );
+  const cancelQueuedMessage = useCallback(
+    (message: RemoteQueuedMessagePresentation) => {
+      if (!session || message.expectedVersion === null) return;
+      void api.cancelQueuedPrompt(session.pairing.id, message.queueItemId, message.expectedVersion);
+    },
+    [api, session],
+  );
 
   useEffect(() => {
-    const title = session?.snapshot?.title ?? session?.pairing.metadata.title ?? "Forge session";
+    const headerActions = {
+      pinned: session?.pairing.metadata.pinnedAt !== undefined,
+      title: effectiveTitle,
+      newSessionAction,
+      onCreateNewSession: createNewSession,
+      onArchive: archiveCurrentSession,
+      onPinChange: toggleCurrentSessionPin,
+      onRename: renameCurrentSession,
+    };
     props.navigation.setOptions({
+      headerBlurEffect: undefined,
+      headerRight:
+        session && Platform.OS !== "ios"
+          ? () => <ForgeThreadHeaderActions {...headerActions} />
+          : undefined,
+      headerShadowVisible: false,
+      headerStyle: { backgroundColor: FORGE_HOME_HEADER.backgroundColor },
       headerTitle: () => (
-        <ForgeSessionHeaderTitle phase={session?.connectionPhase ?? "reconnecting"} title={title} />
+        <ForgeSessionHeaderTitle
+          phase={session?.connectionPhase ?? "reconnecting"}
+          title={effectiveTitle}
+        />
       ),
+      headerTintColor: "#FFFFFF",
+      headerTransparent: false,
+      statusBarStyle: "light",
+      unstable_headerRightItems:
+        session && Platform.OS === "ios"
+          ? () => forgeThreadNativeHeaderItems(headerActions)
+          : undefined,
     });
   }, [
+    archiveCurrentSession,
+    createNewSession,
+    effectiveTitle,
+    newSessionAction,
     props.navigation,
+    renameCurrentSession,
     session?.connectionPhase,
-    session?.pairing.metadata.title,
+    session?.pairing.metadata.pinnedAt,
+    session?.newSessionCommandPending,
+    session?.snapshot?.capabilities.newSession,
     session?.snapshot?.title,
+    toggleCurrentSessionPin,
   ]);
 
   if (!session || !presentation) {
@@ -351,6 +894,16 @@ function ForgeThreadScreen(props: NativeStackScreenProps<ForgeStackParams, "Thre
         connectionError={null}
         environmentLabel={session.pairing.host}
         selectedThreadFeed={presentation.feed}
+        remoteAssistantResponseMessageIds={presentation.assistantResponseMessageIds}
+        remoteWorkDisclosures={presentation.workDisclosures}
+        remoteQueuedMessages={remoteQueuedMessages}
+        {...(session.snapshot?.capabilities.queueControl === true
+          ? {
+              ...(Platform.OS === "ios" ? { onEditRemoteQueuedMessage: editQueuedMessage } : {}),
+              onSteerRemoteQueuedMessage: steerQueuedMessage,
+              onCancelRemoteQueuedMessage: cancelQueuedMessage,
+            }
+          : {})}
         activeWorkStartedAt={presentation.activeWorkStartedAt}
         activePendingApproval={approvalPresentations[0]?.approval ?? null}
         remotePendingApprovals={approvalPresentations.flatMap((entry) =>
@@ -408,6 +961,19 @@ function ForgeThreadScreen(props: NativeStackScreenProps<ForgeStackParams, "Thre
           }
           void api.setModel(session.pairing.id, selection.model, reasoningFromSelection(selection));
         }}
+        onSetRemoteFastMode={(enabled) => {
+          if (
+            session.snapshot?.capabilities.fastMode !== true ||
+            session.snapshot.fastMode?.supported !== true ||
+            session.snapshot.fastMode.pending === true ||
+            session.fastModeCommandPending ||
+            session.snapshot.modelSwitchPending === true ||
+            session.modelCommandPending
+          ) {
+            return;
+          }
+          void api.setFastMode(session.pairing.id, enabled);
+        }}
         onUpdateThreadRuntimeMode={() => undefined}
         onUpdateThreadInteractionMode={() => undefined}
         onRespondToApproval={async () => null}
@@ -436,9 +1002,23 @@ function ForgeThreadScreen(props: NativeStackScreenProps<ForgeStackParams, "Thre
         remoteOnly
         remoteCancellable={session.snapshot?.capabilities.cancel === true}
         remoteModelCommandPending={
-          session.modelCommandPending || session.snapshot?.modelSwitchPending === true
+          session.modelCommandPending ||
+          session.fastModeCommandPending ||
+          session.snapshot?.modelSwitchPending === true ||
+          session.snapshot?.fastMode?.pending === true
         }
         remoteModelSelectionEnabled={session.snapshot?.capabilities.setModel === true}
+        remoteFastMode={{
+          supported:
+            session.snapshot?.capabilities.fastMode === true &&
+            session.snapshot.fastMode?.supported === true,
+          enabled: session.snapshot?.fastMode?.enabled === true,
+          pending:
+            session.fastModeCommandPending ||
+            session.modelCommandPending ||
+            session.snapshot?.fastMode?.pending === true ||
+            session.snapshot?.modelSwitchPending === true,
+        }}
         remoteUsageAvailable={session.snapshot?.capabilities.usage === true}
         onOpenUsage={openUsage}
       />
@@ -449,6 +1029,15 @@ function ForgeThreadScreen(props: NativeStackScreenProps<ForgeStackParams, "Thre
 function ForgeUsageRouteScreen(props: NativeStackScreenProps<ForgeStackParams, "Usage">) {
   const api = useForgeSessions();
   const session = api.sessions.find((entry) => entry.pairing.id === props.route.params.pairingId);
+  const pairingId = props.route.params.pairingId;
+  const reconnect = api.reconnect;
+  const releaseActiveSession = api.releaseActiveSession;
+  useFocusEffect(
+    useCallback(() => {
+      reconnect(pairingId);
+      return () => releaseActiveSession(pairingId);
+    }, [pairingId, reconnect, releaseActiveSession]),
+  );
   return (
     <ForgeUsageScreen
       usage={session?.snapshot?.usage}
@@ -488,7 +1077,10 @@ function PairScreen(props: NativeStackScreenProps<ForgeStackParams, "Pair">) {
       setPairingError(null);
       void registerPairing(input)
         .then((pairingId) => {
-          props.navigation.replace("Thread", { pairingId });
+          props.navigation.reset({
+            index: 1,
+            routes: [{ name: "Home" }, { name: "Thread", params: { pairingId } }],
+          });
         })
         .catch((error: unknown) => {
           const message =
@@ -669,12 +1261,28 @@ function ForgeNavigation() {
           <Stack.Screen
             name="Home"
             component={ForgeHomeScreen}
-            options={{ headerTitle: () => <ForgeWordmark phase="reconnecting" /> }}
+            options={{
+              headerBlurEffect: undefined,
+              headerShadowVisible: false,
+              headerStyle: { backgroundColor: FORGE_HOME_HEADER.backgroundColor },
+              headerTintColor: "#FFFFFF",
+              headerTitle: () => <ForgeWordmark />,
+              headerTransparent: false,
+              statusBarStyle: "light",
+            }}
           />
           <Stack.Screen
             name="Thread"
             component={ForgeThreadScreen}
-            options={{ title: "Forge session" }}
+            options={{
+              headerBlurEffect: undefined,
+              headerShadowVisible: false,
+              headerStyle: { backgroundColor: FORGE_HOME_HEADER.backgroundColor },
+              headerTintColor: "#FFFFFF",
+              headerTransparent: false,
+              statusBarStyle: "light",
+              title: "Forge session",
+            }}
           />
           <Stack.Screen
             name="Usage"
@@ -684,7 +1292,7 @@ function ForgeNavigation() {
           <Stack.Screen
             name="Pair"
             component={PairScreen}
-            options={{ title: "Pair session", presentation: "modal" }}
+            options={{ title: "Add session", presentation: "modal" }}
           />
         </Stack.Navigator>
       </NavigationContainer>

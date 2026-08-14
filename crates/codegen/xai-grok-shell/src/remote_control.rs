@@ -40,6 +40,7 @@ const PAIRING_TTL: Duration = Duration::from_secs(8 * 60 * 60);
 const TAILSCALE_TIMEOUT: Duration = Duration::from_secs(15);
 const GATEWAY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const SNAPSHOT_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
+const SESSION_ACCEPT_RESULT_WRITE_TIMEOUT: Duration = Duration::from_secs(3);
 const REMOTE_CLIENT_SUPERSEDED_CLOSE_CODE: u16 = 4410;
 const REMOTE_CLIENT_SUPERSEDED_REASON: &str =
     "Forge Remote was superseded by a newer active client.";
@@ -199,22 +200,51 @@ impl RemoteArm {
     pub fn is_expired(&self) -> bool {
         Instant::now() >= self.expires_at
     }
+
+    pub fn expires_at_rfc3339(&self) -> &str {
+        &self.expires_at_rfc3339
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(
     tag = "type",
     rename_all = "camelCase",
-    rename_all_fields = "camelCase"
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
 )]
 pub enum RemoteCommand {
     Prompt {
         text: String,
     },
+    /// Create a normal session in the cwd owned by this exact remote binding.
+    /// No path is accepted from the client.
+    NewSession {},
+    /// Confirm that the provisional child pairing was persisted and validated
+    /// by the exact client that requested it.
+    AcceptNewSession {
+        session_id: String,
+    },
+    EditQueuedPrompt {
+        queue_item_id: String,
+        expected_version: u64,
+        text: String,
+    },
+    SteerQueuedPrompt {
+        queue_item_id: String,
+        expected_version: u64,
+    },
+    CancelQueuedPrompt {
+        queue_item_id: String,
+        expected_version: u64,
+    },
     Cancel,
     SetModel {
         model_id: String,
         reasoning_effort: Option<String>,
+    },
+    SetFastMode {
+        enabled: bool,
     },
     Btw {
         question: String,
@@ -308,6 +338,9 @@ pub enum RemoteRevocationReason {
 pub struct RemoteCommandRequest {
     pub session_id: String,
     pub gateway_generation: u64,
+    /// Exact WebSocket ownership lease that submitted the command. Terminal
+    /// results must never migrate to a newer client on the same bearer.
+    pub client_generation: u64,
     pub command_id: String,
     pub command: RemoteCommand,
 }
@@ -317,6 +350,28 @@ pub struct RemoteSnapshot {
     pub session_id: String,
     pub revision: u64,
     pub session: serde_json::Value,
+}
+
+#[derive(Debug)]
+pub enum RemoteSessionAcceptance {
+    Begin {
+        granted: tokio::sync::oneshot::Sender<()>,
+    },
+    Commit,
+    Abort,
+}
+
+/// Typed metadata attached to a successful turn-completion timeline marker.
+///
+/// The pager derives these IDs from the same canonical scrollback entries it
+/// projects onto the wire. Clients can therefore present the completed turn's
+/// work without parsing the marker's human-readable text.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteWorkDisclosure {
+    pub duration_ms: u64,
+    pub final_response_item_id: Option<String>,
+    pub work_item_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -329,8 +384,22 @@ pub enum RemotePagerEvent {
     },
     CommandResult {
         session_id: String,
+        client_generation: u64,
         command_id: String,
         outcome: RemoteCommandOutcome,
+    },
+    SessionCreated {
+        /// Source session whose authenticated socket requested the handoff.
+        session_id: String,
+        client_generation: u64,
+        command_id: String,
+        new_session_id: String,
+        pairing_url: String,
+        expires_at: String,
+        /// Two-phase application acceptance transaction for the exact source
+        /// client. The child remains provisional until secure persistence and
+        /// validation complete and the bounded OK write is committed.
+        delivery_ack: mpsc::UnboundedSender<RemoteSessionAcceptance>,
     },
     Error {
         session_id: String,
@@ -396,6 +465,13 @@ enum ServerMessage {
         protocol_version: u16,
         command_id: String,
         outcome: RemoteCommandOutcome,
+    },
+    SessionCreated {
+        protocol_version: u16,
+        command_id: String,
+        session_id: String,
+        pairing_url: String,
+        expires_at: String,
     },
     ResyncRequired {
         protocol_version: u16,
@@ -1223,6 +1299,10 @@ async fn remote_socket_session(socket: WebSocket, state: GatewayState) {
     }
     let mut hello_received = false;
     let mut revision = 0_u64;
+    let mut pending_session_acceptance: Option<(
+        String,
+        mpsc::UnboundedSender<RemoteSessionAcceptance>,
+    )> = None;
     let expiry = tokio::time::sleep_until(tokio::time::Instant::from_std(state.expires_at));
     tokio::pin!(expiry);
     loop {
@@ -1266,12 +1346,42 @@ async fn remote_socket_session(socket: WebSocket, state: GatewayState) {
                     if send_server_message(&mut writer, &message).await.is_err() { break; }
                     revision = next;
                 }
-                Ok(RemotePagerEvent::CommandResult { session_id, command_id, outcome }) if session_id == state.session_id.as_ref() => {
+                Ok(RemotePagerEvent::CommandResult { session_id, client_generation, command_id, outcome })
+                    if session_id == state.session_id.as_ref()
+                        && client_generation == client.generation => {
                     if send_server_message(&mut writer, &ServerMessage::CommandResult {
                         protocol_version: REMOTE_PROTOCOL_VERSION,
                         command_id,
                         outcome,
                     }).await.is_err() { break; }
+                }
+                Ok(RemotePagerEvent::SessionCreated {
+                    session_id,
+                    client_generation,
+                    command_id,
+                    new_session_id,
+                    pairing_url,
+                    expires_at,
+                    delivery_ack,
+                }) if session_id == state.session_id.as_ref()
+                    && client_generation == client.generation => {
+                    let written = send_server_message(&mut writer, &ServerMessage::SessionCreated {
+                        protocol_version: REMOTE_PROTOCOL_VERSION,
+                        command_id,
+                        session_id: new_session_id.clone(),
+                        pairing_url,
+                        expires_at,
+                    }).await.is_ok();
+                    if written {
+                        if let Some((_, stale)) = pending_session_acceptance
+                            .replace((new_session_id, delivery_ack))
+                        {
+                            let _ = stale.send(RemoteSessionAcceptance::Abort);
+                        }
+                    } else {
+                        let _ = delivery_ack.send(RemoteSessionAcceptance::Abort);
+                        break;
+                    }
                 }
                 Ok(RemotePagerEvent::Error { session_id, error }) if session_id == state.session_id.as_ref() => {
                     if send_server_message(&mut writer, &ServerMessage::Error {
@@ -1343,6 +1453,50 @@ async fn remote_socket_session(socket: WebSocket, state: GatewayState) {
                                 continue;
                             }
                             match command {
+                                RemoteCommand::AcceptNewSession { session_id } => {
+                                    let accepted = pending_session_acceptance
+                                        .as_ref()
+                                        .is_some_and(|(pending, _)| pending == &session_id);
+                                    if !accepted {
+                                        let _ = send_command_error(&mut writer, command_id, "newSessionMismatch", "This socket has no matching provisional session to accept.", false).await;
+                                        continue;
+                                    }
+                                    let (_, acceptance) = pending_session_acceptance
+                                        .take()
+                                        .expect("matching provisional session checked above");
+                                    let (grant, granted) = tokio::sync::oneshot::channel();
+                                    let began = client.with_current(|| {
+                                        acceptance.send(RemoteSessionAcceptance::Begin {
+                                            granted: grant,
+                                        })
+                                    });
+                                    if !matches!(began, Some(Ok(()))) || granted.await.is_err() {
+                                        let _ = acceptance.send(RemoteSessionAcceptance::Abort);
+                                        let _ = send_command_error(&mut writer, command_id, "newSessionExpired", "The provisional session expired before it was accepted.", false).await;
+                                        continue;
+                                    }
+                                    let result_written = tokio::time::timeout(
+                                        SESSION_ACCEPT_RESULT_WRITE_TIMEOUT,
+                                        send_server_message(&mut writer, &ServerMessage::CommandResult {
+                                            protocol_version: REMOTE_PROTOCOL_VERSION,
+                                            command_id,
+                                            outcome: RemoteCommandOutcome::Ok,
+                                        }),
+                                    ).await.is_ok_and(|result| result.is_ok());
+                                    if !result_written {
+                                        let _ = acceptance.send(RemoteSessionAcceptance::Abort);
+                                        break;
+                                    }
+                                    // The atomic Begin above is the ownership
+                                    // linearization point. Once pager grants, this
+                                    // exact requester has already persisted and
+                                    // validated the child. A takeover racing the
+                                    // bounded OK write must not turn a visible OK
+                                    // into a revoked child.
+                                    if acceptance.send(RemoteSessionAcceptance::Commit).is_err() {
+                                        break;
+                                    }
+                                }
                                 RemoteCommand::Ping => {
                                     if send_server_message(&mut writer, &ServerMessage::Pong {
                                         protocol_version: REMOTE_PROTOCOL_VERSION,
@@ -1370,6 +1524,7 @@ async fn remote_socket_session(socket: WebSocket, state: GatewayState) {
                                     let request = RemoteCommandRequest {
                                         session_id: state.session_id.to_string(),
                                         gateway_generation: state.generation,
+                                        client_generation: client.generation,
                                         command_id: command_id.clone(),
                                         command,
                                     };
@@ -1511,6 +1666,22 @@ fn valid_command_id(command_id: &str) -> bool {
 fn valid_remote_command(command: &RemoteCommand) -> bool {
     match command {
         RemoteCommand::Prompt { text } => valid_nonempty(text, MAX_PROMPT_BYTES),
+        RemoteCommand::NewSession {} => true,
+        RemoteCommand::AcceptNewSession { session_id } => {
+            valid_nonempty(session_id, MAX_SHORT_FIELD_BYTES)
+        }
+        RemoteCommand::EditQueuedPrompt {
+            queue_item_id,
+            text,
+            ..
+        } => {
+            valid_nonempty(queue_item_id, MAX_SHORT_FIELD_BYTES)
+                && valid_nonempty(text, MAX_PROMPT_BYTES)
+        }
+        RemoteCommand::SteerQueuedPrompt { queue_item_id, .. }
+        | RemoteCommand::CancelQueuedPrompt { queue_item_id, .. } => {
+            valid_nonempty(queue_item_id, MAX_SHORT_FIELD_BYTES)
+        }
         RemoteCommand::SetModel {
             model_id,
             reasoning_effort,
@@ -1520,6 +1691,7 @@ fn valid_remote_command(command: &RemoteCommand) -> bool {
                     .as_ref()
                     .is_none_or(|effort| valid_nonempty(effort, MAX_SHORT_FIELD_BYTES))
         }
+        RemoteCommand::SetFastMode { .. } => true,
         RemoteCommand::Btw { question } => valid_nonempty(question, MAX_PROMPT_BYTES),
         RemoteCommand::ResolveInteraction {
             interaction_id,
@@ -1882,6 +2054,26 @@ mod tests {
         assert_eq!(server["baseRevision"], 4);
     }
 
+    #[test]
+    fn work_disclosure_uses_the_exact_additive_camel_case_shape() {
+        let disclosure = RemoteWorkDisclosure {
+            duration_ms: 1_250,
+            final_response_item_id: Some("response-9".into()),
+            work_item_ids: vec!["reasoning-7".into(), "tool-8".into()],
+        };
+        let expected = serde_json::json!({
+            "durationMs": 1250,
+            "finalResponseItemId": "response-9",
+            "workItemIds": ["reasoning-7", "tool-8"]
+        });
+
+        assert_eq!(serde_json::to_value(&disclosure).unwrap(), expected);
+        assert_eq!(
+            serde_json::from_value::<RemoteWorkDisclosure>(expected).unwrap(),
+            disclosure
+        );
+    }
+
     #[tokio::test]
     async fn snapshot_waits_for_authoritative_watch_update() {
         let token = "a".repeat(PAIRING_BYTES * 2);
@@ -2051,6 +2243,93 @@ mod tests {
             serde_json::to_value(command).unwrap(),
             serde_json::json!({"type": "refreshUsage"})
         );
+    }
+
+    #[test]
+    fn new_session_has_no_client_supplied_path() {
+        let command: RemoteCommand = serde_json::from_value(serde_json::json!({
+            "type": "newSession"
+        }))
+        .unwrap();
+        assert_eq!(command, RemoteCommand::NewSession {});
+        assert!(valid_remote_command(&command));
+        assert_eq!(
+            serde_json::to_value(command).unwrap(),
+            serde_json::json!({"type": "newSession"})
+        );
+        assert!(
+            serde_json::from_value::<RemoteCommand>(serde_json::json!({
+                "type": "newSession",
+                "cwd": "/tmp/attacker-choice"
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn set_fast_mode_uses_the_exact_camel_case_command_contract() {
+        let command: RemoteCommand = serde_json::from_value(serde_json::json!({
+            "type": "setFastMode",
+            "enabled": true
+        }))
+        .unwrap();
+        assert_eq!(command, RemoteCommand::SetFastMode { enabled: true });
+        assert!(valid_remote_command(&command));
+        assert_eq!(
+            serde_json::to_value(command).unwrap(),
+            serde_json::json!({"type": "setFastMode", "enabled": true})
+        );
+    }
+
+    #[test]
+    fn queued_prompt_controls_use_versioned_camel_case_contracts() {
+        let edit = RemoteCommand::EditQueuedPrompt {
+            queue_item_id: "prompt-7".into(),
+            expected_version: 3,
+            text: "edited follow-up".into(),
+        };
+        let steer = RemoteCommand::SteerQueuedPrompt {
+            queue_item_id: "prompt-7".into(),
+            expected_version: 3,
+        };
+        let cancel = RemoteCommand::CancelQueuedPrompt {
+            queue_item_id: "prompt-7".into(),
+            expected_version: 3,
+        };
+
+        assert_eq!(
+            serde_json::to_value(&edit).unwrap(),
+            serde_json::json!({
+                "type": "editQueuedPrompt",
+                "queueItemId": "prompt-7",
+                "expectedVersion": 3,
+                "text": "edited follow-up"
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(&steer).unwrap(),
+            serde_json::json!({
+                "type": "steerQueuedPrompt",
+                "queueItemId": "prompt-7",
+                "expectedVersion": 3
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(&cancel).unwrap(),
+            serde_json::json!({
+                "type": "cancelQueuedPrompt",
+                "queueItemId": "prompt-7",
+                "expectedVersion": 3
+            })
+        );
+        assert!(valid_remote_command(&edit));
+        assert!(valid_remote_command(&steer));
+        assert!(valid_remote_command(&cancel));
+        assert!(!valid_remote_command(&RemoteCommand::EditQueuedPrompt {
+            queue_item_id: "prompt-7".into(),
+            expected_version: 3,
+            text: "   ".into(),
+        }));
     }
 
     #[test]
@@ -2265,6 +2544,16 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn failed_accept_result_write_rejects_and_clears_provisional_session() {
+        let (completion, mut result) = mpsc::unbounded_channel();
+        completion.send(RemoteSessionAcceptance::Abort).unwrap();
+        assert!(matches!(
+            result.recv().await,
+            Some(RemoteSessionAcceptance::Abort)
+        ));
+    }
+
+    #[tokio::test]
     async fn expired_secret_is_indistinguishable_from_wrong_secret() {
         let token = "a".repeat(PAIRING_BYTES * 2);
         let app = gateway_router(test_state(&token, Instant::now() - Duration::from_secs(1)));
@@ -2328,6 +2617,7 @@ mod tests {
             .event_tx
             .send(RemotePagerEvent::CommandResult {
                 session_id: "session-live".into(),
+                client_generation: request.client_generation,
                 command_id: "prompt-1".into(),
                 outcome: RemoteCommandOutcome::Ok,
             })
@@ -2336,6 +2626,76 @@ mod tests {
         assert_eq!(command_result["type"], "commandResult");
         assert_eq!(command_result["commandId"], "prompt-1");
         assert_eq!(command_result["outcome"]["status"], "ok");
+
+        let (delivery_ack, mut delivery_result) = mpsc::unbounded_channel();
+        gateway
+            .event_tx
+            .send(RemotePagerEvent::SessionCreated {
+                session_id: "session-live".into(),
+                client_generation: request.client_generation,
+                command_id: "new-1".into(),
+                new_session_id: "session-child".into(),
+                pairing_url: "https://device.tail.example/forge/fresh/".into(),
+                expires_at: "2030-01-02T03:04:05Z".into(),
+                delivery_ack,
+            })
+            .unwrap();
+        let created = receive_server_json(&mut socket).await;
+        assert_eq!(created["type"], "sessionCreated");
+        assert_eq!(created["commandId"], "new-1");
+        assert_eq!(created["sessionId"], "session-child");
+        assert_eq!(
+            created["pairingUrl"],
+            "https://device.tail.example/forge/fresh/"
+        );
+        assert_eq!(created["expiresAt"], "2030-01-02T03:04:05Z");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), delivery_result.recv())
+                .await
+                .is_err(),
+            "writing sessionCreated must not retain the child before app acceptance"
+        );
+        send_client_json(
+            &mut socket,
+            serde_json::json!({
+                "type":"command",
+                "protocolVersion":REMOTE_PROTOCOL_VERSION,
+                "commandId":"accept-wrong",
+                "command":{"type":"acceptNewSession","sessionId":"different-child"}
+            }),
+        )
+        .await;
+        let wrong = receive_server_json(&mut socket).await;
+        assert_eq!(wrong["type"], "commandResult");
+        assert_eq!(wrong["outcome"]["error"]["code"], "newSessionMismatch");
+        send_client_json(
+            &mut socket,
+            serde_json::json!({
+                "type":"command",
+                "protocolVersion":REMOTE_PROTOCOL_VERSION,
+                "commandId":"accept-child",
+                "command":{"type":"acceptNewSession","sessionId":"session-child"}
+            }),
+        )
+        .await;
+        let begin = tokio::time::timeout(Duration::from_secs(1), delivery_result.recv())
+            .await
+            .expect("application acceptance begin timed out")
+            .expect("application acceptance channel closed");
+        let RemoteSessionAcceptance::Begin { granted } = begin else {
+            panic!("expected acceptance begin")
+        };
+        granted.send(()).unwrap();
+        let accepted = receive_server_json(&mut socket).await;
+        assert_eq!(accepted["type"], "commandResult");
+        assert_eq!(accepted["commandId"], "accept-child");
+        assert_eq!(accepted["outcome"]["status"], "ok");
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), delivery_result.recv())
+                .await
+                .expect("application acceptance commit timed out"),
+            Some(RemoteSessionAcceptance::Commit)
+        ));
 
         gateway.publish_snapshot(5, "streamed-after-command");
         gateway
@@ -2493,6 +2853,235 @@ mod tests {
         second.close(None).await.unwrap();
         drop(second);
         wait_for_client_owner(&gateway.state, None).await;
+    }
+
+    #[tokio::test]
+    async fn session_created_never_migrates_to_a_takeover_client() {
+        let mut gateway = LiveGatewayFixture::start(1, "source-owner").await;
+        let mut first = gateway.connect().await;
+        assert_eq!(receive_server_json(&mut first).await["type"], "connected");
+        send_hello(&mut first).await;
+        assert_eq!(receive_server_json(&mut first).await["type"], "snapshot");
+        send_client_json(
+            &mut first,
+            serde_json::json!({
+                "type":"command",
+                "protocolVersion":REMOTE_PROTOCOL_VERSION,
+                "commandId":"new-before-takeover",
+                "command":{"type":"newSession"}
+            }),
+        )
+        .await;
+        let request = tokio::time::timeout(Duration::from_secs(2), gateway.command_rx.recv())
+            .await
+            .expect("new-session command timed out")
+            .expect("command channel closed");
+
+        let mut second = gateway.connect().await;
+        assert_eq!(receive_server_json(&mut second).await["type"], "connected");
+        send_hello(&mut second).await;
+        assert_eq!(receive_server_json(&mut second).await["type"], "snapshot");
+        let frame = tokio::time::timeout(Duration::from_secs(2), first.next())
+            .await
+            .expect("superseded source did not close")
+            .expect("superseded source ended without close")
+            .expect("superseded source failed before close");
+        assert!(matches!(frame, ClientWebSocketMessage::Close(_)));
+        drop(first);
+
+        let (delivery_ack, mut delivery_result) = mpsc::unbounded_channel();
+        gateway
+            .event_tx
+            .send(RemotePagerEvent::SessionCreated {
+                session_id: "session-live".into(),
+                client_generation: request.client_generation,
+                command_id: request.command_id,
+                new_session_id: "must-not-reach-takeover".into(),
+                pairing_url: "https://device.tail.example/forge/fresh/".into(),
+                expires_at: "2030-01-02T03:04:05Z".into(),
+                delivery_ack,
+            })
+            .unwrap();
+        send_client_json(
+            &mut second,
+            serde_json::json!({
+                "type":"command",
+                "protocolVersion":REMOTE_PROTOCOL_VERSION,
+                "commandId":"takeover-tries-accept",
+                "command":{
+                    "type":"acceptNewSession",
+                    "sessionId":"must-not-reach-takeover"
+                }
+            }),
+        )
+        .await;
+        let rejected = receive_server_json(&mut second).await;
+        assert_eq!(rejected["type"], "commandResult");
+        assert_eq!(rejected["outcome"]["error"]["code"], "newSessionMismatch");
+        gateway
+            .event_tx
+            .send(RemotePagerEvent::CommandResult {
+                session_id: "session-live".into(),
+                client_generation: request.client_generation,
+                command_id: "new-before-takeover".into(),
+                outcome: RemoteCommandOutcome::Error {
+                    error: RemoteError::new(
+                        "new_session_failed",
+                        "must not migrate to takeover client",
+                        true,
+                    ),
+                },
+            })
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(150), second.next())
+                .await
+                .is_err(),
+            "takeover client received the original client's failure"
+        );
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), delivery_result.recv())
+                .await
+                .expect("superseded handoff cleanup timed out"),
+            None
+        ));
+        second.close(None).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn takeover_after_acceptance_begin_survives_delayed_grant() {
+        let mut gateway = LiveGatewayFixture::start(1, "source-owner").await;
+        let mut first = gateway.connect().await;
+        assert_eq!(receive_server_json(&mut first).await["type"], "connected");
+        let first_generation = gateway.state.client_ownership.current_generation().unwrap();
+        send_hello(&mut first).await;
+        assert_eq!(receive_server_json(&mut first).await["type"], "snapshot");
+
+        let (delivery_ack, mut delivery_result) = mpsc::unbounded_channel();
+        gateway
+            .event_tx
+            .send(RemotePagerEvent::SessionCreated {
+                session_id: "session-live".into(),
+                client_generation: first_generation,
+                command_id: "new-racing".into(),
+                new_session_id: "racing-child".into(),
+                pairing_url: "https://device.tail.example/forge/fresh/".into(),
+                expires_at: "2030-01-02T03:04:05Z".into(),
+                delivery_ack,
+            })
+            .unwrap();
+        assert_eq!(
+            receive_server_json(&mut first).await["type"],
+            "sessionCreated"
+        );
+        send_client_json(
+            &mut first,
+            serde_json::json!({
+                "type":"command",
+                "protocolVersion":REMOTE_PROTOCOL_VERSION,
+                "commandId":"accept-racing",
+                "command":{"type":"acceptNewSession","sessionId":"racing-child"}
+            }),
+        )
+        .await;
+        let begin = delivery_result
+            .recv()
+            .await
+            .expect("missing acceptance begin");
+        let RemoteSessionAcceptance::Begin { granted } = begin else {
+            panic!("expected acceptance begin")
+        };
+
+        let mut second = gateway.connect().await;
+        assert_eq!(receive_server_json(&mut second).await["type"], "connected");
+        granted.send(()).unwrap();
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(1), delivery_result.recv())
+                .await
+                .expect("acceptance commit timed out"),
+            Some(RemoteSessionAcceptance::Commit)
+        ));
+        let first_terminal = tokio::time::timeout(Duration::from_secs(1), first.next())
+            .await
+            .expect("reserved requester produced no terminal frame")
+            .expect("reserved requester ended before its terminal frame")
+            .expect("reserved requester websocket failed");
+        match first_terminal {
+            ClientWebSocketMessage::Text(payload) => {
+                let value: serde_json::Value = serde_json::from_str(&payload).unwrap();
+                assert_eq!(value["type"], "commandResult");
+                assert_eq!(value["outcome"]["status"], "ok");
+            }
+            ClientWebSocketMessage::Close(_) => {}
+            other => panic!("unexpected requester terminal frame: {other:?}"),
+        }
+        second.close(None).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn takeover_after_acceptance_grant_does_not_revoke_a_visible_ok() {
+        let gateway = LiveGatewayFixture::start(1, "source-owner").await;
+        let mut first = gateway.connect().await;
+        assert_eq!(receive_server_json(&mut first).await["type"], "connected");
+        let first_generation = gateway.state.client_ownership.current_generation().unwrap();
+        send_hello(&mut first).await;
+        assert_eq!(receive_server_json(&mut first).await["type"], "snapshot");
+        let (delivery_ack, mut accepted) = mpsc::unbounded_channel();
+        gateway
+            .event_tx
+            .send(RemotePagerEvent::SessionCreated {
+                session_id: "session-live".into(),
+                client_generation: first_generation,
+                command_id: "new-racing".into(),
+                new_session_id: "racing-child".into(),
+                pairing_url: "https://device.tail.example/forge/fresh/".into(),
+                expires_at: "2030-01-02T03:04:05Z".into(),
+                delivery_ack,
+            })
+            .unwrap();
+        assert_eq!(
+            receive_server_json(&mut first).await["type"],
+            "sessionCreated"
+        );
+        send_client_json(
+            &mut first,
+            serde_json::json!({
+                "type":"command",
+                "protocolVersion":REMOTE_PROTOCOL_VERSION,
+                "commandId":"accept-racing",
+                "command":{"type":"acceptNewSession","sessionId":"racing-child"}
+            }),
+        )
+        .await;
+        let begin = accepted.recv().await.unwrap();
+        let RemoteSessionAcceptance::Begin {
+            granted: pager_grant,
+        } = begin
+        else {
+            panic!("expected acceptance begin")
+        };
+        pager_grant.send(()).unwrap();
+        let mut second = gateway.connect().await;
+        assert_eq!(receive_server_json(&mut second).await["type"], "connected");
+        assert!(matches!(
+            accepted.recv().await,
+            Some(RemoteSessionAcceptance::Commit)
+        ));
+        let first_terminal = tokio::time::timeout(Duration::from_secs(1), first.next())
+            .await
+            .expect("original requester produced no terminal frame")
+            .expect("original requester ended before its terminal frame")
+            .expect("original requester websocket failed");
+        match first_terminal {
+            ClientWebSocketMessage::Text(payload) => {
+                let value: serde_json::Value = serde_json::from_str(&payload).unwrap();
+                assert_eq!(value["type"], "commandResult");
+                assert_eq!(value["outcome"]["status"], "ok");
+            }
+            ClientWebSocketMessage::Close(_) => {}
+            other => panic!("unexpected requester terminal frame: {other:?}"),
+        }
+        second.close(None).await.unwrap();
     }
 
     #[tokio::test]

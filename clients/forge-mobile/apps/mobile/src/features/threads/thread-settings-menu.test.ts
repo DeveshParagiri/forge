@@ -281,4 +281,63 @@ describe("buildThreadSettingsMenu", () => {
     }
     expect(eventTypes(menu)).toEqual(new Set(["select-model", "set-option", "set-runtime"]));
   });
+
+  it("builds a Forge-only functional menu without unsupported mobile actions", () => {
+    const forgeModel = modelOption("5.6 Sol", { isDefault: true });
+    const menu = buildThreadSettingsMenu({
+      providerGroups: [group([forgeModel])],
+      selectedModel: forgeModel.selection,
+      optionDescriptors: [
+        {
+          ...effortDescriptor,
+          currentValue: "xhigh",
+          options: [
+            { id: "high", label: "High" },
+            { id: "xhigh", label: "Extra High" },
+          ],
+        },
+      ],
+      runtimeMode: "auto",
+      includeRuntime: false,
+      includeUsage: true,
+      fastMode: { supported: true, enabled: false },
+    });
+
+    expect(menu.actions.map((action) => action.title)).toEqual([
+      "Model",
+      "Reasoning",
+      "Fast Mode",
+      "Usage",
+    ]);
+    expect(menu.actions.find((action) => action.title === "Model")?.subtitle).toBe("5.6 Sol");
+    expect(menu.actions.find((action) => action.title === "Reasoning")?.subtitle).toBe(
+      "Extra High",
+    );
+    expect(menu.actions.map((action) => action.title)).not.toEqual(
+      expect.arrayContaining(["Plan", "Files", "Camera", "Photos", "Plugins"]),
+    );
+    expect(eventFor(menu, "fast-mode")).toEqual({ type: "set-fast-mode", enabled: true });
+  });
+
+  it("omits Fast Mode when unsupported and disables it while authoritative state is pending", () => {
+    const input = baseInput();
+    const unsupported = buildThreadSettingsMenu({
+      ...input,
+      optionDescriptors: [effortDescriptor],
+      includeRuntime: false,
+      fastMode: { supported: false, enabled: false },
+    });
+    expect(unsupported.actions.find((action) => action.title === "Fast Mode")).toBeUndefined();
+
+    const pending = buildThreadSettingsMenu({
+      ...input,
+      optionDescriptors: [effortDescriptor],
+      includeRuntime: false,
+      fastMode: { supported: true, enabled: true, pending: true },
+    });
+    expect(pending.actions.find((action) => action.title === "Fast Mode")).toMatchObject({
+      state: "on",
+      attributes: { disabled: true },
+    });
+  });
 });

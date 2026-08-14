@@ -3907,11 +3907,13 @@ async fn ext_notification_forwards_each_queue_method_to_session_actor() {
                     id,
                     new_text,
                     editor,
+                    expected_version,
                 },
             ) => {
                 assert_eq!(id, "p-edit");
                 assert_eq!(new_text, "rewritten");
                 assert_eq!(editor.as_deref(), Some("grok-vscode"));
+                assert_eq!(expected_version, None);
             }
             (
                 "x.ai/queue/interject",

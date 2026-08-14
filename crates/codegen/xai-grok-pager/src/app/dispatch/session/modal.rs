@@ -9,8 +9,14 @@ use crate::app::dispatch::ctx::{SwitchCause, show_welcome, switch_to_agent};
 use crate::app::dispatch::task_result::unregister_session_effect;
 /// Remove an agent and clean up all references to it:
 /// `forked_from` pointers on surviving agents.
-pub(in crate::app::dispatch) fn remove_agent_and_cleanup(app: &mut AppView, agent_id: AgentId) {
+pub(in crate::app::dispatch) fn remove_agent_and_cleanup(
+    app: &mut AppView,
+    agent_id: AgentId,
+) -> Vec<Effect> {
     let removed = app.agents.shift_remove(&agent_id);
+    let pending_remote = removed
+        .as_ref()
+        .and_then(|_| crate::forge::remote_bridge::take_pending_new_session(agent_id));
     for agent in app.agents.values_mut() {
         if agent.session.forked_from == Some(agent_id) {
             agent.session.forked_from = None;
@@ -20,6 +26,20 @@ pub(in crate::app::dispatch) fn remove_agent_and_cleanup(app: &mut AppView, agen
         drop(removed);
         crate::memory_release::release_retained_memory_with("agent-close");
     }
+    pending_remote
+        .map(|pending| Effect::CompleteForgeRemoteNewSession {
+            source_binding_generation: pending.source_binding_generation,
+            source_gateway_generation: pending.source_gateway_generation,
+            source_client_generation: pending.source_client_generation,
+            source_session_id: pending.source_session_id,
+            command_id: pending.command_id,
+            completion: crate::app::actions::ForgeRemoteNewSessionCompletion::Failed {
+                error: "New session creation was cancelled before it completed.".into(),
+            },
+            initial_snapshot: None,
+        })
+        .into_iter()
+        .collect()
 }
 /// Close (drop from this pager's in-memory list) the given agent.
 ///
@@ -60,12 +80,12 @@ pub(in crate::app::dispatch) fn dispatch_sessions_confirm_close(
             show_welcome(app);
         }
     }
-    let effects = unregister_session_effect(
+    let mut effects = unregister_session_effect(
         app.agents
             .get(&closed_id)
             .and_then(|a| a.session.session_id.clone()),
     );
-    remove_agent_and_cleanup(app, closed_id);
+    effects.extend(remove_agent_and_cleanup(app, closed_id));
     effects
 }
 /// Rename the current session via x.ai/session/rename.

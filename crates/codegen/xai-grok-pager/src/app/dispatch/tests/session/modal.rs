@@ -151,6 +151,41 @@ fn close_inactive_agent_drops_it() {
 }
 
 #[test]
+fn closing_pending_remote_placeholder_clears_gate_and_reports_failure() {
+    let mut app = three_agent_app();
+    let pending_id = AgentId(2);
+    let _ = crate::forge::remote_bridge::take_pending_new_session(pending_id);
+    crate::forge::remote_bridge::register_pending_new_session(
+        pending_id,
+        crate::forge::remote_bridge::PendingRemoteNewSession {
+            source_binding_generation: 701,
+            source_gateway_generation: 702,
+            source_client_generation: 703,
+            source_session_id: "remote-source".into(),
+            command_id: "new-cancelled".into(),
+        },
+    );
+
+    let effects = dispatch_sessions_confirm_close(&mut app, pending_id);
+    assert!(
+        crate::forge::remote_bridge::take_pending_new_session(pending_id).is_none(),
+        "placeholder removal must release the source new-session gate"
+    );
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::CompleteForgeRemoteNewSession {
+            source_binding_generation: 701,
+            source_gateway_generation: 702,
+            source_client_generation: 703,
+            source_session_id,
+            command_id,
+            completion: crate::app::actions::ForgeRemoteNewSessionCompletion::Failed { .. },
+            ..
+        } if source_session_id == "remote-source" && command_id == "new-cancelled"
+    )));
+}
+
+#[test]
 fn close_agent_releases_retained_memory() {
     use crate::memory_release::test_support;
     test_support::install_counting_hook();

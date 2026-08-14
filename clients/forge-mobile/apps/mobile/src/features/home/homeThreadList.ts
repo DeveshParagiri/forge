@@ -52,10 +52,47 @@ export function buildHomeProjectScopes(input: {
   readonly projects: ReadonlyArray<EnvironmentProject>;
   readonly environmentId: EnvironmentId | null;
   readonly projectGroupingMode: SidebarProjectGroupingMode;
+  /**
+   * Remote-only grouping override keyed by scoped project ref. Forge pairings
+   * use one synthetic environment per bearer, so the canonical T3 grouping
+   * key cannot otherwise recognize sibling sessions in the same directory.
+   */
+  readonly projectGroupKeyByProjectRef?: ReadonlyMap<string, string>;
 }): ReadonlyArray<HomeProjectScope> {
   const projects = input.projects.filter(
     (project) => input.environmentId === null || project.environmentId === input.environmentId,
   );
+  if (input.projectGroupKeyByProjectRef) {
+    const grouped = new Map<string, EnvironmentProject[]>();
+    for (const project of projects) {
+      const projectRefKey = scopedProjectKey(project.environmentId, project.id);
+      const key = input.projectGroupKeyByProjectRef.get(projectRefKey) ?? projectRefKey;
+      const members = grouped.get(key);
+      if (members) {
+        members.push(project);
+      } else {
+        grouped.set(key, [project]);
+      }
+    }
+    return Array.from(grouped, ([key, members]) => {
+      const representative = members.reduce((current, candidate) =>
+        getProjectSortTimestamp(candidate, "updated_at") >
+        getProjectSortTimestamp(current, "updated_at")
+          ? candidate
+          : current,
+      );
+      return {
+        key,
+        title: representative.title,
+        representative,
+        projects: members,
+        projectRefs: members.map((project) => ({
+          environmentId: project.environmentId,
+          projectId: project.id,
+        })),
+      };
+    });
+  }
   return buildProjectGroups({
     projects,
     settings: {
@@ -210,6 +247,7 @@ export function buildHomeThreadGroups(input: {
   readonly projectSortOrder: HomeProjectSortOrder;
   readonly threadSortOrder: SidebarThreadSortOrder;
   readonly projectGroupingMode: SidebarProjectGroupingMode;
+  readonly projectGroupKeyByProjectRef?: ReadonlyMap<string, string>;
   /** Current time used for the recency window; defaults to now. Injectable for tests. */
   readonly now?: number;
 }): ReadonlyArray<HomeThreadGroup> {

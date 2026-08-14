@@ -16,6 +16,7 @@ export function ComposerEditor({
   onContentSizeChange,
   style,
   textStyle,
+  contentInsetHorizontal = 0,
   contentInsetVertical = 0,
   singleLineCentered: _singleLineCentered,
   ...props
@@ -55,6 +56,7 @@ export function ComposerEditor({
             color: foregroundColor,
             fontFamily,
             ...bodyText,
+            paddingHorizontal: contentInsetHorizontal,
             paddingVertical: contentInsetVertical,
           },
           textStyle,

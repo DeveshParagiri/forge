@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { isForgeAppForeground, syncForegroundOwnership } from "./foregroundOwnership";
+import { isForgeAppForeground, syncSelectedForegroundOwnership } from "./foregroundOwnership";
 
 describe("Forge native foreground ownership", () => {
   it("treats only an active app as the WebSocket owner", () => {
@@ -11,20 +11,29 @@ describe("Forge native foreground ownership", () => {
     expect(isForgeAppForeground("extension")).toBe(false);
   });
 
-  it("releases every pairing offscreen and claims each one in the foreground", () => {
+  it("claims only the selected session and releases every other saved pairing", () => {
+    const first = { resume: vi.fn(), suspend: vi.fn() };
+    const second = { resume: vi.fn(), suspend: vi.fn() };
     const sockets = [
-      { resume: vi.fn(), suspend: vi.fn() },
-      { resume: vi.fn(), suspend: vi.fn() },
-    ];
+      ["first", first],
+      ["second", second],
+    ] as const;
 
-    syncForegroundOwnership(sockets, "inactive");
-    syncForegroundOwnership(sockets, "background");
-    for (const socket of sockets) {
-      expect(socket.suspend).toHaveBeenCalledTimes(2);
-      expect(socket.resume).not.toHaveBeenCalled();
-    }
+    syncSelectedForegroundOwnership(sockets, "second", "active");
+    expect(first.suspend).toHaveBeenCalledOnce();
+    expect(first.resume).not.toHaveBeenCalled();
+    expect(second.resume).toHaveBeenCalledOnce();
+    expect(second.suspend).not.toHaveBeenCalled();
 
-    syncForegroundOwnership(sockets, "active");
-    for (const socket of sockets) expect(socket.resume).toHaveBeenCalledOnce();
+    syncSelectedForegroundOwnership(sockets, null, "active");
+    expect(first.suspend).toHaveBeenCalledTimes(2);
+    expect(second.suspend).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the selected session released while the app is offscreen", () => {
+    const selected = { resume: vi.fn(), suspend: vi.fn() };
+    syncSelectedForegroundOwnership([["selected", selected]], "selected", "background");
+    expect(selected.suspend).toHaveBeenCalledOnce();
+    expect(selected.resume).not.toHaveBeenCalled();
   });
 });

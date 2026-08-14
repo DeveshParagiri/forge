@@ -39,6 +39,7 @@ export function selectableChoices(
 export type ThreadSettingsMenuEvent =
   | { readonly type: "select-model"; readonly option: ModelOption }
   | { readonly type: "set-option"; readonly optionId: string; readonly value: string | boolean }
+  | { readonly type: "set-fast-mode"; readonly enabled: boolean }
   | { readonly type: "set-runtime"; readonly mode: RuntimeMode }
   | { readonly type: "open-usage" };
 
@@ -67,6 +68,11 @@ export function buildThreadSettingsMenu(input: {
   readonly includeRuntime?: boolean;
   readonly includeUsage?: boolean;
   readonly modelSelectionDisabled?: boolean;
+  readonly fastMode?: {
+    readonly supported: boolean;
+    readonly enabled: boolean;
+    readonly pending?: boolean;
+  };
 }): ThreadSettingsMenu {
   const events = new Map<string, ThreadSettingsMenuEvent>();
   const actions: MenuAction[] = [];
@@ -186,10 +192,22 @@ export function buildThreadSettingsMenu(input: {
     });
   }
 
+  if (input.fastMode?.supported === true) {
+    const id = "fast-mode";
+    events.set(id, { type: "set-fast-mode", enabled: !input.fastMode.enabled });
+    actions.push({
+      id,
+      title: "Fast Mode",
+      image: "bolt.fill",
+      state: input.fastMode.enabled ? "on" : "off",
+      attributes: input.fastMode.pending ? { disabled: true } : keepPresented,
+    });
+  }
+
   if (input.includeUsage) {
     const id = "usage";
     events.set(id, { type: "open-usage" });
-    actions.push({ id, title: "Usage" });
+    actions.push({ id, title: "Usage", image: "chart.bar" });
   }
 
   if (input.includeRuntime !== false) {
