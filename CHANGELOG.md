@@ -6,6 +6,11 @@ upstream base is recorded in each release entry.
 
 ## [Unreleased]
 
+### Changed
+
+- Release artifacts and the binary installer now cover macOS Apple Silicon and
+  Linux ARM64 only. Linux x86_64 packages are no longer built.
+
 ## [0.5.0] - 2026-08-13
 
 **Upstream base:** Grok Build 1.0.0
