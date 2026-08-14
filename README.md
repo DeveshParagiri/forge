@@ -34,10 +34,18 @@ Install the latest checksummed release:
 curl -fsSL https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install | sh
 ```
 
-The installer selects the archive for macOS Apple Silicon, Linux x86-64, or
-Linux ARM64; verifies its SHA-256 checksum; and installs the canonical executable
+The installer selects the archive for macOS Apple Silicon or Linux ARM64;
+verifies its SHA-256 checksum; and installs the canonical executable
 at `~/.grok/bin/grok`. It also refreshes compatibility links without changing
 your shell configuration.
+
+On Windows x86_64, use PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install.ps1 | iex
+```
+
+That installs `%USERPROFILE%\.grok\bin\grok.exe` and adds it to your user PATH.
 
 Launch Forge:
 
@@ -64,6 +72,11 @@ FORGE_VERSION=0.5.0 \
   curl -fsSL https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install | sh
 ```
 
+```powershell
+$env:FORGE_VERSION = "0.5.0"
+irm https://raw.githubusercontent.com/DeveshParagiri/forge/main/scripts/install.ps1 | iex
+```
+
 ## Extended features
 
 | Feature | What Forge adds |
@@ -74,7 +87,7 @@ FORGE_VERSION=0.5.0 \
 | **External harnesses** | Run Claude Code and Codex CLI as subagent harnesses through their own installations, authentication, model defaults, and tools. |
 | **Unified sessions** | Browse Forge, Claude Code, and Codex sessions together in `/sessions`. Importing an external row creates a new Forge session with its context. |
 | **Private phone remote** | Open the current Forge session on a phone with `/rc`. Use the bundled browser client or a locally built iOS app over Tailscale Serve. `/rc stop` revokes that session's pairing. |
-| **Adaptive memory** | When enabled, memory retains durable model and harness preferences from explicit feedback and clear outcomes. Current instructions always win. |
+| **Adaptive memory** | When enabled, the existing memory lifecycle tracks explicitly stated current work plus durable preferences and corrections, while excluding execution noise. Current instructions always win. |
 
 ## Authentication and models
 
@@ -310,8 +323,6 @@ scripts/forge-sync-upstream
 ```
 
 That helper fetches `upstream/main` and rebases local `dev`; it does not publish.
-The scheduled GitHub workflow instead prepares or refreshes a reviewable
-`bot/upstream-sync` pull request into `dev` and never auto-merges it.
 
 After resolving conflicts and running the focused checks, publish the exact
 validated integration commit without rewriting history:

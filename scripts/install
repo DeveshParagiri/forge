@@ -41,7 +41,7 @@ install_binary() {
   case "$os-$arch" in
     Darwin-arm64) target="aarch64-apple-darwin" ;;
     Linux-aarch64|Linux-arm64) target="aarch64-unknown-linux-gnu" ;;
-    *) fail "no Forge release binary is available for $os/$arch (supported: macOS Apple Silicon, Linux ARM64)" ;;
+    *) fail "no Forge release binary is available for $os/$arch (supported: macOS Apple Silicon, Linux ARM64; Windows uses scripts/install.ps1)" ;;
   esac
 
   asset="forge-$target.tar.gz"

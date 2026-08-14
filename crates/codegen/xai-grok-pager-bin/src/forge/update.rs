@@ -4,7 +4,7 @@
 //! `grok update` a Forge-aware entry point while preserving the stock updater
 //! for unsupported flags and non-Forge installations.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -42,7 +42,8 @@ pub(crate) fn run() -> Result<()> {
         );
     }
 
-    let status = Command::new(&updater)
+    let mut command = updater_command(&updater);
+    let status = command
         .status()
         .with_context(|| format!("failed to start Forge updater at {}", updater.display()))?;
     if !status.success() {
@@ -51,18 +52,38 @@ pub(crate) fn run() -> Result<()> {
     Ok(())
 }
 
+fn updater_command(updater: &std::path::Path) -> Command {
+    if cfg!(windows) {
+        let mut command = Command::new("powershell");
+        command.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
+        command.arg(updater);
+        command
+    } else {
+        Command::new(updater)
+    }
+}
+
 fn updater_path() -> PathBuf {
     if let Some(path) = std::env::var_os("GROK_UPDATER") {
         return PathBuf::from(path);
     }
     home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("bin/grok-update-from-source")
+        .join(default_updater_relpath())
+}
+
+fn default_updater_relpath() -> &'static str {
+    if cfg!(windows) {
+        "bin/grok-update-from-source.ps1"
+    } else {
+        "bin/grok-update-from-source"
+    }
 }
 
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .filter(|home| !home.is_empty())
+        .or_else(|| std::env::var_os("USERPROFILE").filter(|home| !home.is_empty()))
         .map(PathBuf::from)
 }
 

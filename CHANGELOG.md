@@ -6,10 +6,15 @@ upstream base is recorded in each release entry.
 
 ## [Unreleased]
 
+### Added
+
+- Windows x86_64 release archives and a PowerShell installer. `grok update` on
+  Windows re-runs that installer instead of the official xAI channel.
+
 ### Changed
 
-- Release artifacts and the binary installer now cover macOS Apple Silicon and
-  Linux ARM64 only. Linux x86_64 packages are no longer built.
+- Release artifacts now cover macOS Apple Silicon, Linux ARM64, and Windows
+  x86_64. Linux x86_64 packages are no longer built.
 
 ## [0.5.0] - 2026-08-13
 

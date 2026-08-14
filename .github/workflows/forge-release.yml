@@ -23,13 +23,24 @@ jobs:
         include:
           - os: macos-14
             target: aarch64-apple-darwin
+            suffix: ""
+            archive: tar.gz
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            suffix: ""
+            archive: tar.gz
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            suffix: ".exe"
+            archive: zip
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+      - name: Enable long paths
+        if: runner.os == 'Windows'
+        run: git config --system core.longpaths true
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.94.0
@@ -45,21 +56,34 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          target="${{ matrix.target }}"
+          suffix="${{ matrix.suffix }}"
+          archive_kind="${{ matrix.archive }}"
+          src="target/${target}/release/xai-grok-pager${suffix}"
+          dst_name="grok${suffix}"
           mkdir -p dist/package
-          install -m 755 "target/${{ matrix.target }}/release/xai-grok-pager" dist/package/grok
-          tar -C dist/package -czf "dist/forge-${{ matrix.target }}.tar.gz" grok
-          cd dist
-          if command -v shasum >/dev/null 2>&1; then
-            shasum -a 256 "forge-${{ matrix.target }}.tar.gz" > "forge-${{ matrix.target }}.tar.gz.sha256"
+          cp "$src" "dist/package/${dst_name}"
+          if [ "$archive_kind" = "zip" ]; then
+            asset="forge-${target}.zip"
+            src_win="$(cd dist/package && pwd -W 2>/dev/null || pwd)/${dst_name}"
+            dst_win="$(cd dist && pwd -W 2>/dev/null || pwd)/${asset}"
+            powershell.exe -NoProfile -Command "Compress-Archive -LiteralPath '${src_win}' -DestinationPath '${dst_win}' -Force"
           else
-            sha256sum "forge-${{ matrix.target }}.tar.gz" > "forge-${{ matrix.target }}.tar.gz.sha256"
+            chmod 755 "dist/package/${dst_name}"
+            asset="forge-${target}.tar.gz"
+            tar -C dist/package -czf "dist/${asset}" "${dst_name}"
+          fi
+          cd dist
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$asset" > "${asset}.sha256"
+          else
+            shasum -a 256 "$asset" > "${asset}.sha256"
           fi
       - uses: actions/upload-artifact@v4
         with:
           name: forge-${{ matrix.target }}
           path: |
-            dist/forge-${{ matrix.target }}.tar.gz
-            dist/forge-${{ matrix.target }}.tar.gz.sha256
+            dist/forge-${{ matrix.target }}.*
           if-no-files-found: error
 
   release:
