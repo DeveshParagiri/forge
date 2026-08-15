@@ -1,4 +1,4 @@
-//! Forge source-checkout update command.
+//! Forge release update command.
 //!
 //! The release installer owns the update mechanics. This module gives
 //! `forge update` a Forge-aware entry point while preserving the stock updater
@@ -31,7 +31,7 @@ pub(crate) fn should_handle(
         && updater_path().is_file()
 }
 
-/// Run the same safe source updater installed by `scripts/install`.
+/// Run the checksummed release installer installed by `scripts/install`.
 pub(crate) fn run() -> Result<()> {
     let updater = updater_path();
     if !updater.is_file() {

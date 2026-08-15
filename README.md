@@ -52,6 +52,10 @@ Update an installed release:
 forge update
 ```
 
+This downloads the latest checksummed Forge release and replaces the canonical
+binary while preserving configuration, authentication, sessions, and memory.
+Release updates do not require Rust, Cargo, Git, DotSlash, or `protoc`.
+
 `grok` remains available as a compatibility alias, including `grok update`, so
 existing Forge installations and scripts continue to work.
 

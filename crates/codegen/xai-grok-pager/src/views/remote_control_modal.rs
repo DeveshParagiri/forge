@@ -253,7 +253,7 @@ fn render_live(
             width: area.width.saturating_sub(qr_width + 3),
             height: area.height,
         };
-        render_live_info(buf, info, state, status, url, theme);
+        render_live_info(buf, info, state, url, theme);
         return;
     }
 
@@ -264,7 +264,7 @@ fn render_live(
         width: area.width,
         height: info_rows,
     };
-    render_live_info(buf, info, state, status, url, theme);
+    render_live_info(buf, info, state, url, theme);
     let qr_y = area.y + info_rows.saturating_add(1);
     let remaining = area.y + area.height;
     if qr_width > 0 && qr_width <= area.width && qr_y.saturating_add(qr_height) <= remaining {
@@ -297,7 +297,6 @@ fn render_live_info(
     buf: &mut Buffer,
     area: Rect,
     state: &mut RemoteControlModalState,
-    status: &RemoteControlStatus,
     url: &str,
     theme: &Theme,
 ) {
@@ -353,41 +352,6 @@ fn render_live_info(
         });
         y += 1;
     }
-    if y < bottom {
-        y += 1;
-    }
-    render_plain_line(
-        buf,
-        area,
-        bottom,
-        &mut y,
-        "Tailnet only; no public tunnel.",
-        Style::default().fg(theme.gray),
-    );
-    render_plain_line(
-        buf,
-        area,
-        bottom,
-        &mut y,
-        &format_expiry(status.expires_at),
-        Style::default().fg(theme.gray),
-    );
-    render_plain_line(
-        buf,
-        area,
-        bottom,
-        &mut y,
-        "`/rc stop` revokes access.",
-        Style::default().fg(theme.gray),
-    );
-    render_plain_line(
-        buf,
-        area,
-        bottom,
-        &mut y,
-        "Esc closes this window; the terminal stays active.",
-        Style::default().fg(theme.gray),
-    );
 }
 
 fn render_plain_line(
@@ -461,28 +425,7 @@ fn primary_bold(theme: &Theme) -> Style {
 }
 
 fn live_info_height(width: u16, url: &str) -> u16 {
-    8u16.saturating_add(wrap_text(url, width).len() as u16)
-}
-
-fn format_expiry(expires_at: Option<std::time::Instant>) -> String {
-    let Some(expires_at) = expires_at else {
-        return "Expires automatically; run `/rc status` to refresh.".into();
-    };
-    let remaining = expires_at.saturating_duration_since(std::time::Instant::now());
-    let minutes = remaining.as_secs().div_ceil(60);
-    if minutes == 0 {
-        "Expires now.".into()
-    } else if minutes < 60 {
-        format!("Expires in {minutes}m.")
-    } else {
-        let hours = minutes / 60;
-        let mins = minutes % 60;
-        if mins == 0 {
-            format!("Expires in {hours}h.")
-        } else {
-            format!("Expires in {hours}h {mins}m.")
-        }
-    }
+    4u16.saturating_add(wrap_text(url, width).len() as u16)
 }
 
 fn desired_popup_height(area: Rect, sizing: &ModalSizing, state: &RemoteControlModalState) -> u16 {
@@ -645,7 +588,7 @@ mod tests {
     }
 
     #[test]
-    fn render_is_a_centered_overlay_with_copy_and_stop_hints() {
+    fn render_is_a_centered_overlay_without_explanatory_copy() {
         let area = Rect::new(0, 0, 150, 50);
         let mut buf = Buffer::empty(area);
         let mut state = live_state();
@@ -659,14 +602,16 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        for needle in [
-            "Forge Remote",
-            "Ready",
-            "copy link",
-            "Tailnet only; no public tunnel.",
-            "`/rc stop` revokes access.",
-        ] {
+        for needle in ["Forge Remote", "Ready", "copy link"] {
             assert!(text.contains(needle), "missing {needle:?} in:\n{text}");
+        }
+        for removed in [
+            "Tailnet only; no public tunnel.",
+            "Expires in",
+            "`/rc stop` revokes access.",
+            "Esc closes this window; the terminal stays active.",
+        ] {
+            assert!(!text.contains(removed), "found {removed:?} in:\n{text}");
         }
         assert!(text.contains('█') || text.contains('▀') || text.contains('▄'));
         assert_eq!(state.remote_url(), Some(url.as_str()));
