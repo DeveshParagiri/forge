@@ -94,6 +94,12 @@ install_binary() {
   # Keep the old executable name working for existing installations.
   legacy_bin="$(dirname "$INSTALL_BIN")/grok"
   if [ "$legacy_bin" != "$INSTALL_BIN" ]; then
+    # A previous install may already have made `grok` a symlink to the
+    # canonical `forge` binary. Remove only that compatibility link before
+    # refreshing it so `cp` never tries to copy a file onto itself.
+    if [ -L "$legacy_bin" ]; then
+      rm -f "$legacy_bin"
+    fi
     cp "$INSTALL_BIN" "$legacy_bin"
     chmod 755 "$legacy_bin"
     if [ "$os" = "Darwin" ] && command -v codesign >/dev/null 2>&1; then
