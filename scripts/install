@@ -110,8 +110,10 @@ install_binary() {
   # Keep `forge update` and the documented recovery command on one canonical
   # installer implementation. The updater simply re-runs this release installer.
   mkdir -p "$(dirname "$UPDATER")"
+  updater_cache_bust=$(date +%s)
   curl --fail --location --silent --show-error \
-    "https://raw.githubusercontent.com/$REPO/main/scripts/install" -o "$UPDATER.new.$$"
+    "https://raw.githubusercontent.com/$REPO/main/scripts/install?forge_update=$updater_cache_bust" \
+    -o "$UPDATER.new.$$"
   chmod 755 "$UPDATER.new.$$"
   mv -f "$UPDATER.new.$$" "$UPDATER"
 
